@@ -2,11 +2,13 @@ package selection
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
+	"github.com/TokenFlux/TokenRouter/internal/protocol"
 	providercore "github.com/TokenFlux/TokenRouter/internal/provider"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	schedulercore "github.com/TokenFlux/TokenRouter/internal/scheduler"
@@ -44,8 +46,55 @@ func (s *Diagnostics) GetOverview(ctx context.Context, id int64) (*policy.Advanc
 // production-bound settings and feedback, then returns its detail or source
 // error.
 func (s *Diagnostics) GetDetail(ctx context.Context, id int64, request policy.AdvancedSchedulerScoreDiagnosticRequest) (*policy.AdvancedSchedulerScoreDiagnosticResponse, error) {
-	core, _ := s.diagnosticCore()
-	return core.GetDetail(ctx, id, request)
+	core, scope := s.diagnosticCore()
+	if !request.HTTPResponses || strings.TrimSpace(request.RequestedModel) == "" {
+		return core.GetDetail(ctx, id, request)
+	}
+	check := &policy.PlanModelCheck{Enabled: s.planModelRestrictions != nil, CheckedAt: time.Now().UTC()}
+	ctx = requeststate.WithClientProtocol(ctx, protocol.ProtocolOpenAIResponses)
+	// Share one set of owner observations between the hard-filter explanation
+	// and the selected provider's detail, including when a prior gate excluded it.
+	type target struct {
+		id    int64
+		model string
+	}
+	type observation struct {
+		owners []providercore.ActivePlanModelRestriction
+		err    error
+	}
+	seen := make(map[target]observation)
+	if check.Enabled {
+		ctx = gatewayprovider.WithPlanModelRestrictions(ctx, func(ctx context.Context, providerID int64, model string, _ time.Time) ([]providercore.ActivePlanModelRestriction, error) {
+			key := target{providerID, model}
+			if owners, ok := seen[key]; ok {
+				return owners.owners, owners.err
+			}
+			owners, err := s.planModelRestrictions(ctx, providerID, model, check.CheckedAt)
+			seen[key] = observation{owners: owners, err: err}
+			return owners, err
+		})
+	}
+	result, err := core.GetDetail(ctx, id, request)
+	if err != nil || result == nil || result.Detail == nil {
+		return result, err
+	}
+	value, group := scope.target, scope.targetGroup
+	if value != nil && value.Record.Platform == providercore.PlatformOpenAI {
+		ctx = requeststate.WithGroup(ctx, group)
+		route := s.resolveDiagnosticRoutingModel(ctx, value, group, strings.TrimSpace(request.RequestedModel))
+		check.ActualModel = gatewayprovider.ExecutionModelPolicy(value).UpstreamModel(ctx, route)
+		if check.Enabled {
+			if reason := gatewayprovider.PlanModelRejection(ctx, value, route); reason == "plan_model_read_failed" {
+				return nil, fmt.Errorf("read plan model restrictions for provider %d", id)
+			}
+			for _, owner := range seen[target{id, check.ActualModel}].owners {
+				check.Owners = append(check.Owners, policy.PlanModelOwner{PlanID: owner.PlanID, ResultID: owner.ResultID,
+					PolicyVersion: owner.PolicyVersion, StartedAt: owner.StartedAt, Reason: owner.Reason})
+			}
+		}
+	}
+	result.Detail.PlanModelCheck = check
+	return result, nil
 }
 
 // effectiveSettings reads global runtime settings and resolves the group's
@@ -112,6 +161,12 @@ func (s *Diagnostics) diagnosticPlatformFilterReason(
 	requestedModel := strings.TrimSpace(request.RequestedModel)
 	routingModel := s.resolveDiagnosticRoutingModel(ctx, provider, group, requestedModel)
 
+	if request.HTTPResponses && group != nil && !group.AllowsClientProtocol(protocol.ProtocolOpenAIResponses) {
+		return "protocol_unavailable"
+	}
+	if reason := gatewayprovider.PlanModelRejection(ctx, provider, routingModel); reason != "" {
+		return reason
+	}
 	if !diagnosticSupportsGroupProtocols(ctx, provider, group, "") {
 		return "protocol_unavailable"
 	}

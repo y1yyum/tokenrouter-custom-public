@@ -182,6 +182,10 @@
                     "
                   />
                 </label>
+                <label class="flex items-center gap-2 text-sm">
+                  <input v-model="scenario.http_responses" type="checkbox" />
+                  {{ t('admin.providers.advancedSchedulerScore.httpResponsesPlanCheck') }}
+                </label>
                 <label class="min-w-0">
                   <span class="input-label">{{
                     t('admin.providers.advancedSchedulerScore.sessionSticky')
@@ -226,6 +230,32 @@
               </div>
             </section>
 
+            <section
+              v-if="detail.plan_model_check"
+              class="border-b border-gray-200 py-5 dark:border-dark-600"
+            >
+              <h3>{{ t('admin.providers.advancedSchedulerScore.httpResponsesPlanCheck') }}</h3>
+              <p
+                >{{ detail.plan_model_check.actual_model }} ·
+                {{ detail.plan_model_check.checked_at }}</p
+              >
+              <p v-if="!detail.plan_model_check.enabled">{{
+                t('admin.providers.advancedSchedulerScore.planCheckOff')
+              }}</p>
+              <p v-else-if="!detail.plan_model_check.owners?.length">{{
+                t('admin.providers.advancedSchedulerScore.noPlanOwners')
+              }}</p>
+              <p v-for="owner in detail.plan_model_check.owners" :key="owner.plan_id">
+                {{
+                  t('admin.providers.advancedSchedulerScore.planOwner', {
+                    plan: owner.plan_id,
+                    result: owner.result_id,
+                    version: owner.policy_version,
+                  })
+                }}
+                · {{ owner.started_at }} · {{ owner.reason }}
+              </p>
+            </section>
             <section
               v-if="!detail.eligible"
               class="border-b border-gray-200 py-5 dark:border-dark-600"
@@ -648,10 +678,12 @@ const detailCache = new Map<number, AdvancedSchedulerScoreDiagnosticResponse>()
  * operations restore their absent values before baseline loading.
  */
 const scenario = reactive<{
+  http_responses: boolean // simulate the Responses HTTP entry
   requested_model: string // optional scenario model identifier
   sticky_provider_id: number | null // optional sticky affinity provider
   previous_response_provider_id: number | null // optional continuation affinity provider
 }>({
+  http_responses: false,
   requested_model: '',
   sticky_provider_id: null,
   previous_response_provider_id: null,
@@ -749,6 +781,7 @@ function resetState() {
  * resetScenario clears the requested model and both provider-affinity scenario inputs.
  */
 function resetScenario() {
+  scenario.http_responses = false
   scenario.requested_model = ''
   scenario.sticky_provider_id = null
   scenario.previous_response_provider_id = null
@@ -836,6 +869,7 @@ async function preview() {
   const payload: AdvancedSchedulerScorePreviewRequest = {
     group_id: activeGroupID.value,
   }
+  if (scenario.http_responses && scenario.requested_model) payload.http_responses = true
   if (scenario.requested_model) payload.requested_model = scenario.requested_model
   if (scenario.sticky_provider_id) payload.sticky_provider_id = scenario.sticky_provider_id
   if (scenario.previous_response_provider_id)

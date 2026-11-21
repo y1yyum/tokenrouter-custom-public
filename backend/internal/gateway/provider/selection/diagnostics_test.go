@@ -731,3 +731,43 @@ func (diagnosticWindowSource) GetWindow(context.Context, int64, time.Time) (*bil
 func (diagnosticWindowSource) GetWindows(context.Context, []int64, time.Time) (map[int64]*billing.WindowCostStats, error) {
 	return map[int64]*billing.WindowCostStats{}, nil
 }
+
+// TestResponsesPlanDiagnosticOwners checks the selected provider's explanation
+// against an actual model shared by the plan reader and candidate filter. The
+// simulated route reads the owners once and leaves ordinary previews untouched.
+func TestResponsesPlanDiagnosticOwners(t *testing.T) {
+	group := &routing.Group{ID: 501, Name: "advanced", SchedulerType: routing.GroupSchedulerTypeAdvanced, AllowedProtocols: []protocol.ProtocolID{protocol.ProtocolOpenAIResponses}}
+	target := &gatewayprovider.ExecutionProvider{Record: providercore.Record{
+		ID: 5011, Name: "primary", Platform: capability.PlatformOpenAI, Type: capability.ProviderTypeAPIKey,
+		Status: billing.StatusActive, Schedulable: true, Priority: 1,
+		Credentials:    map[string]any{"model_mapping": map[string]any{"client-x": "gpt-5.4"}},
+		ProviderGroups: []providercore.GroupMembership{{GroupID: group.ID, Group: (*accessview.GroupConfig)(group)}},
+	}}
+	source := &advancedSchedulerDiagnosticSourceStub{group: group, provider: target,
+		providers: []gatewayprovider.ExecutionProvider{*target}, pool: []gatewayprovider.ExecutionProvider{*target}}
+	d := newDiagnosticsForTest(source, nil)
+	calls := 0
+	d.planModelRestrictions = func(_ context.Context, id int64, actual string, at time.Time) ([]providercore.ActivePlanModelRestriction, error) {
+		calls++
+		require.Equal(t, target.Record.ID, id)
+		require.Equal(t, "gpt-5.4", actual)
+		return []providercore.ActivePlanModelRestriction{{PlanModelVerdict: providercore.PlanModelVerdict{
+			PlanID: 7, ResultID: 11, PolicyVersion: 2, Reason: "quality fixture", Restricted: true}, StartedAt: at.Add(-time.Hour)}}, nil
+	}
+	req := policy.AdvancedSchedulerScoreDiagnosticRequest{GroupID: group.ID, RequestedModel: "client-x"}
+	plain, err := d.GetDetail(context.Background(), target.Record.ID, req)
+	require.NoError(t, err)
+	require.Nil(t, plain.Detail.PlanModelCheck)
+	require.Zero(t, calls)
+	req.HTTPResponses = true
+	withPlan, err := d.GetDetail(context.Background(), target.Record.ID, req)
+	require.NoError(t, err)
+	require.False(t, withPlan.Detail.Eligible)
+	require.Contains(t, withPlan.Detail.HardFilterReasons, "plan_model_restricted")
+	check := withPlan.Detail.PlanModelCheck
+	require.True(t, check.Enabled)
+	require.Equal(t, "gpt-5.4", check.ActualModel)
+	require.Len(t, check.Owners, 1)
+	require.Equal(t, int64(11), check.Owners[0].ResultID)
+	require.Equal(t, 1, calls)
+}

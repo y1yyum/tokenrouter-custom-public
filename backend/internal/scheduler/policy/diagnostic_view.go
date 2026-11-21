@@ -15,7 +15,8 @@ import (
 // AdvancedSchedulerScoreDiagnosticRequest supplies one group, optional model,
 // and simulated affinity provider IDs.
 type AdvancedSchedulerScoreDiagnosticRequest struct {
-	GroupID int64 `json:"group_id"` // positive diagnostic group identifier
+	HTTPResponses bool  `json:"http_responses,omitempty"` // simulate the public HTTP Responses entry
+	GroupID       int64 `json:"group_id"`                 // positive diagnostic group identifier
 	// RequestedModel is trimmed by GetDetail and limited to 512 bytes. Empty text
 	// omits model-specific eligibility context from the baseline calculation.
 	// optional requested model text
@@ -99,6 +100,7 @@ type AdvancedSchedulerScoreDiagnosticContext struct {
 // AdvancedSchedulerScoreDiagnosticDetail separates one group's eligibility,
 // candidate pool, scoring factors, and effective policy.
 type AdvancedSchedulerScoreDiagnosticDetail struct {
+	PlanModelCheck *PlanModelCheck `json:"plan_model_check,omitempty"` // context and active plan owners for the selected model
 	// selected advanced group identity
 	Group AdvancedSchedulerScoreDiagnosticGroup `json:"group"`
 	// calculation input context values
@@ -248,4 +250,22 @@ type AdvancedSchedulerScoreDiagnosticPolicySignal struct {
 	Key    string `json:"key"`    // policy or eligibility name
 	State  string `json:"state"`  // evaluated strategy outcome state
 	Detail string `json:"detail"` // human-readable policy decision explanation
+}
+
+// PlanModelCheck describes the exact provider-model policy read for the preview.
+// An absent read with Enabled false corresponds to the disabled route switch.
+type PlanModelCheck struct {
+	Enabled     bool             `json:"enabled"`                // HTTP Responses restriction enforcement
+	ActualModel string           `json:"actual_model,omitempty"` // provider-mapped identity
+	CheckedAt   time.Time        `json:"checked_at"`             // common validity instant for the preview
+	Owners      []PlanModelOwner `json:"owners,omitempty"`       // plans currently restricting this model
+}
+
+// PlanModelOwner identifies the durable failing result that still restricts the route.
+type PlanModelOwner struct {
+	PlanID        int64     `json:"plan_id"`        // owning scheduled plan
+	ResultID      int64     `json:"result_id"`      // last applied result
+	PolicyVersion int64     `json:"policy_version"` // quality policy that graded the result
+	StartedAt     time.Time `json:"started_at"`     // persisted probe start
+	Reason        string    `json:"reason"`         // reason supplied with the failed grade
 }

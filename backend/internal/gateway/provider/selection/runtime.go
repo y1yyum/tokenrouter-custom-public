@@ -110,12 +110,13 @@ type DiagnosticSource interface {
 
 // Diagnostics shares selection parameters, feedback, and eligibility rules for read-only diagnostics.
 type Diagnostics struct {
-	source              DiagnosticSource                  // diagnostic record reader
-	concurrencyService  *schedulercore.ConcurrencyService // shared provider slots
-	feedback            *schedulercore.RuntimeStats       // production performance observations
-	schedulerParameters *schedulercore.Parameters         // shared scoring parameters
-	gatewayService      *Generic                          // generic diagnostic eligibility
-	openAIGateway       *Compatible                       // compatible diagnostic eligibility
+	planModelRestrictions gatewayadapter.PlanModelRestrictionReader // active route-level quality rules
+	source                DiagnosticSource                          // diagnostic record reader
+	concurrencyService    *schedulercore.ConcurrencyService         // shared provider slots
+	feedback              *schedulercore.RuntimeStats               // production performance observations
+	schedulerParameters   *schedulercore.Parameters                 // shared scoring parameters
+	gatewayService        *Generic                                  // generic diagnostic eligibility
+	openAIGateway         *Compatible                               // compatible diagnostic eligibility
 }
 
 // NewGeneric binds the supplied reader and scheduling instances for generic
@@ -220,10 +221,11 @@ func NewGemini(deps GeminiDependencies, options Options) *Gemini {
 // diagnostic scores.
 func NewDiagnostics(source DiagnosticSource, shared Shared, generic *Generic, compatible *Compatible) *Diagnostics {
 	return &Diagnostics{
-		source:              source,
-		concurrencyService:  shared.Concurrency,
-		feedback:            shared.Feedback,
-		schedulerParameters: shared.Parameters,
+		planModelRestrictions: shared.PlanModelRestrictions,
+		source:                source,
+		concurrencyService:    shared.Concurrency,
+		feedback:              shared.Feedback,
+		schedulerParameters:   shared.Parameters,
 
 		gatewayService: generic,
 		openAIGateway:  compatible,

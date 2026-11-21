@@ -2,6 +2,8 @@ package app
 
 import (
 	"context"
+	"github.com/TokenFlux/TokenRouter/internal/config"
+	providerpostgres "github.com/TokenFlux/TokenRouter/internal/provider/postgres"
 
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/selection"
@@ -30,9 +32,13 @@ type providerDiagnosticSource struct {
 // to explain the candidate pool.
 func provideProviderDiagnostics(admin *provider.Admin, groups *routing.GroupAdmin, concurrency *scheduler.ConcurrencyService,
 
-	gateway *selection.Generic, openai *selection.Compatible, shared *schedulerSharedState,
+	gateway *selection.Generic, openai *selection.Compatible, shared *schedulerSharedState, cfg *config.Config, verdicts *providerpostgres.ProviderStore,
 ) *selection.Diagnostics {
-	return selection.NewDiagnostics(providerDiagnosticSource{providers: admin, groups: groups}, selection.Shared{Concurrency: concurrency, Parameters: shared.Parameters, Feedback: shared.Feedback}, gateway, openai)
+	var read gatewayprovider.PlanModelRestrictionReader
+	if cfg.Gateway.OpenAI.PlanModelRestrictions {
+		read = verdicts.ActivePlanModelRestrictions
+	}
+	return selection.NewDiagnostics(providerDiagnosticSource{providers: admin, groups: groups}, selection.Shared{PlanModelRestrictions: read, Concurrency: concurrency, Parameters: shared.Parameters, Feedback: shared.Feedback}, gateway, openai)
 }
 
 // provideSchedulerDiagnosticsHTTP exposes selection diagnostics through the

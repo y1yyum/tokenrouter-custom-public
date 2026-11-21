@@ -76,6 +76,7 @@ type Reads struct {
 
 // Shared contains app-owned instances reused by basic and advanced selection.
 type Shared struct {
+	PlanModelRestrictions gatewayadapter.PlanModelRestrictionReader // read-only HTTP Responses diagnostic source
 	// Cache, Concurrency, Health, GroupPolicies, Parameters, and Feedback retain
 	// the supplied application instances. Constructors bind those same objects
 	// so selector and diagnostic calls can observe the application's shared state.

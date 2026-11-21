@@ -1222,6 +1222,18 @@ export interface AdvancedSchedulerScoreDiagnosticPolicySignal {
 // AdvancedSchedulerScoreDiagnosticDetail combines one group's admission
 // decision, candidate pool, score inputs and policy observations.
 export interface AdvancedSchedulerScoreDiagnosticDetail {
+  plan_model_check?: {
+    enabled: boolean
+    actual_model?: string
+    checked_at: string
+    owners?: Array<{
+      plan_id: number
+      result_id: number
+      policy_version: number
+      started_at: string
+      reason: string
+    }>
+  }
   group: AdvancedSchedulerScoreDiagnosticGroup // Group identity details.
   context: AdvancedSchedulerScoreDiagnosticContext // Score calculation context.
   eligible: boolean // Scheduling admission flag.
@@ -1246,6 +1258,7 @@ export interface AdvancedSchedulerScoreDiagnosticResponse {
 // AdvancedSchedulerScorePreviewRequest selects a group, model and
 // sticky-provider context for a score preview request.
 export interface AdvancedSchedulerScorePreviewRequest {
+  http_responses?: boolean // Evaluate the HTTP Responses request route.
   group_id: number // Group record identifier.
   requested_model?: string // Requested requested model.
   sticky_provider_id?: number // Sticky provider ID.

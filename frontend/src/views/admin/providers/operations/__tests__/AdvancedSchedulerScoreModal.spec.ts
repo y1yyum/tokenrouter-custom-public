@@ -223,6 +223,7 @@ describe('AdvancedSchedulerScoreModal', () => {
     await scenarioToggle!.trigger('click')
     const input = wrapper.find('input')
     await input.setValue('gpt-5')
+    await wrapper.get('input[type=checkbox]').setValue(true)
     const recalculate = wrapper
       .findAll('button')
       .find((button) =>
@@ -235,6 +236,7 @@ describe('AdvancedSchedulerScoreModal', () => {
     expect(previewAdvancedSchedulerScore).toHaveBeenCalledWith(7, {
       group_id: 11,
       requested_model: 'gpt-5',
+      http_responses: true,
     })
   })
 })

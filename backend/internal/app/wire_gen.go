@@ -278,7 +278,7 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	modelTransientState := provideSelectionModelTransient()
 	proxyStreamCircuit := provideSelectionProxyCircuit(cfg)
 	compatible := provideCompatibleSelection(generic, gemini, reads, shared, cfg, openAIWSStateStore, quotaSettingsCache, runtimeBlockState, modelTransientState, proxyStreamCircuit, appSchedulerSharedState, appSelectionFreeQuotaGates)
-	diagnostics := provideProviderDiagnostics(admin, groupAdmin, concurrencyService, generic, compatible, appSchedulerSharedState)
+	diagnostics := provideProviderDiagnostics(admin, groupAdmin, concurrencyService, generic, compatible, appSchedulerSharedState, cfg, providerStore)
 	diagnosticsHandler := provideSchedulerDiagnosticsHTTP(diagnostics)
 	tlsFingerprintRouterRepository := postgres8.NewTLSFingerprintRouterRepository(client)
 	tlsFingerprintRouterCache := rediscache6.NewTLSFingerprintRouterCache(redisClient)
