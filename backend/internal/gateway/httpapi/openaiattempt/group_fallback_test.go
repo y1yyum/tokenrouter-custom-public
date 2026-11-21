@@ -2,9 +2,12 @@ package openaiattempt
 
 import (
 	"context"
+	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/provider"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -105,5 +108,61 @@ func TestGroupFallbackStopsAfterOutputOrCancellation(t *testing.T) {
 			require.False(t, handled)
 			require.False(t, retry)
 		})
+	}
+}
+
+// TestResponsesGroupFallbackRetainsPlanRestrictions drives the existing
+// prompt-size fallback through authorization and the destination route plan.
+// Clearing the group-local selection state must preserve the durable check
+// and pass the new group's mapped model into the next eligibility decision.
+func TestResponsesGroupFallbackRetainsPlanRestrictions(t *testing.T) {
+	const primary = int64(31)
+	const backup = int64(32)
+	targetID := int64(2)
+	source := &routing.Group{ID: 1, Status: "active", FallbackGroupIDOnInvalidRequest: &targetID}
+	target := &routing.Group{ID: targetID, Status: "active", AllowedProtocols: []protocol.ProtocolID{protocol.ProtocolOpenAIResponses}}
+	original := &apikey.APIKey{ID: 8, GroupID: &source.ID, Group: source}
+	requestCtx := requeststate.WithClientProtocol(context.Background(), protocol.ProtocolOpenAIResponses)
+	requestCtx = gatewayprovider.WithPlanModelRestrictions(requestCtx, func(ctx context.Context, id int64, actual string, _ time.Time) ([]provider.ActivePlanModelRestriction, error) {
+		g, ok := requeststate.GroupFromContext(ctx)
+		require.True(t, ok)
+		require.Equal(t, targetID, g.ID)
+		require.Equal(t, "actual-x", actual)
+		if id == primary {
+			return []provider.ActivePlanModelRestriction{{PlanModelVerdict: provider.PlanModelVerdict{PlanID: 1, Restricted: true}}}, nil
+		}
+		return nil, nil
+	})
+	c, _ := gin.CreateTestContext(httptest.NewRecorder())
+	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil).WithContext(requestCtx)
+	resolved := false
+	fixed := &openAIExecutionDependencies{
+		replaceModelInBody: openaiwire.ReplaceModelInBody,
+		fallback: GroupFallbackPorts{
+			Resolve: func(_ context.Context, key *apikey.APIKey, id int64, sourceProtocol protocol.ProtocolID) (*apikey.APIKey, *billing.UserSubscription, error) {
+				require.Same(t, original, key)
+				require.Equal(t, targetID, id)
+				require.Equal(t, protocol.ProtocolOpenAIResponses, sourceProtocol)
+				resolved = true
+				return &apikey.APIKey{ID: key.ID, Group: target, GroupID: &target.ID}, nil, nil
+			},
+			Plan: func(_ context.Context, key *apikey.APIKey, requested string) routing.RoutePlan {
+				require.True(t, resolved)
+				return routing.Plan(routing.PlanInput{Group: key.Group, RequestedModel: requested, ClientProtocol: protocol.ProtocolOpenAIResponses, GroupMapping: routing.GroupMappingResult{MappedModel: "route-x", Mapped: true}})
+			},
+		},
+	}
+	started := false
+	bridge := &responsesAttemptBridge{fixed: fixed, c: c, apiKey: original, reqModel: "client-x", body: []byte(`{"model":"client-x"}`), streamStarted: &started}
+	handled, retry := bridge.TryGroupFallback(&antigravity.PromptTooLongError{})
+	require.True(t, handled)
+	require.True(t, retry)
+	require.Equal(t, "route-x", bridge.forwardModel)
+	for _, tc := range []struct {
+		id     int64
+		reason string
+	}{{primary, "plan_model_restricted"}, {backup, ""}} {
+		record := &gatewayprovider.ExecutionProvider{Record: provider.Record{ID: tc.id, Platform: provider.PlatformOpenAI, Type: provider.ProviderTypeAPIKey, Credentials: map[string]any{"model_mapping": map[string]any{"route-x": "actual-x"}}}}
+		require.Equal(t, tc.reason, gatewayprovider.PlanModelRejection(bridge.selectionCtx, record, bridge.forwardModel))
 	}
 }
