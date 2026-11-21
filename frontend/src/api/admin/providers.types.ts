@@ -1223,6 +1223,12 @@ export interface AdvancedSchedulerScoreDiagnosticPolicySignal {
 // decision, candidate pool, score inputs and policy observations.
 export interface AdvancedSchedulerScoreDiagnosticDetail {
   plan_model_check?: {
+    source_group_id: number
+    group_id: number
+    client_protocol: string
+    upstream_protocol?: string
+    requested_model: string
+    routing_model?: string
     enabled: boolean
     actual_model?: string
     checked_at: string
@@ -1258,6 +1264,8 @@ export interface AdvancedSchedulerScoreDiagnosticResponse {
 // AdvancedSchedulerScorePreviewRequest selects a group, model and
 // sticky-provider context for a score preview request.
 export interface AdvancedSchedulerScorePreviewRequest {
+  client_protocol?: string // HTTP entry used for route prediction.
+  source_group_id?: number // Origin before configured group fallback.
   http_responses?: boolean // Evaluate the HTTP Responses request route.
   group_id: number // Group record identifier.
   requested_model?: string // Requested requested model.

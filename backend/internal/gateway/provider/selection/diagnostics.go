@@ -47,10 +47,49 @@ func (s *Diagnostics) GetOverview(ctx context.Context, id int64) (*policy.Advanc
 // error.
 func (s *Diagnostics) GetDetail(ctx context.Context, id int64, request policy.AdvancedSchedulerScoreDiagnosticRequest) (*policy.AdvancedSchedulerScoreDiagnosticResponse, error) {
 	core, scope := s.diagnosticCore()
-	if !request.HTTPResponses || strings.TrimSpace(request.RequestedModel) == "" {
+	if request.ClientProtocol == "" && request.HTTPResponses && strings.TrimSpace(request.RequestedModel) != "" {
+		request.ClientProtocol = string(protocol.ProtocolOpenAIResponses)
+	}
+	entry := protocol.ProtocolID(request.ClientProtocol)
+	if entry == "" {
+		if request.SourceGroupID != 0 {
+			return nil, fmt.Errorf("source_group_id requires client_protocol")
+		}
 		return core.GetDetail(ctx, id, request)
 	}
-	check := &policy.PlanModelCheck{Enabled: s.planModelRestrictions != nil, CheckedAt: time.Now().UTC()}
+	switch entry {
+	case protocol.ProtocolOpenAIResponses, protocol.ProtocolOpenAIChatCompletions, protocol.ProtocolAnthropicMessages, protocol.ProtocolResponsesCompact:
+	default:
+		return nil, fmt.Errorf("unsupported client_protocol")
+	}
+	request.RequestedModel = strings.TrimSpace(request.RequestedModel)
+	if request.RequestedModel == "" {
+		return nil, fmt.Errorf("requested_model is required for route preview")
+	}
+	origin := request.SourceGroupID
+	if origin == 0 {
+		origin = request.GroupID
+	}
+	if origin != request.GroupID {
+		if origin < 1 || s.source == nil {
+			return nil, fmt.Errorf("invalid source_group_id")
+		}
+		source, err := s.source.GetGroup(ctx, origin)
+		if err != nil {
+			return nil, err
+		}
+		if source == nil || !source.IsActive() || !source.AllowsClientProtocol(entry) || !source.ClaudeCodeOnly || source.FallbackGroupID == nil || *source.FallbackGroupID != request.GroupID {
+			return nil, fmt.Errorf("source_group_id has no matching client fallback")
+		}
+	}
+	check := &policy.PlanModelCheck{
+		Enabled: s.planModelRestrictions != nil, CheckedAt: time.Now().UTC(),
+		SourceGroupID: origin, GroupID: request.GroupID, ClientProtocol: string(entry), RequestedModel: request.RequestedModel,
+	}
+	var compact *gatewayprovider.CompactModels
+	if entry == protocol.ProtocolResponsesCompact {
+		compact = &s.compactModels
+	}
 	scope.requestedGroupID = request.GroupID
 	// Share one set of owner observations between the hard-filter explanation
 	// and the selected provider's detail, including when a prior gate excluded it.
@@ -64,7 +103,7 @@ func (s *Diagnostics) GetDetail(ctx context.Context, id int64, request policy.Ad
 	}
 	seen := make(map[target]observation)
 	if check.Enabled {
-		ctx = gatewayprovider.WithPlanModelRestrictions(ctx, func(ctx context.Context, providerID int64, model string, _ time.Time) ([]providercore.ActivePlanModelRestriction, error) {
+		read := gatewayprovider.PlanModelRestrictionReader(func(ctx context.Context, providerID int64, model string, _ time.Time) ([]providercore.ActivePlanModelRestriction, error) {
 			key := target{providerID, model}
 			if owners, ok := seen[key]; ok {
 				return owners.owners, owners.err
@@ -73,24 +112,36 @@ func (s *Diagnostics) GetDetail(ctx context.Context, id int64, request policy.Ad
 			seen[key] = observation{owners: owners, err: err}
 			return owners, err
 		})
+		ctx = read.WithRequest(ctx, compact, false)
 	}
 	result, err := core.GetDetail(ctx, id, request)
 	if err != nil || result == nil || result.Detail == nil {
 		return result, err
 	}
 	value, group := scope.target, scope.targetGroup
-	if value != nil && value.Record.Platform == providercore.PlatformOpenAI {
+	if value != nil && group != nil {
 		ctx = requeststate.WithGroup(ctx, group)
-		ctx = requeststate.WithClientProtocol(ctx, protocol.ProtocolOpenAIResponses)
+		ctx = requeststate.WithClientProtocol(ctx, entry)
 		route := s.resolveDiagnosticRoutingModel(ctx, value, group, strings.TrimSpace(request.RequestedModel))
-		check.ActualModel = gatewayprovider.ExecutionModelPolicy(value).UpstreamModel(ctx, route)
-		if check.Enabled {
+		check.RoutingModel = route
+		wire, ok := diagnosticHTTPRoute(ctx, value, group, entry, route)
+		if ok {
+			check.UpstreamProtocol = string(wire)
+			if value.Record.Platform == providercore.PlatformOpenAI {
+				check.ActualModel = gatewayprovider.PlanModelTarget(ctx, value, route, compact)
+			} else {
+				check.ActualModel = gatewayprovider.ExecutionModelPolicy(value).UpstreamModel(ctx, route)
+			}
+		}
+		if check.Enabled && ok {
 			if reason := gatewayprovider.PlanModelRejection(ctx, value, route); reason == "plan_model_read_failed" {
 				return nil, fmt.Errorf("read plan model restrictions for provider %d", id)
 			}
 			for _, owner := range seen[target{id, check.ActualModel}].owners {
-				check.Owners = append(check.Owners, policy.PlanModelOwner{PlanID: owner.PlanID, ResultID: owner.ResultID,
-					PolicyVersion: owner.PolicyVersion, StartedAt: owner.StartedAt, Reason: owner.Reason})
+				check.Owners = append(check.Owners, policy.PlanModelOwner{
+					PlanID: owner.PlanID, ResultID: owner.ResultID,
+					PolicyVersion: owner.PolicyVersion, StartedAt: owner.StartedAt, Reason: owner.Reason,
+				})
 			}
 		}
 	}
@@ -160,11 +211,17 @@ func (s *Diagnostics) diagnosticPlatformFilterReason(
 		}
 	}
 	requestedModel := strings.TrimSpace(request.RequestedModel)
+	entry := protocol.ProtocolID(request.ClientProtocol)
+	if entry != "" {
+		ctx = requeststate.WithClientProtocol(ctx, entry)
+	}
 	routingModel := s.resolveDiagnosticRoutingModel(ctx, provider, group, requestedModel)
 
-	if request.HTTPResponses && requestedModel != "" {
-		ctx = requeststate.WithClientProtocol(ctx, protocol.ProtocolOpenAIResponses)
-		if group != nil && !group.AllowsClientProtocol(protocol.ProtocolOpenAIResponses) {
+	if entry != "" && requestedModel != "" {
+		if group != nil && group.ClaudeCodeOnly || request.SourceGroupID != 0 && request.SourceGroupID != request.GroupID && (group == nil || !group.IsActive()) {
+			return "group_fallback_unavailable"
+		}
+		if _, ok := diagnosticHTTPRoute(ctx, provider, group, entry, routingModel); !ok {
 			return "protocol_unavailable"
 		}
 		if reason := gatewayprovider.PlanModelRejection(ctx, provider, routingModel); reason != "" {
@@ -229,7 +286,7 @@ func (s *Diagnostics) diagnosticPlatformFilterReason(
 			if group != nil {
 				groupID := group.ID
 				if s.openAIGateway.NeedsUpstreamGroupRestriction(ctx, &groupID) &&
-					s.openAIGateway.UpstreamRoutingModelRestricted(ctx, groupID, provider, routingModel, false) {
+					s.openAIGateway.UpstreamRoutingModelRestricted(ctx, groupID, provider, routingModel, entry == protocol.ProtocolResponsesCompact) {
 					return "group_upstream_restricted"
 				}
 			}
@@ -402,4 +459,18 @@ func (s *Diagnostics) isBlockedByDiagnosticGrokFreeQuota(provider *gatewayprovid
 		}
 	}
 	return s.gatewayService != nil && s.gatewayService.freeQuotaGate.ObserveBlocked(id)
+}
+
+// diagnosticHTTPRoute resolves the model-specific conversion after destination
+// group admission. Dedicated Compact also requires the group's Compact permission.
+func diagnosticHTTPRoute(ctx context.Context, p *gatewayprovider.ExecutionProvider, group *routing.Group, entry protocol.ProtocolID, model string) (protocol.ProtocolID, bool) {
+	if group == nil || !group.AllowsClientProtocol(entry) || !gatewayprovider.ExecutionModelPolicy(p).AllowsProtocol(ctx, model) {
+		return "", false
+	}
+	policy := gatewayprovider.ExecutionModelPolicy(p).WithContext(ctx)
+	route, ok := policy.CandidateSnapshot().ResolveModelRoute(model, entry, group.ProtocolFallbacks)
+	if entry == protocol.ProtocolResponsesCompact && !gatewayprovider.AllowsCompatibleCompact(p) {
+		return "", false
+	}
+	return route.Protocol, ok
 }

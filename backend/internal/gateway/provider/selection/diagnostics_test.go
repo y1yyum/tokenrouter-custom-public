@@ -743,8 +743,10 @@ func TestResponsesPlanDiagnosticOwners(t *testing.T) {
 		Credentials:    map[string]any{"model_mapping": map[string]any{"client-x": "gpt-5.4"}},
 		ProviderGroups: []providercore.GroupMembership{{GroupID: group.ID, Group: (*accessview.GroupConfig)(group)}},
 	}}
-	source := &advancedSchedulerDiagnosticSourceStub{group: group, provider: target,
-		providers: []gatewayprovider.ExecutionProvider{*target}, pool: []gatewayprovider.ExecutionProvider{*target}}
+	source := &advancedSchedulerDiagnosticSourceStub{
+		group: group, provider: target,
+		providers: []gatewayprovider.ExecutionProvider{*target}, pool: []gatewayprovider.ExecutionProvider{*target},
+	}
 	d := newDiagnosticsForTest(source, nil)
 	calls := 0
 	d.planModelRestrictions = func(_ context.Context, id int64, actual string, at time.Time) ([]providercore.ActivePlanModelRestriction, error) {
@@ -752,7 +754,8 @@ func TestResponsesPlanDiagnosticOwners(t *testing.T) {
 		require.Equal(t, target.Record.ID, id)
 		require.Equal(t, "gpt-5.4", actual)
 		return []providercore.ActivePlanModelRestriction{{PlanModelVerdict: providercore.PlanModelVerdict{
-			PlanID: 7, ResultID: 11, PolicyVersion: 2, Reason: "quality fixture", Restricted: true}, StartedAt: at.Add(-time.Hour)}}, nil
+			PlanID: 7, ResultID: 11, PolicyVersion: 2, Reason: "quality fixture", Restricted: true,
+		}, StartedAt: at.Add(-time.Hour)}}, nil
 	}
 	req := policy.AdvancedSchedulerScoreDiagnosticRequest{GroupID: group.ID, RequestedModel: "client-x"}
 	plain, err := d.GetDetail(context.Background(), target.Record.ID, req)
@@ -770,4 +773,24 @@ func TestResponsesPlanDiagnosticOwners(t *testing.T) {
 	require.Len(t, check.Owners, 1)
 	require.Equal(t, int64(11), check.Owners[0].ResultID)
 	require.Equal(t, 1, calls)
+	req.HTTPResponses = false
+	req.ClientProtocol = string(protocol.ProtocolResponsesCompact)
+	denied, err := d.GetDetail(t.Context(), target.Record.ID, req)
+	require.NoError(t, err)
+	require.Contains(t, denied.Detail.HardFilterReasons, "protocol_unavailable")
+	require.Empty(t, denied.Detail.PlanModelCheck.ActualModel)
+	require.Equal(t, 1, calls)
+	group.AllowedProtocols = []protocol.ProtocolID{protocol.ProtocolResponsesCompact}
+	d.planModelRestrictions = nil
+	d.compactModels.Default = "gpt-5.2"
+	compact, err := d.GetDetail(t.Context(), target.Record.ID, req)
+	require.NoError(t, err)
+	require.Equal(t, "gpt-5.2", compact.Detail.PlanModelCheck.ActualModel)
+	require.True(t, compact.Detail.Eligible)
+	req.SourceGroupID = 42
+	_, err = d.GetDetail(t.Context(), target.Record.ID, req)
+	require.ErrorContains(t, err, "source_group_id")
+	req.ClientProtocol = "invalid"
+	_, err = d.GetDetail(t.Context(), target.Record.ID, req)
+	require.ErrorContains(t, err, "client_protocol")
 }

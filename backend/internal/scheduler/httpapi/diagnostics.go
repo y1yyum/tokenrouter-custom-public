@@ -128,7 +128,7 @@ func (h *DiagnosticsHandler) PreviewAdvancedSchedulerScore(c *gin.Context) {
 		// The diagnostic service returns ordinary errors for invalid simulation
 		// inputs. Map the known validation messages to a client error while
 		// retaining standard conversion for other failures.
-		if strings.Contains(err.Error(), "advanced scheduler group") || strings.Contains(err.Error(), "group_id") || strings.Contains(err.Error(), "sticky provider") || strings.Contains(err.Error(), "requested_model") {
+		if strings.Contains(err.Error(), "advanced scheduler group") || strings.Contains(err.Error(), "group_id") || strings.Contains(err.Error(), "sticky provider") || strings.Contains(err.Error(), "requested_model") || strings.Contains(err.Error(), "client_protocol") {
 			response.BadRequest(c, err.Error())
 			return
 		}

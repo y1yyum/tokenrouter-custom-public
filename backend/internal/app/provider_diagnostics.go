@@ -2,12 +2,12 @@ package app
 
 import (
 	"context"
-	"github.com/TokenFlux/TokenRouter/internal/config"
-	providerpostgres "github.com/TokenFlux/TokenRouter/internal/provider/postgres"
 
+	"github.com/TokenFlux/TokenRouter/internal/config"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/selection"
 	"github.com/TokenFlux/TokenRouter/internal/provider"
+	providerpostgres "github.com/TokenFlux/TokenRouter/internal/provider/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	"github.com/TokenFlux/TokenRouter/internal/scheduler"
 	schedulerhttp "github.com/TokenFlux/TokenRouter/internal/scheduler/httpapi"
@@ -38,7 +38,7 @@ func provideProviderDiagnostics(admin *provider.Admin, groups *routing.GroupAdmi
 	if cfg.Gateway.OpenAI.PlanModelRestrictions {
 		read = verdicts.ActivePlanModelRestrictions
 	}
-	return selection.NewDiagnostics(providerDiagnosticSource{providers: admin, groups: groups}, selection.Shared{PlanModelRestrictions: read, Concurrency: concurrency, Parameters: shared.Parameters, Feedback: shared.Feedback}, gateway, openai)
+	return selection.NewDiagnostics(providerDiagnosticSource{providers: admin, groups: groups}, selection.Shared{CompactModel: cfg.Gateway.OpenAI.CompactModel, PlanModelRestrictions: read, Concurrency: concurrency, Parameters: shared.Parameters, Feedback: shared.Feedback}, gateway, openai)
 }
 
 // provideSchedulerDiagnosticsHTTP exposes selection diagnostics through the

@@ -83,13 +83,7 @@ func PlanModelRejection(ctx context.Context, candidate *ExecutionProvider, routi
 	if gate == nil {
 		return ""
 	}
-	policy := ExecutionModelPolicy(candidate).WithContext(ctx)
-	actual := policy.OpenAIUpstream(routingModel, gate.compact != nil)
-	if gate.compact != nil {
-		if override := gate.compact.Recovery(candidate).ResolveModel(routingModel); override != "" {
-			actual = override
-		}
-	}
+	actual := PlanModelTarget(ctx, candidate, routingModel, gate.compact)
 	key := planModelTarget{provider: candidate.Record.ID, model: actual}
 	if group, ok := requeststate.GroupFromContext(ctx); ok && group != nil {
 		key.group = group.ID
@@ -111,4 +105,17 @@ func CheckPlanModelSend(ctx context.Context, p *ExecutionProvider, actual string
 		return gate.rejection(ctx, p.Record.ID, actual), gate.bound
 	}
 	return "", false
+}
+
+// PlanModelTarget resolves the same wire identity for selection and read-only
+// diagnostics, including provider and process-wide legacy Compact overrides.
+func PlanModelTarget(ctx context.Context, candidate *ExecutionProvider, routingModel string, compact *CompactModels) string {
+	policy := ExecutionModelPolicy(candidate).WithContext(ctx)
+	actual := policy.OpenAIUpstream(routingModel, compact != nil)
+	if compact != nil {
+		if override := compact.Recovery(candidate).ResolveModel(routingModel); override != "" {
+			actual = override
+		}
+	}
+	return actual
 }

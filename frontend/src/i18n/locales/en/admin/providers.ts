@@ -303,6 +303,11 @@ export default {
         'Baseline score: no model, session affinity, or previous-response affinity is specified.',
       simulationActive: 'The score is being simulated with the supplied request context.',
       requestedModel: 'Requested model',
+      entry: 'HTTP entry',
+      sourceGroup: 'Source group ID for ordinary client (optional)',
+      fallbackAccess:
+        'Configured fallback for an ordinary client. User access to the destination and funding are checked on the live request.',
+      routeCheck: 'Route and quality verdict',
       httpResponsesPlanCheck: 'HTTP Responses plan restrictions',
       planCheckOff: 'Enforcement is off',
       noPlanOwners: 'No active plan restrictions',

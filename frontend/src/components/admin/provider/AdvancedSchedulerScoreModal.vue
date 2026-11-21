@@ -182,9 +182,30 @@
                     "
                   />
                 </label>
-                <label class="flex items-center gap-2 text-sm">
-                  <input v-model="scenario.http_responses" type="checkbox" />
-                  {{ t('admin.providers.advancedSchedulerScore.httpResponsesPlanCheck') }}
+                <label>
+                  <span class="input-label">{{
+                    t('admin.providers.advancedSchedulerScore.entry')
+                  }}</span>
+                  <select v-model="scenario.client_protocol" class="input">
+                    <option value="">{{
+                      t('admin.providers.advancedSchedulerScore.notSpecified')
+                    }}</option>
+                    <option v-for="(label, entry) in httpEntries" :key="entry" :value="entry">{{
+                      label
+                    }}</option>
+                  </select>
+                </label>
+                <label v-if="scenario.client_protocol">
+                  <span class="input-label">{{
+                    t('admin.providers.advancedSchedulerScore.sourceGroup')
+                  }}</span>
+                  <input
+                    v-model.number="scenario.source_group_id"
+                    type="number"
+                    min="1"
+                    class="input"
+                    :placeholder="String(activeGroupID)"
+                  />
                 </label>
                 <label class="min-w-0">
                   <span class="input-label">{{
@@ -234,14 +255,25 @@
               v-if="detail.plan_model_check"
               class="border-b border-gray-200 py-5 dark:border-dark-600"
             >
-              <h3>{{ t('admin.providers.advancedSchedulerScore.httpResponsesPlanCheck') }}</h3>
+              <h3>{{ t('admin.providers.advancedSchedulerScore.routeCheck') }}</h3>
               <p
-                >{{ detail.plan_model_check.actual_model }} ·
+                >{{ detail.plan_model_check.source_group_id }} →
+                {{ detail.plan_model_check.group_id }} ·
+                {{ detail.plan_model_check.client_protocol }} →
+                {{ detail.plan_model_check.upstream_protocol || 'Unknown' }}<br />
+                {{ detail.plan_model_check.requested_model }} →
+                {{ detail.plan_model_check.routing_model || 'Unknown' }} →
+                {{ detail.plan_model_check.actual_model || 'Unknown' }} ·
                 {{ detail.plan_model_check.checked_at }}</p
+              >
+              <p
+                v-if="detail.plan_model_check.source_group_id !== detail.plan_model_check.group_id"
+                >{{ t('admin.providers.advancedSchedulerScore.fallbackAccess') }}</p
               >
               <p v-if="!detail.plan_model_check.enabled">{{
                 t('admin.providers.advancedSchedulerScore.planCheckOff')
               }}</p>
+              <p v-else-if="!detail.plan_model_check.actual_model">Unknown</p>
               <p v-else-if="!detail.plan_model_check.owners?.length">{{
                 t('admin.providers.advancedSchedulerScore.noPlanOwners')
               }}</p>
@@ -643,7 +675,7 @@ import type { Provider } from '@/api/admin/providers.types'
  */
 const props = defineProps<{
   show: boolean // parent-controlled diagnostic dialog visibility
-  provider: Provider | null // selected provider or no selection
+  provider: Pick<Provider, 'id'> | null // selected provider or no selection
 }>()
 
 /**
@@ -677,13 +709,21 @@ const detailCache = new Map<number, AdvancedSchedulerScoreDiagnosticResponse>()
  * scenario holds optional model and provider-affinity inputs used by preview requests; reset
  * operations restore their absent values before baseline loading.
  */
+const httpEntries = {
+  openai_responses: 'Responses',
+  openai_responses_compact: 'Responses /compact',
+  openai_chat_completions: 'Chat Completions',
+  anthropic_messages: 'Messages',
+}
 const scenario = reactive<{
-  http_responses: boolean // simulate the Responses HTTP entry
+  client_protocol: string // inbound HTTP entry
+  source_group_id: number | string // optional non-Claude-Code source group
   requested_model: string // optional scenario model identifier
   sticky_provider_id: number | null // optional sticky affinity provider
   previous_response_provider_id: number | null // optional continuation affinity provider
 }>({
-  http_responses: false,
+  client_protocol: '',
+  source_group_id: '',
   requested_model: '',
   sticky_provider_id: null,
   previous_response_provider_id: null,
@@ -781,7 +821,8 @@ function resetState() {
  * resetScenario clears the requested model and both provider-affinity scenario inputs.
  */
 function resetScenario() {
-  scenario.http_responses = false
+  scenario.client_protocol = ''
+  scenario.source_group_id = ''
   scenario.requested_model = ''
   scenario.sticky_provider_id = null
   scenario.previous_response_provider_id = null
@@ -869,7 +910,10 @@ async function preview() {
   const payload: AdvancedSchedulerScorePreviewRequest = {
     group_id: activeGroupID.value,
   }
-  if (scenario.http_responses && scenario.requested_model) payload.http_responses = true
+  if (scenario.client_protocol) {
+    payload.client_protocol = scenario.client_protocol
+    if (scenario.source_group_id) payload.source_group_id = Number(scenario.source_group_id)
+  }
   if (scenario.requested_model) payload.requested_model = scenario.requested_model
   if (scenario.sticky_provider_id) payload.sticky_provider_id = scenario.sticky_provider_id
   if (scenario.previous_response_provider_id)

@@ -795,7 +795,7 @@ import ImportDataModal from '@/views/admin/providers/operations/ImportDataModal.
 import ReAuthProviderModal from '@/views/admin/providers/operations/ReAuthProviderModal.vue'
 import ProviderTestModal from '@/views/admin/providers/testing/ProviderTestModal.vue'
 import ProviderStatsModal from '@/views/admin/providers/operations/ProviderStatsModal.vue'
-import AdvancedSchedulerScoreModal from '@/views/admin/providers/operations/AdvancedSchedulerScoreModal.vue'
+import AdvancedSchedulerScoreModal from '@/components/admin/provider/AdvancedSchedulerScoreModal.vue'
 import CodexInviteResetModal from '@/views/admin/providers/operations/CodexInviteResetModal.vue'
 import ScheduledTestsPanel from '@/views/admin/providers/testing/ScheduledTestsPanel.vue'
 import type { SelectOption } from '@/components/common/Select.vue'

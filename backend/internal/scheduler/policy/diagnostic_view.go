@@ -15,8 +15,10 @@ import (
 // AdvancedSchedulerScoreDiagnosticRequest supplies one group, optional model,
 // and simulated affinity provider IDs.
 type AdvancedSchedulerScoreDiagnosticRequest struct {
-	HTTPResponses bool  `json:"http_responses,omitempty"` // simulate the public HTTP Responses entry
-	GroupID       int64 `json:"group_id"`                 // positive diagnostic group identifier
+	ClientProtocol string `json:"client_protocol,omitempty"` // HTTP entry selected for this simulation
+	SourceGroupID  int64  `json:"source_group_id,omitempty"` // optional ordinary client origin before fallback
+	HTTPResponses  bool   `json:"http_responses,omitempty"`  // simulate the public HTTP Responses entry
+	GroupID        int64  `json:"group_id"`                  // positive diagnostic group identifier
 	// RequestedModel is trimmed by GetDetail and limited to 512 bytes. Empty text
 	// omits model-specific eligibility context from the baseline calculation.
 	// optional requested model text
@@ -255,10 +257,16 @@ type AdvancedSchedulerScoreDiagnosticPolicySignal struct {
 // PlanModelCheck describes the exact provider-model policy read for the preview.
 // An absent read with Enabled false corresponds to the disabled route switch.
 type PlanModelCheck struct {
-	Enabled     bool             `json:"enabled"`                // HTTP Responses restriction enforcement
-	ActualModel string           `json:"actual_model,omitempty"` // provider-mapped identity
-	CheckedAt   time.Time        `json:"checked_at"`             // common validity instant for the preview
-	Owners      []PlanModelOwner `json:"owners,omitempty"`       // plans currently restricting this model
+	SourceGroupID    int64            `json:"source_group_id"`             // origin before client fallback
+	GroupID          int64            `json:"group_id"`                    // evaluated provider membership
+	ClientProtocol   string           `json:"client_protocol"`             // inbound HTTP entry
+	UpstreamProtocol string           `json:"upstream_protocol,omitempty"` // predicted outbound entry
+	RequestedModel   string           `json:"requested_model"`             // literal client input
+	RoutingModel     string           `json:"routing_model,omitempty"`     // destination group mapping
+	Enabled          bool             `json:"enabled"`                     // HTTP Responses restriction enforcement
+	ActualModel      string           `json:"actual_model,omitempty"`      // provider-mapped identity
+	CheckedAt        time.Time        `json:"checked_at"`                  // common validity instant for the preview
+	Owners           []PlanModelOwner `json:"owners,omitempty"`            // plans currently restricting this model
 }
 
 // PlanModelOwner identifies the durable failing result that still restricts the route.

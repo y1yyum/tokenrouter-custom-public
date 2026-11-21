@@ -110,6 +110,7 @@ type DiagnosticSource interface {
 
 // Diagnostics shares selection parameters, feedback, and eligibility rules for read-only diagnostics.
 type Diagnostics struct {
+	compactModels         gatewayadapter.CompactModels              // same process-wide Compact mapping as execution
 	planModelRestrictions gatewayadapter.PlanModelRestrictionReader // active route-level quality rules
 	source                DiagnosticSource                          // diagnostic record reader
 	concurrencyService    *schedulercore.ConcurrencyService         // shared provider slots
@@ -222,6 +223,7 @@ func NewGemini(deps GeminiDependencies, options Options) *Gemini {
 func NewDiagnostics(source DiagnosticSource, shared Shared, generic *Generic, compatible *Compatible) *Diagnostics {
 	return &Diagnostics{
 		planModelRestrictions: shared.PlanModelRestrictions,
+		compactModels:         gatewayadapter.CompactModels{Default: shared.CompactModel},
 		source:                source,
 		concurrencyService:    shared.Concurrency,
 		feedback:              shared.Feedback,

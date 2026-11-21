@@ -1558,6 +1558,12 @@ func diagnosticPolicySignals(
 			},
 		)
 	}
+	if request.ClientProtocol != "" {
+		return append(signals, AdvancedSchedulerScoreDiagnosticPolicySignal{
+			Key: "request_capabilities", State: "partial",
+			Detail: "已检查所选 HTTP 路径、目的组协议和提供商模型。用户授权、资金、请求体与实时容量需在实际请求中检查。",
+		})
+	}
 	signals = append(signals, AdvancedSchedulerScoreDiagnosticPolicySignal{
 		Key:    "request_capabilities",
 		State:  "not_evaluated",
