@@ -5,9 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -20,6 +23,8 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
+	sessiontestkit "github.com/TokenFlux/TokenRouter/internal/gateway/session/testkit"
 	gatewaytestkit "github.com/TokenFlux/TokenRouter/internal/gateway/testkit"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/TokenFlux/TokenRouter/internal/protocol"
@@ -51,12 +56,20 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 		want      int64  // provider expected to receive the only HTTP attempt
 		disabled  bool   // run the native route without reading restrictions
 		readError bool   // simulate an unavailable durable store
+		bound     bool   // attach a continuation created with the primary credential
+		sticky    bool   // prime the primary session before restricting its model
+		failFirst bool   // grade the primary while returning a retryable HTTP error
 	}{
-		{"unrestricted alias", "client-x", modelX, false, primary, false, false},
-		{"restricted alias", "client-x", modelX, true, backup, false, false},
-		{"unaffected model", modelY, modelY, true, primary, false, false},
-		{"flag disabled", "client-x", modelX, true, primary, true, false},
-		{"unavailable store", "client-x", modelX, false, 0, false, true},
+		{name: "unrestricted alias", requested: "client-x", actual: modelX, want: primary},
+		{name: "restricted alias", requested: "client-x", actual: modelX, restrict: true, want: backup},
+		{name: "unaffected model", requested: modelY, actual: modelY, restrict: true, want: primary},
+		{name: "remapped alias", requested: "client-x", actual: modelY, restrict: true, want: primary},
+		{name: "flag disabled", requested: "client-x", actual: modelX, restrict: true, want: primary, disabled: true},
+		{name: "unavailable store", requested: "client-x", actual: modelX, readError: true},
+		{name: "healthy continuation", requested: "client-x", actual: modelX, bound: true, want: primary},
+		{name: "restricted continuation", requested: "client-x", actual: modelX, bound: true, restrict: true},
+		{name: "sticky migration", requested: "client-x", actual: modelX, sticky: true, want: backup},
+		{name: "restriction before retry", requested: "client-x", actual: modelX, failFirst: true, want: backup},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const groupID int64 = 42
@@ -69,6 +82,8 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 			cfg.Gateway.Failover.MaxProviderSwitches = 1
 			providers := &mixedHTTPProviders{}
 			seen := make(chan string, 8)
+			var restricted atomic.Bool
+			restricted.Store(tc.restrict)
 			for priority, id := range []int64{primary, backup} {
 				server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 					body, err := io.ReadAll(r.Body)
@@ -82,6 +97,11 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 						http.Error(w, "too many attempts", http.StatusBadRequest)
 						return
 					}
+					if tc.failFirst && id == primary {
+						restricted.Store(true)
+						http.Error(w, "fixture upstream unavailable", http.StatusBadGateway)
+						return
+					}
 					r.Body = io.NopCloser(strings.NewReader(string(body)))
 					mixedUpstreamResponse(w, r, false)
 				}))
@@ -90,13 +110,29 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 					Type: provider.ProviderTypeAPIKey, Status: "active", Schedulable: true, Priority: priority + 1,
 					Concurrency: 1, GroupIDs: []int64{groupID}, Credentials: map[string]any{
 						"api_key": "fixture-key", "base_url": server.URL,
-						"model_mapping": map[string]any{"client-x": modelX, modelY: modelY},
+						"model_mapping": map[string]any{"client-x": tc.actual, modelY: modelY},
 					}}
+				if tc.failFirst && id == primary {
+					record.Credentials["pool_mode"] = true
+					record.Credentials["pool_mode_retry_count"] = float64(1)
+					record.Credentials["pool_mode_retry_status_codes"] = []any{float64(http.StatusBadGateway)}
+				}
 				providers.values = append(providers.values, *gatewayprovider.NewExecutionProvider(record))
 			}
 			transport := &mixedHTTPTransport{}
-			source, choices, credentials := newOpenAIExecutionAndSelectionFixture(providers, nil, cfg, nil, nil,
-				nil, transport, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, nil)
+			state := session.NewOpenAIWSStateStore(nil, nil)
+			const previous = "resp_primary_chain"
+			if tc.bound {
+				require.NoError(t, state.BindResponseProvider(context.Background(), groupID, previous, primary, time.Hour))
+				require.NoError(t, state.BindHTTPResponseOwner(context.Background(), groupID, previous, 7, 8, time.Hour))
+			}
+			var cache session.GatewayCache
+			sticky := &sessiontestkit.StickyCache{SessionBindings: map[string]int64{}, DeletedSessions: map[string]int{}}
+			if tc.sticky {
+				cache = sticky
+			}
+			source, choices, credentials := newOpenAIExecutionAndSelectionFixture(providers, cache, cfg, nil, nil,
+				nil, transport, nil, nil, nil, nil, nil, nil, nil, nil, nil, state, nil, nil)
 			logs := &gatewaytestkit.UsageLogStore{Inserted: true}
 			funds := &gatewaytestkit.SettlementStore{}
 			recording := gatewaytestkit.NewRecording(logs, funds, nil, false)
@@ -119,7 +155,7 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 					if tc.readError {
 						return nil, errors.New("test storage outage")
 					}
-					if tc.restrict && id == primary && model == modelX {
+					if restricted.Load() && id == primary && model == modelX {
 						return []provider.ActivePlanModelRestriction{{PlanModelVerdict: provider.PlanModelVerdict{
 							PlanID: 1, ProviderID: primary, UpstreamModel: modelX, Restricted: true,
 						}}}, nil
@@ -136,13 +172,29 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 			router.POST(path, gin.HandlerFunc(auth), guards.RequireGroupClientProtocol(
 				protocol.ProtocolOpenAIResponses, gatewayhttp.GroupClientProtocolErrorOpenAI), endpoints.Responses)
 			body := fmt.Sprintf(`{"model":%q,"input":"hello","stream":false}`, tc.requested)
+			if tc.bound {
+				body = fmt.Sprintf(`{"model":%q,"input":"hello","stream":false,"previous_response_id":%q}`, tc.requested, previous)
+			}
 			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(body))
 			req.Header.Set("Authorization", "Bearer fixture-client")
 			req.Header.Set("Content-Type", "application/json")
 			req.Header.Set("session_id", "plan-model-fixture")
+			expectedWrites := 1
+			if tc.sticky {
+				prime := req.Clone(req.Context())
+				prime.Body = io.NopCloser(strings.NewReader(body))
+				first := httptest.NewRecorder()
+				router.ServeHTTP(first, prime)
+				require.Equal(t, http.StatusOK, first.Code, first.Body.String())
+				require.Contains(t, slices.Collect(maps.Values(sticky.SessionBindings)), primary)
+				require.Len(t, seen, 1)
+				require.Equal(t, fmt.Sprintf("%d %s %s", primary, path, modelX), <-seen)
+				restricted.Store(true)
+				expectedWrites++
+			}
 			out := httptest.NewRecorder()
 			router.ServeHTTP(out, req)
-			if tc.readError {
+			if tc.want == 0 {
 				require.GreaterOrEqual(t, out.Code, 400)
 				require.Empty(t, seen)
 				require.Empty(t, transport.calls())
@@ -151,13 +203,22 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 				return
 			}
 			require.Equal(t, http.StatusOK, out.Code, out.Body.String())
+			calls := []int64{tc.want}
+			if tc.sticky {
+				calls = []int64{primary, backup}
+			}
+			if tc.failFirst {
+				calls = []int64{primary, backup}
+				require.Len(t, seen, 2)
+				require.Equal(t, fmt.Sprintf("%d %s %s", primary, path, tc.actual), <-seen)
+			}
 			require.Len(t, seen, 1)
 			exchange := <-seen
 			t.Logf("received=%s attempts=%v usage_writes=%d settlements=%d", exchange, transport.calls(), logs.Calls, funds.Calls)
 			require.Equal(t, fmt.Sprintf("%d %s %s", tc.want, path, tc.actual), exchange)
-			require.Equal(t, []int64{tc.want}, transport.calls())
-			require.Equal(t, 1, logs.Calls)
-			require.Equal(t, 1, funds.Calls)
+			require.Equal(t, calls, transport.calls())
+			require.Equal(t, expectedWrites, logs.Calls)
+			require.Equal(t, expectedWrites, funds.Calls)
 			require.Equal(t, tc.want, logs.LastLog.ProviderID)
 			require.Equal(t, 10, logs.LastLog.InputTokens)
 			require.Equal(t, 3, logs.LastLog.OutputTokens)
