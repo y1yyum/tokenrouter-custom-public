@@ -32,9 +32,10 @@ import (
 // invocation. Callers serialize conversions and callbacks because its counter
 // and lookup maps are mutated without synchronization.
 type diagnosticScope struct {
-	target      *gatewayprovider.ExecutionProvider // provider requested for this preview
-	targetGroup *routing.Group                     // group requested for this preview
-	source      DiagnosticSource                   // bound diagnostic reader
+	target           *gatewayprovider.ExecutionProvider // provider requested for this preview
+	requestedGroupID int64                              // selected group for a protocol-specific preview
+	targetGroup      *routing.Group                     // group requested for this preview
+	source           DiagnosticSource                   // bound diagnostic reader
 	// next allocates identifiers shared by providerValues and groupValues in this
 	// invocation. Both maps retain distinct conversions even when persisted IDs are equal.
 	next           uint64                                        // per-call association counter
@@ -94,7 +95,11 @@ func (s *diagnosticScope) originalGroup(g *schedulercore.DiagnosticGroup) *routi
 	if g == nil {
 		return nil
 	}
-	return s.groupValues[g.ProjectionID]
+	group := s.groupValues[g.ProjectionID]
+	if group != nil && group.ID == s.requestedGroupID {
+		s.targetGroup = group
+	}
+	return group
 }
 
 // group registers the source group and returns diagnostic fields under a new
@@ -180,7 +185,6 @@ func (s *diagnosticScope) GetProvider(ctx context.Context, id int64) (*scheduler
 // to the diagnostic core using this adapter.
 func (s *diagnosticScope) GetGroup(ctx context.Context, id int64) (*schedulercore.DiagnosticGroup, error) {
 	v, err := s.source.GetGroup(ctx, id)
-	s.targetGroup = v
 	return s.group(v), err
 }
 

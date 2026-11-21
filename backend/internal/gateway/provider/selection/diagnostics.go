@@ -51,7 +51,7 @@ func (s *Diagnostics) GetDetail(ctx context.Context, id int64, request policy.Ad
 		return core.GetDetail(ctx, id, request)
 	}
 	check := &policy.PlanModelCheck{Enabled: s.planModelRestrictions != nil, CheckedAt: time.Now().UTC()}
-	ctx = requeststate.WithClientProtocol(ctx, protocol.ProtocolOpenAIResponses)
+	scope.requestedGroupID = request.GroupID
 	// Share one set of owner observations between the hard-filter explanation
 	// and the selected provider's detail, including when a prior gate excluded it.
 	type target struct {
@@ -81,6 +81,7 @@ func (s *Diagnostics) GetDetail(ctx context.Context, id int64, request policy.Ad
 	value, group := scope.target, scope.targetGroup
 	if value != nil && value.Record.Platform == providercore.PlatformOpenAI {
 		ctx = requeststate.WithGroup(ctx, group)
+		ctx = requeststate.WithClientProtocol(ctx, protocol.ProtocolOpenAIResponses)
 		route := s.resolveDiagnosticRoutingModel(ctx, value, group, strings.TrimSpace(request.RequestedModel))
 		check.ActualModel = gatewayprovider.ExecutionModelPolicy(value).UpstreamModel(ctx, route)
 		if check.Enabled {
@@ -161,11 +162,14 @@ func (s *Diagnostics) diagnosticPlatformFilterReason(
 	requestedModel := strings.TrimSpace(request.RequestedModel)
 	routingModel := s.resolveDiagnosticRoutingModel(ctx, provider, group, requestedModel)
 
-	if request.HTTPResponses && group != nil && !group.AllowsClientProtocol(protocol.ProtocolOpenAIResponses) {
-		return "protocol_unavailable"
-	}
-	if reason := gatewayprovider.PlanModelRejection(ctx, provider, routingModel); reason != "" {
-		return reason
+	if request.HTTPResponses && requestedModel != "" {
+		ctx = requeststate.WithClientProtocol(ctx, protocol.ProtocolOpenAIResponses)
+		if group != nil && !group.AllowsClientProtocol(protocol.ProtocolOpenAIResponses) {
+			return "protocol_unavailable"
+		}
+		if reason := gatewayprovider.PlanModelRejection(ctx, provider, routingModel); reason != "" {
+			return reason
+		}
 	}
 	if !diagnosticSupportsGroupProtocols(ctx, provider, group, "") {
 		return "protocol_unavailable"
