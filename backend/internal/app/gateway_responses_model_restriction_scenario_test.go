@@ -1,12 +1,15 @@
 package app
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/stretchr/testify/require"
@@ -46,10 +49,14 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 		actual    string // model expected on the receiving server
 		restrict  bool   // supply plan A for the primary provider and X
 		want      int64  // provider expected to receive the only HTTP attempt
+		disabled  bool   // run the native route without reading restrictions
+		readError bool   // simulate an unavailable durable store
 	}{
-		{"unrestricted alias", "client-x", modelX, false, primary},
-		{"restricted alias", "client-x", modelX, true, backup},
-		{"unaffected model", modelY, modelY, true, primary},
+		{"unrestricted alias", "client-x", modelX, false, primary, false, false},
+		{"restricted alias", "client-x", modelX, true, backup, false, false},
+		{"unaffected model", modelY, modelY, true, primary, false, false},
+		{"flag disabled", "client-x", modelX, true, primary, true, false},
+		{"unavailable store", "client-x", modelX, false, 0, false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const groupID int64 = 42
@@ -57,6 +64,7 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 				AllowedProtocols: []protocol.ProtocolID{protocol.ProtocolOpenAIResponses}}
 			cfg := &config.Config{}
 			cfg.Billing.FallbackRateMultiplier = 1
+			cfg.Gateway.OpenAI.PlanModelRestrictions = !tc.disabled
 			cfg.Security.URLAllowlist.AllowInsecureHTTP = true
 			cfg.Gateway.Failover.MaxProviderSwitches = 1
 			providers := &mixedHTTPProviders{}
@@ -84,11 +92,6 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 						"api_key": "fixture-key", "base_url": server.URL,
 						"model_mapping": map[string]any{"client-x": modelX, modelY: modelY},
 					}}
-				if tc.restrict && id == primary {
-					record.Extra = map[string]any{"plan_model_restrictions": map[string]any{
-						"plan-A": map[string]any{"upstream_model": modelX, "restricted": true},
-					}}
-				}
 				providers.values = append(providers.values, *gatewayprovider.NewExecutionProvider(record))
 			}
 			transport := &mixedHTTPTransport{}
@@ -109,6 +112,20 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 			t.Cleanup(eligibility.Stop)
 			resources := provideOpenAIHTTPResources(scheduler.NewConcurrencyService(nil), cfg)
 			endpoints := newGatewayHTTPEndpoints(gatewayHTTPFixtureInput{
+				PlanModelRestrictions: func(_ context.Context, id int64, model string, at time.Time) ([]provider.ActivePlanModelRestriction, error) {
+					if tc.disabled {
+						t.Fatal("disabled route queried plan restrictions")
+					}
+					if tc.readError {
+						return nil, errors.New("test storage outage")
+					}
+					if tc.restrict && id == primary && model == modelX {
+						return []provider.ActivePlanModelRestriction{{PlanModelVerdict: provider.PlanModelVerdict{
+							PlanID: 1, ProviderID: primary, UpstreamModel: modelX, Restricted: true,
+						}}}, nil
+					}
+					return nil, nil
+				},
 				Source: source, Credentials: credentials, Choices: choices, Config: cfg, Keys: keys,
 				Funding: newFundingAdmissionFixture(eligibility, cfg), Concurrency: resources.Concurrency, MaxSwitches: 1,
 			})
@@ -125,6 +142,14 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 			req.Header.Set("session_id", "plan-model-fixture")
 			out := httptest.NewRecorder()
 			router.ServeHTTP(out, req)
+			if tc.readError {
+				require.GreaterOrEqual(t, out.Code, 400)
+				require.Empty(t, seen)
+				require.Empty(t, transport.calls())
+				require.Zero(t, logs.Calls)
+				require.Zero(t, funds.Calls)
+				return
+			}
 			require.Equal(t, http.StatusOK, out.Code, out.Body.String())
 			require.Len(t, seen, 1)
 			exchange := <-seen

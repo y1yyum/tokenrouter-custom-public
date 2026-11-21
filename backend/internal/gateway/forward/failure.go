@@ -50,6 +50,7 @@ const (
 
 	// Failure stages distinguish execution outcomes from credential acquisition
 	// when callers choose formatting, switching, and provider-feedback behavior.
+	GatewayFailureStageSelection    GatewayFailureStage = "selection"     // local model eligibility changed before transport
 	GatewayFailureStageInference    GatewayFailureStage = "inference"     // upstream inference failure
 	GatewayFailureStageProviderAuth GatewayFailureStage = "provider_auth" // credential acquisition failure
 
@@ -191,7 +192,7 @@ func (e *UpstreamFailoverError) ShouldReportProviderScheduleFailure() bool {
 	if e == nil {
 		return false
 	}
-	return !e.IsCredentialFailure() || e.Scope == GatewayFailureScopeProvider
+	return e.Stage != GatewayFailureStageSelection && (!e.IsCredentialFailure() || e.Scope == GatewayFailureScopeProvider)
 }
 
 // RetryFailure creates the retry-budget view consumed by request failover state.

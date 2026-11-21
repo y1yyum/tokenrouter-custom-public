@@ -360,6 +360,8 @@ gateway:
     # Grok text Responses first-byte timeout (seconds, 0=disabled; default 120)
     response_header_timeout_seconds: 120
   openai:
+    # Read saved plan verdicts during selection and before POST /v1/responses forwarding.
+    plan_model_restrictions: false
     # Deployment defaults for persistent Responses connections. Values saved
     # under Gateway Settings > OpenAI take precedence.
     # Group protocol settings determine whether clients may use persistent

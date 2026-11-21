@@ -318,6 +318,18 @@ func (b *responsesAttemptBridge) Forward() textflow.ResponseOutcome {
 				b.providerReleaseFunc()
 			}
 		}()
+		if reason := gatewaycapture.PlanModelRejection(b.selectionCtx, b.provider, b.forwardModel); reason != "" {
+			action := forwardcore.NextProviderRetry
+			if b.previousResponseID != "" {
+				action = forwardcore.NextProviderStop
+			}
+			return nil, &forwardcore.UpstreamFailoverError{
+				Stage: forwardcore.GatewayFailureStageSelection, Scope: forwardcore.GatewayFailureScopeRequest,
+				Reason: forwardcore.GatewayFailureReason(reason), NextProviderAction: action,
+				StatusCode: http.StatusServiceUnavailable, ClientStatusCode: http.StatusServiceUnavailable,
+				ClientMessage: "Selected provider model is unavailable",
+			}
+		}
 		return b.binding().forward(b.c.Request.Context(), b.c, b.provider, attemptBody)
 	}()
 	var cyberBlockBodyHTTP []byte

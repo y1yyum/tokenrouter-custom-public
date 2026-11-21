@@ -213,6 +213,9 @@ func (s *Compatible) candidateEligibilityReason(ctx context.Context, value *gate
 	if reason := gatewayadapter.CompatibleEligibilityReason(ctx, value, platform, model, compact, required); reason != "" {
 		return reason
 	}
+	if reason := gatewayadapter.PlanModelRejection(ctx, value, model); reason != "" {
+		return reason
+	}
 	if preferred, configured := ctx.Value(preferredProvidersKey{}).(map[int64]struct{}); configured {
 		if _, found := preferred[value.Record.ID]; !found {
 			return "model_routing_deferred"

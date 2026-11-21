@@ -174,6 +174,7 @@ type fixtureRetryStore struct {
 // gatewayHTTPFixtureInput supplies mutable handler dependencies and
 // provider-switch options for HTTP tests.
 type gatewayHTTPFixtureInput struct {
+	PlanModelRestrictions gatewayprovider.PlanModelRestrictionReader // saved quality owners for HTTP Responses tests
 	// Request credential execution component.
 	Credentials *gatewayhttp.RequestCredentialExecutor
 	// Model availability diagnostic component.
@@ -1102,6 +1103,9 @@ func newGatewayHTTPEndpoints(input gatewayHTTPFixtureInput) *gatewayHTTPEndpoint
 	text := func() *gatewayhttp.OpenAITextHandler {
 		common, cyber, _ := base()
 		options := openAITextOptions(input.Config)
+		if input.Config != nil && input.Config.Gateway.OpenAI.PlanModelRestrictions {
+			options.PlanModelRestrictions = input.PlanModelRestrictions
+		}
 		options.MaxSwitches = input.MaxSwitches
 		bindings := openAITextBindings(responses, input.Funding, input.Keys, resources(), cyber, input.Rules, input.Moderator, planner, cache, nil)
 		executor := textflow.NewResponsesExecutor(provideOpenAITextAttemptRuntime(common), textflow.ResponseOptions{MaxSwitches: input.MaxSwitches}, textflow.ResponseOptions{MaxSwitches: input.MaxSwitches, FirstOutputBudget: true})
@@ -3665,7 +3669,7 @@ func RegisterGatewayRoutes(
 	mediaRuntime := provideMediaRuntime(nil, nil, nil, nil, nil, commonOpenAI, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	openAITextHTTP := h.OpenAITextHTTP
 	if openAITextHTTP == nil && h.OpenAIEnabled {
-		openAITextHTTP = provideOpenAITextHTTP(nil, nil, nil, nil, nil, nil, nil, nil, nil, openAIRuntime, activity, nil, nil, nil, nil)
+		openAITextHTTP = provideOpenAITextHTTP(nil, nil, nil, nil, nil, nil, nil, nil, nil, openAIRuntime, activity, nil, nil, nil, nil, nil)
 	}
 	responsesWSHTTP := h.ResponsesWSHTTP
 	if responsesWSHTTP == nil && h.OpenAIEnabled {

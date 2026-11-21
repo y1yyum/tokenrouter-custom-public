@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"net/http"
 	"strconv"
 	"strings"
@@ -70,6 +71,9 @@ func (h *OpenAITextHandler) Responses(c *gin.Context) {
 	defer h.recoverResponsesPanic(c, &streamStarted)
 	compactStartedAt := time.Now()
 	defer h.LogRemoteCompactOutcome(c, compactStartedAt)
+	if h.options.PlanModelRestrictions != nil && c.Request.URL.Path == "/v1/responses" {
+		c.Request = c.Request.WithContext(gatewayprovider.WithPlanModelRestrictions(c.Request.Context(), h.options.PlanModelRestrictions))
+	}
 	h.backend.TransportHTTP(c)
 
 	requestStart := time.Now()

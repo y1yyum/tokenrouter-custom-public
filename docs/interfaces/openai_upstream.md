@@ -70,6 +70,10 @@ Messages 转 OpenAI 的提示缓存摘要按提供商与 API Key 隔离命名空
 | Images | 同步生成与编辑生命周期；批量图片归 Gemini/Vertex，见[批量图片作业](../domains/batch_image_jobs.md) |
 | Realtime、Live、sideband、Alpha Search | 仅限 OpenAI 提供商，受分组开关、提供商类型与传输能力约束（Live 计费为零） |
 
+`gateway.openai.plan_model_restrictions` 默认关闭。启用后，`POST /v1/responses` 按实际映射的模型检查每个 OpenAI 提供商。候选筛选和发送前都读取已提交的 PostgreSQL 判定；读取失败时排除该候选。发送前才出现限制时，普通请求可以重新选路，绑定前次响应的请求终止。检查与发送之间已经在途的请求仍按原归属结算。
+
+判定按提供商、计划和实际模型保留。通过和过期只解除相应计划对该模型的限制。关闭开关恢复原有调度，并保留审计。WS、Compact 及其他 HTTP 入口沿用各自的调度规则。
+
 路由与透传要点：
 
 - 透传仅控制报文与传输方式，手动配置的提供商模型映射仍执行一次；HTTP 出站只局部替换 `model`，保留原始请求模型与最终上游模型用于响应回填、日志和计费。

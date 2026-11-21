@@ -503,6 +503,7 @@ func TestUpgradeV2CurrentKeysHaveSources(t *testing.T) {
 	sources := map[string]bool{
 		"config_version":                             true,
 		"usage.export_tasks.enabled":                 true,
+		"gateway.openai.plan_model_restrictions":     true,
 		"usage.export_tasks.dir":                     true,
 		"usage.export_tasks.retention_hours":         true,
 		"usage.export_tasks.max_active_per_user":     true,

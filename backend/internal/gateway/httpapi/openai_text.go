@@ -11,6 +11,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/apikey"
 	"github.com/TokenFlux/TokenRouter/internal/billing"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/execution"
+	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
 	"github.com/TokenFlux/TokenRouter/internal/moderation"
@@ -48,6 +49,8 @@ const (
 // uses body size, Compact interval and force-client diagnostic values
 // directly.
 type OpenAITextOptions struct {
+	// PlanModelRestrictions supplies current plan owners for plain HTTP Responses.
+	PlanModelRestrictions gatewayprovider.PlanModelRestrictionReader
 	// MaxBodyBytes bounds normalized lenient JSON bytes after reading and
 	// decoding. A nonpositive value uses the normalizer's 64 MiB default.
 	MaxBodyBytes int64

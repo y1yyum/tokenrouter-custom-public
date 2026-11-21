@@ -183,7 +183,9 @@ type ImageConcurrencyConfig struct {
 
 // GatewayOpenAIConfig groups OpenAI transport, timeout, Responses WebSocket, Live, and Codex settings.
 type GatewayOpenAIConfig struct {
-	Codex CodexConfig `yaml:"codex"` // gateway openai codex settings
+	// PlanModelRestrictions checks saved quality verdicts on POST /v1/responses.
+	PlanModelRestrictions bool        `yaml:"plan_model_restrictions"`
+	Codex                 CodexConfig `yaml:"codex"` // gateway openai codex settings
 	// CompactModel supplies the global model for explicit compact requests
 	// when provider mapping misses.
 	CompactModel string `yaml:"compact_model"`

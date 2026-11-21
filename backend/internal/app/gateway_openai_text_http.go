@@ -18,6 +18,7 @@ import (
 	textflow "github.com/TokenFlux/TokenRouter/internal/gateway/text"
 	"github.com/TokenFlux/TokenRouter/internal/moderation"
 	openaiwire "github.com/TokenFlux/TokenRouter/internal/protocol/openai"
+	providerpostgres "github.com/TokenFlux/TokenRouter/internal/provider/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	"github.com/TokenFlux/TokenRouter/internal/scheduler"
 )
@@ -75,8 +76,12 @@ func provideOpenAITextHTTP(
 	planner *gatewayadapter.RoutePlanner, cache session.GatewayCache,
 	messages *messageHTTPBindings,
 	subscriptions *billing.SubscriptionService,
+	verdicts *providerpostgres.ProviderStore,
 ) *gatewayhttp.OpenAITextHandler {
 	options := openAITextOptions(cfg)
+	if cfg != nil && cfg.Gateway.OpenAI.PlanModelRestrictions {
+		options.PlanModelRestrictions = verdicts.ActivePlanModelRestrictions
+	}
 	bindings := openAITextBindings(source, funding, keys, resources, cyber, rules, moderator, planner, cache, subscriptions)
 	if messages != nil {
 		bindings.ClientVersions = messages.bindings.ClientVersions
