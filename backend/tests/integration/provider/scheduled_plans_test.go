@@ -51,7 +51,7 @@ func TestScheduledPlanStorageContract(t *testing.T) {
 	}
 	require.True(t, found)
 	for range 3 {
-		err = svc.SaveResult(ctx, plan.ID, 2, &provider.ScheduledTestResult{Status: "success", ResponseText: "fixture", StartedAt: now, FinishedAt: now.Add(time.Second), LatencyMs: 1000})
+		_, err = svc.SaveResult(ctx, plan.ID, 2, &provider.ScheduledTestResult{Status: "success", ResponseText: "fixture", StartedAt: now, FinishedAt: now.Add(time.Second), LatencyMs: 1000})
 		require.NoError(t, err)
 	}
 	retained, err := svc.ListResults(ctx, plan.ID, 0)

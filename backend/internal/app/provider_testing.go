@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"slices"
 	"time"
@@ -68,8 +69,10 @@ func provideProviderProbeTasks(store *providerpostgres.ProviderStore, connection
 // and next-run calculation. Background execution is constructed by
 // provideScheduledTestRunner and started later through the application's
 // lifecycle registration.
-func provideScheduledTests(plans provider.ScheduledTestPlanRepository, results provider.ScheduledTestResultRepository) *provider.ScheduledTestService {
-	return provider.NewScheduledTestService(plans, results, provider.ScheduledTestOptions{Now: time.Now, NextRun: provideradapter.NextScheduledTestRun})
+func provideScheduledTests(plans provider.ScheduledTestPlanRepository, results provider.ScheduledTestResultRepository, store *providerpostgres.ProviderStore, db *sql.DB) *provider.ScheduledTestService {
+	return provider.NewScheduledTestService(plans, results, provider.ScheduledTestOptions{SaveQuality: func(ctx context.Context, result *provider.ScheduledTestResult) (*provider.ScheduledTestResult, error) {
+		return store.SaveQualityResult(ctx, db, result)
+	}, Now: time.Now, NextRun: provideradapter.NextScheduledTestRun})
 }
 
 // provideScheduledTestRunner binds periodic tests and successful-test recovery

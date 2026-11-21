@@ -46,6 +46,7 @@ func (t openaiTestTarget) Execute(ctx context.Context, request provider.Prepared
 	run.GroupID = request.GroupID
 	defer run.Cancel()
 	run.Automatic = request.Automatic
+	run.ObserveResponsesModel = request.ObserveResponsesModel
 	run.RequestedProtocol = provider.TextProtocol(request.Protocol)
 	// The executor's existing text selector uses legacy provider spellings. Map
 	// the resolved upstream identity here so provider defaults cannot replace it.

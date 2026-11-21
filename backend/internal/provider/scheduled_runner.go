@@ -25,11 +25,11 @@ import (
 
 // ScheduledTestExecutor runs a background test and returns its result.
 type ScheduledTestExecutor interface {
-	// RunTestBackground executes the requested provider and model with ctx and
+	// RunTestBackgroundRequest executes the requested provider and model with ctx and
 	// returns a nonnil result on nil error. TestService encodes test failures in
 	// that result; a returned Go error makes the runner skip saving and schedule
 	// advancement.
-	RunTestBackground(context.Context, int64, string) (*ScheduledTestResult, error)
+	RunTestBackgroundRequest(context.Context, TestRequest) (*ScheduledTestResult, error)
 }
 
 // SuccessfulTestRecovery reports primary cleanup calls completed after a
@@ -383,29 +383,44 @@ func (s *ScheduledTestRunnerService) runScheduled() {
 // returns before those steps; a nil error supplies a nonnil result, whose failed
 // status is still saved.
 //
-// SaveResult failure is logged and execution continues. An exact success result
-// with AutoRecover requests recovery even when result saving failed. Recovery
+// A failed quality transaction leaves the plan due. For ordinary connectivity
+// tests, AutoRecover can run after a successful exchange even if saving failed. Recovery
 // failure is also logged, then the next run is calculated using a fresh clock
 // reading. Calculation failure leaves the old schedule times, while
 // UpdateAfterRun failure retains earlier result and recovery outcomes. The
 // last-run clock is sampled separately from the next-run calculation.
 func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *ScheduledTestPlan) {
-	result, err := s.providerTestSvc.RunTestBackground(ctx, plan.ProviderID, plan.ModelID)
+	request := TestRequest{ProviderID: plan.ProviderID, Model: plan.ModelID}
+	var actual string
+	if plan.QualityEnabled {
+		kind := ProviderTestTypeText
+		request.Type = &kind
+		request.Prompt = qualityPrompt
+		request.Protocol = APIProtocolResponses
+		request.ObserveResponsesModel = func(model string) { actual = model }
+	}
+	result, err := s.providerTestSvc.RunTestBackgroundRequest(ctx, request)
 	if err != nil {
-		s.observe("[ScheduledTestRunner] plan=%d RunTestBackground error: %v", plan.ID, err)
+		s.observe("[ScheduledTestRunner] plan=%d background test error: %v", plan.ID, err)
 		return
 	}
 
-	// Save the observation before recovery and time advancement. Failure is
-	// diagnostic here, so those later operations can still run with their own
-	// independent outcomes.
-	if err := s.scheduledSvc.SaveResult(ctx, plan.ID, plan.MaxResults, result); err != nil {
+	// Grade the original plan snapshot and observed wire model before saving.
+	if plan.QualityEnabled {
+		result.Quality = gradeScheduledQuality(plan, result, actual)
+	}
+	stored, err := s.scheduledSvc.SaveResult(ctx, plan.ID, plan.MaxResults, result)
+	if err != nil {
 		s.observe("[ScheduledTestRunner] plan=%d SaveResult error: %v", plan.ID, err)
+		if plan.QualityEnabled && stored == nil {
+			// A failed transaction leaves the quality plan due for another probe.
+			return
+		}
 	}
 
 	// Use the test status to decide recovery even after a result-storage failure.
 	// Recovery does not depend on the history entry having been retained.
-	if result.Status == "success" && plan.AutoRecover {
+	if !plan.QualityEnabled && result.Status == "success" && plan.AutoRecover {
 		s.tryRecoverProvider(ctx, plan.ProviderID, plan.ID)
 	}
 
@@ -420,7 +435,7 @@ func (s *ScheduledTestRunnerService) runOnePlan(ctx context.Context, plan *Sched
 
 	// Write last and next times together through the plan repository. This separate
 	// update can fail after result history and recovery have already changed.
-	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, s.options.Now(), nextRun); err != nil {
+	if err := s.planRepo.UpdateAfterRun(ctx, plan.ID, plan.QualityRevision, s.options.Now(), nextRun); err != nil {
 		s.observe("[ScheduledTestRunner] plan=%d UpdateAfterRun error: %v", plan.ID, err)
 	}
 }

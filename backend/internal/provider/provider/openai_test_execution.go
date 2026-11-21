@@ -331,6 +331,10 @@ func (s *OpenAIProviderTest) Execute(c *TestRun, value *providercore.Record, mod
 		return (TestStreamOutput{}).Error(c, fmt.Sprintf("API returned %d: %s", resp.StatusCode, string(body)))
 	}
 
+	if c.ObserveResponsesModel != nil {
+		model, _ := payload["model"].(string)
+		c.ObserveResponsesModel(model)
+	}
 	return (TestStreamOutput{}).Responses(c, resp.Body)
 }
 

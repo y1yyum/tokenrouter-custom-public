@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/provider"
@@ -59,10 +60,10 @@ func NewScheduledTestPlanRepository(db *sql.DB) provider.ScheduledTestPlanReposi
 // and next-run calculation before calling this SQL adapter.
 func (r *scheduledTestPlanRepository) Create(ctx context.Context, plan *provider.ScheduledTestPlan) (*provider.ScheduledTestPlan, error) {
 	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO scheduled_test_plans (provider_id, model_id, cron_expression, enabled, max_results, auto_recover, next_run_at, created_at, updated_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW())
-		RETURNING id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at
-	`, plan.ProviderID, plan.ModelID, plan.CronExpression, plan.Enabled, plan.MaxResults, plan.AutoRecover, plan.NextRunAt)
+		INSERT INTO scheduled_test_plans (provider_id, model_id, cron_expression, enabled, max_results, auto_recover, next_run_at, created_at, updated_at, quality_enabled)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), NOW(), $8)
+		RETURNING id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at, quality_enabled, quality_revision
+	`, plan.ProviderID, plan.ModelID, plan.CronExpression, plan.Enabled, plan.MaxResults, plan.AutoRecover, plan.NextRunAt, plan.QualityEnabled)
 	return scanScheduledPlan(row)
 }
 
@@ -71,7 +72,7 @@ func (r *scheduledTestPlanRepository) Create(ctx context.Context, plan *provider
 // the adapter scans the plan's nullable execution times as stored.
 func (r *scheduledTestPlanRepository) GetByID(ctx context.Context, id int64) (*provider.ScheduledTestPlan, error) {
 	row := r.db.QueryRowContext(ctx, `
-		SELECT id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at
+		SELECT id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at, quality_enabled, quality_revision
 		FROM scheduled_test_plans WHERE id = $1
 	`, id)
 	return scanScheduledPlan(row)
@@ -82,7 +83,7 @@ func (r *scheduledTestPlanRepository) GetByID(ctx context.Context, id int64) (*p
 // tie-breaker, and row resources are closed before return.
 func (r *scheduledTestPlanRepository) ListByProviderID(ctx context.Context, providerID int64) ([]*provider.ScheduledTestPlan, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at
+		SELECT id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at, quality_enabled, quality_revision
 		FROM scheduled_test_plans WHERE provider_id = $1
 		ORDER BY created_at DESC
 	`, providerID)
@@ -100,7 +101,7 @@ func (r *scheduledTestPlanRepository) ListByProviderID(ctx context.Context, prov
 // nullable unscheduled plans remain excluded by the SQL comparison.
 func (r *scheduledTestPlanRepository) ListDue(ctx context.Context, now time.Time) ([]*provider.ScheduledTestPlan, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at
+		SELECT id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at, quality_enabled, quality_revision
 		FROM scheduled_test_plans
 		WHERE enabled = true AND next_run_at <= $1
 		ORDER BY next_run_at ASC
@@ -122,10 +123,10 @@ func (r *scheduledTestPlanRepository) ListDue(ctx context.Context, now time.Time
 func (r *scheduledTestPlanRepository) Update(ctx context.Context, plan *provider.ScheduledTestPlan) (*provider.ScheduledTestPlan, error) {
 	row := r.db.QueryRowContext(ctx, `
 		UPDATE scheduled_test_plans
-		SET model_id = $2, cron_expression = $3, enabled = $4, max_results = $5, auto_recover = $6, next_run_at = $7, updated_at = NOW()
+		SET model_id = $2, cron_expression = $3, enabled = $4, max_results = $5, auto_recover = $6, next_run_at = $7, updated_at = NOW(), quality_enabled = $8, quality_revision = quality_revision + 1
 		WHERE id = $1
-		RETURNING id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at
-	`, plan.ID, plan.ModelID, plan.CronExpression, plan.Enabled, plan.MaxResults, plan.AutoRecover, plan.NextRunAt)
+		RETURNING id, provider_id, model_id, cron_expression, enabled, max_results, auto_recover, last_run_at, next_run_at, created_at, updated_at, quality_enabled, quality_revision
+	`, plan.ID, plan.ModelID, plan.CronExpression, plan.Enabled, plan.MaxResults, plan.AutoRecover, plan.NextRunAt, plan.QualityEnabled)
 	return scanScheduledPlan(row)
 }
 
@@ -141,10 +142,10 @@ func (r *scheduledTestPlanRepository) Delete(ctx context.Context, id int64) erro
 // ID. It writes both schedule observations together and succeeds when no row
 // matches, leaving result creation and pruning to their separate service
 // calls.
-func (r *scheduledTestPlanRepository) UpdateAfterRun(ctx context.Context, id int64, lastRunAt time.Time, nextRunAt time.Time) error {
+func (r *scheduledTestPlanRepository) UpdateAfterRun(ctx context.Context, id int64, revision int64, lastRunAt time.Time, nextRunAt time.Time) error {
 	_, err := r.db.ExecContext(ctx, `
-		UPDATE scheduled_test_plans SET last_run_at = $2, next_run_at = $3, updated_at = NOW() WHERE id = $1
-	`, id, lastRunAt, nextRunAt)
+		UPDATE scheduled_test_plans SET last_run_at = $2, next_run_at = $3, updated_at = NOW() WHERE id = $1 AND quality_revision = $4
+	`, id, lastRunAt, nextRunAt, revision)
 	return err
 }
 
@@ -161,13 +162,30 @@ func NewScheduledTestResultRepository(db *sql.DB) provider.ScheduledTestResultRe
 // persistence and performs any history pruning through a later independent
 // call.
 func (r *scheduledTestResultRepository) Create(ctx context.Context, result *provider.ScheduledTestResult) (*provider.ScheduledTestResult, error) {
-	row := r.db.QueryRowContext(ctx, `
-		INSERT INTO scheduled_test_results (plan_id, status, response_text, error_message, latency_ms, started_at, finished_at, created_at)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())
-		RETURNING id, plan_id, status, response_text, error_message, latency_ms, started_at, finished_at, created_at
-	`, result.PlanID, result.Status, result.ResponseText, result.ErrorMessage, result.LatencyMs, result.StartedAt, result.FinishedAt)
+	return insertScheduledResult(ctx, r.db, result)
+}
 
-	out := &provider.ScheduledTestResult{}
+// insertScheduledResult works with the ordinary pool or the quality transaction.
+// PostgreSQL assigns the identifier consumed by the verdict ledger.
+func insertScheduledResult(ctx context.Context, db interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}, result *provider.ScheduledTestResult,
+) (*provider.ScheduledTestResult, error) {
+	var quality any
+	if result.Quality != nil {
+		encoded, err := json.Marshal(result.Quality)
+		if err != nil {
+			return nil, err
+		}
+		quality = string(encoded)
+	}
+	row := db.QueryRowContext(ctx, `
+		INSERT INTO scheduled_test_results (plan_id, status, response_text, error_message, latency_ms, started_at, finished_at, created_at, quality)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, NOW(), $8)
+		RETURNING id, plan_id, status, response_text, error_message, latency_ms, started_at, finished_at, created_at
+	`, result.PlanID, result.Status, result.ResponseText, result.ErrorMessage, result.LatencyMs, result.StartedAt, result.FinishedAt, quality)
+
+	out := &provider.ScheduledTestResult{Quality: result.Quality}
 	if err := row.Scan(
 		&out.ID, &out.PlanID, &out.Status, &out.ResponseText, &out.ErrorMessage,
 		&out.LatencyMs, &out.StartedAt, &out.FinishedAt, &out.CreatedAt,
@@ -183,7 +201,7 @@ func (r *scheduledTestResultRepository) Create(ctx context.Context, result *prov
 // failures return no slice; iteration failures can accompany earlier decoded rows.
 func (r *scheduledTestResultRepository) ListByPlanID(ctx context.Context, planID int64, limit int) ([]*provider.ScheduledTestResult, error) {
 	rows, err := r.db.QueryContext(ctx, `
-		SELECT id, plan_id, status, response_text, error_message, latency_ms, started_at, finished_at, created_at
+		SELECT id, plan_id, status, response_text, error_message, latency_ms, started_at, finished_at, created_at, quality
 		FROM scheduled_test_results
 		WHERE plan_id = $1
 		ORDER BY created_at DESC
@@ -199,11 +217,17 @@ func (r *scheduledTestResultRepository) ListByPlanID(ctx context.Context, planID
 	var results []*provider.ScheduledTestResult
 	for rows.Next() {
 		r := &provider.ScheduledTestResult{}
+		var quality []byte
 		if err := rows.Scan(
 			&r.ID, &r.PlanID, &r.Status, &r.ResponseText, &r.ErrorMessage,
-			&r.LatencyMs, &r.StartedAt, &r.FinishedAt, &r.CreatedAt,
+			&r.LatencyMs, &r.StartedAt, &r.FinishedAt, &r.CreatedAt, &quality,
 		); err != nil {
 			return nil, err
+		}
+		if len(quality) > 0 {
+			if err := json.Unmarshal(quality, &r.Quality); err != nil {
+				return nil, err
+			}
 		}
 		results = append(results, r)
 	}
@@ -241,7 +265,7 @@ func scanScheduledPlan(row scheduledScannable) (*provider.ScheduledTestPlan, err
 	p := &provider.ScheduledTestPlan{}
 	if err := row.Scan(
 		&p.ID, &p.ProviderID, &p.ModelID, &p.CronExpression, &p.Enabled, &p.MaxResults, &p.AutoRecover,
-		&p.LastRunAt, &p.NextRunAt, &p.CreatedAt, &p.UpdatedAt,
+		&p.LastRunAt, &p.NextRunAt, &p.CreatedAt, &p.UpdatedAt, &p.QualityEnabled, &p.QualityRevision,
 	); err != nil {
 		return nil, err
 	}

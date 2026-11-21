@@ -11,6 +11,8 @@ export interface ScheduledTestPlan {
   cron_expression: string // Recurring test schedule.
   enabled: boolean // Feature activation switch.
   max_results: number // Retained test result count.
+  quality_enabled: boolean // Opt-in Responses quality grading.
+  quality_revision: number // Configuration revision captured at probe start.
   auto_recover: boolean // Successful-test recovery activation.
   last_run_at: string | null // Last run timestamp.
   next_run_at: string | null // Next run timestamp.
@@ -23,6 +25,16 @@ export interface ScheduledTestResult {
   id: number // Record numeric identifier.
   plan_id: number // Scheduled test plan identifier.
   status: string // Model test outcome.
+  quality?: {
+    grade: 'pass' | 'fail' | 'ungraded'
+    rule: string
+    reason: string
+    upstream_model: string
+    requested_model: string
+    provider_id: number
+    plan_revision: number
+    version: number
+  }
   response_text: string // Model test response.
   error_message: string // Reported failure explanation.
   latency_ms: number // Measured latency milliseconds.
@@ -39,6 +51,7 @@ export interface CreateScheduledTestPlanRequest {
   cron_expression: string // Recurring test schedule.
   enabled?: boolean // Feature activation switch.
   max_results?: number // Retained test result count.
+  quality_enabled?: boolean // Opt-in Responses quality grading.
   auto_recover?: boolean // Successful-test recovery activation.
 }
 
@@ -49,5 +62,6 @@ export interface UpdateScheduledTestPlanRequest {
   cron_expression?: string // Recurring test schedule.
   enabled?: boolean // Feature activation switch.
   max_results?: number // Retained test result count.
+  quality_enabled?: boolean // Opt-in Responses quality grading.
   auto_recover?: boolean // Successful-test recovery activation.
 }

@@ -88,7 +88,11 @@
                 {{ t('admin.scheduledTests.enabled') }}
               </label>
             </div>
-            <div class="flex items-end">
+            <label v-if="qualitySupported" class="flex items-center gap-2 text-sm">
+              <Toggle v-model="newPlan.quality_enabled" />
+              {{ t('admin.scheduledTests.qualityProbe') }}
+            </label>
+            <div v-if="!newPlan.quality_enabled" class="flex items-end">
               <div>
                 <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                   <Toggle v-model="newPlan.auto_recover" />
@@ -178,9 +182,12 @@
                 </span>
               </div>
 
+              <span v-if="plan.quality_enabled" class="text-xs">
+                {{ t('admin.scheduledTests.qualityProbe') }}
+              </span>
               <!-- Auto Recover Badge -->
               <span
-                v-if="plan.auto_recover"
+                v-if="plan.auto_recover && !plan.quality_enabled"
                 class="inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400"
               >
                 {{ t('admin.scheduledTests.autoRecover') }}
@@ -306,7 +313,11 @@
                   {{ t('admin.scheduledTests.enabled') }}
                 </label>
               </div>
-              <div class="flex items-end">
+              <label v-if="qualitySupported" class="flex items-center gap-2 text-sm">
+                <Toggle v-model="editForm.quality_enabled" />
+                {{ t('admin.scheduledTests.qualityProbe') }}
+              </label>
+              <div v-if="!editForm.quality_enabled" class="flex items-end">
                 <div>
                   <label class="flex items-center gap-2 text-sm text-gray-700 dark:text-gray-300">
                     <Toggle v-model="editForm.auto_recover" />
@@ -387,6 +398,10 @@
                         }}
                       </span>
 
+                      <span v-if="result.quality" class="text-xs" :title="result.quality.reason">
+                        {{ t(`admin.scheduledTests.qualityGrade.${result.quality.grade}`) }}
+                        {{ result.quality.upstream_model }}
+                      </span>
                       <!-- Latency -->
                       <span
                         v-if="result.latency_ms > 0"
@@ -509,6 +524,7 @@ const appStore = useAppStore()
  */
 const props = defineProps<{
   show: boolean // parent-controlled panel visibility
+  qualitySupported: boolean // OpenAI Responses quality probe availability
   providerId: number | null // provider identifier or empty selection
   modelOptions: SelectOption[] // available scheduled model choices
 }>()
@@ -553,6 +569,7 @@ const editForm = reactive({
    */
   max_results: '100' as string,
   enabled: true, // scheduled execution enabled flag
+  quality_enabled: false, // grade this plan with the fixed Responses probe
   auto_recover: false, // successful test recovery preference
 })
 
@@ -569,6 +586,7 @@ const newPlan = reactive({
    */
   max_results: '100' as string,
   enabled: true, // new schedule enabled flag
+  quality_enabled: false, // grade this plan with the fixed Responses probe
   auto_recover: false, // successful test recovery preference
 })
 
@@ -581,6 +599,7 @@ const resetNewPlan = () => {
   newPlan.cron_expression = ''
   newPlan.max_results = '100'
   newPlan.enabled = true
+  newPlan.quality_enabled = false
   newPlan.auto_recover = false
 }
 
@@ -597,6 +616,7 @@ watch(
       expandedPlanId.value = null
       expandedResultIds.clear()
       showAddForm.value = false
+      resetNewPlan()
       showDeleteConfirm.value = false
     }
   },
@@ -637,7 +657,8 @@ const handleCreate = async () => {
       cron_expression: newPlan.cron_expression,
       enabled: newPlan.enabled,
       max_results: maxResults,
-      auto_recover: newPlan.auto_recover,
+      quality_enabled: props.qualitySupported && newPlan.quality_enabled,
+      auto_recover: !newPlan.quality_enabled && newPlan.auto_recover,
     })
     appStore.showSuccess(t('admin.scheduledTests.createSuccess'))
     showAddForm.value = false
@@ -678,6 +699,7 @@ const startEdit = (plan: ScheduledTestPlan) => {
   editForm.cron_expression = plan.cron_expression
   editForm.max_results = String(plan.max_results)
   editForm.enabled = plan.enabled
+  editForm.quality_enabled = plan.quality_enabled ?? false
   editForm.auto_recover = plan.auto_recover
 }
 
@@ -702,7 +724,8 @@ const handleEdit = async () => {
       cron_expression: editForm.cron_expression,
       max_results: Number(editForm.max_results) || 100,
       enabled: editForm.enabled,
-      auto_recover: editForm.auto_recover,
+      quality_enabled: editForm.quality_enabled,
+      auto_recover: !editForm.quality_enabled && editForm.auto_recover,
     })
     const index = plans.value.findIndex((p) => p.id === editingPlanId.value)
     if (index !== -1) {

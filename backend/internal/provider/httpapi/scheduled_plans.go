@@ -27,6 +27,7 @@ type ScheduledTestHandler struct {
 // createScheduledTestPlanRequest supplies a provider selection, required cron
 // expression and optional plan controls.
 type createScheduledTestPlanRequest struct {
+	QualityEnabled bool   `json:"quality_enabled"`                    // opt in to a graded Responses probe
 	ProviderID     int64  `json:"provider_id" binding:"required"`     // scheduled test provider identifier
 	ModelID        string `json:"model_id"`                           // requested test model identifier
 	CronExpression string `json:"cron_expression" binding:"required"` // recurring schedule expression text
@@ -46,6 +47,7 @@ type createScheduledTestPlanRequest struct {
 // updateScheduledTestPlanRequest supplies selected mutable fields for an
 // existing provider-test plan.
 type updateScheduledTestPlanRequest struct {
+	QualityEnabled *bool `json:"quality_enabled"` // omit to preserve the current probe type
 	// ModelID and CronExpression replace stored values only when nonempty.
 	// MaxResults replaces its stored value only when positive, while Enabled and
 	// AutoRecover replace theirs whenever supplied pointers are nonnil.
@@ -94,6 +96,7 @@ func (h *ScheduledTestHandler) Create(c *gin.Context) {
 
 	plan := &provider.ScheduledTestPlan{
 		ProviderID:     req.ProviderID,
+		QualityEnabled: req.QualityEnabled,
 		ModelID:        req.ModelID,
 		CronExpression: req.CronExpression,
 		Enabled:        true,
@@ -136,6 +139,9 @@ func (h *ScheduledTestHandler) Update(c *gin.Context) {
 		return
 	}
 
+	if req.QualityEnabled != nil {
+		existing.QualityEnabled = *req.QualityEnabled
+	}
 	if req.ModelID != "" {
 		existing.ModelID = req.ModelID
 	}

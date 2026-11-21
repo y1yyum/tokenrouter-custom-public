@@ -18,6 +18,10 @@ type ScheduledTestPlan struct {
 	ProviderID     int64  `json:"provider_id"`     // tested provider record identifier
 	ModelID        string `json:"model_id"`        // requested upstream model identifier
 	CronExpression string `json:"cron_expression"` // recurring test cron expression
+	// QualityEnabled opts a plan into the versioned Responses probe. The database
+	// advances QualityRevision on edits independently of the grading rule version.
+	QualityEnabled  bool  `json:"quality_enabled"`
+	QualityRevision int64 `json:"quality_revision"`
 	// Enabled admits this plan to ListDue when NextRunAt is due. A disabled plan
 	// remains stored for management and result-history queries.
 	Enabled bool `json:"enabled"`
@@ -25,7 +29,7 @@ type ScheduledTestPlan struct {
 	// by updates and SaveResult. PostgreSQL pruning with a nonpositive value
 	// removes all of that plan's retained results.
 	MaxResults int `json:"max_results"`
-	// AutoRecover asks runOnePlan to invoke recovery after a success result. A
+	// AutoRecover enables provider-wide recovery for ordinary connectivity tests. A
 	// failed result leaves recovery to other maintenance or administrator actions.
 	AutoRecover bool `json:"auto_recover"`
 	// LastRunAt and NextRunAt are written together after execution. Nil LastRunAt
@@ -45,10 +49,12 @@ type ScheduledTestResult struct {
 	// Status is success or failed for TestService results. runOnePlan attempts
 	// automatic recovery only for the exact success string when the plan enables
 	// it.
-	Status       string `json:"status"`
-	ResponseText string `json:"response_text"` // concatenated test content text
-	ErrorMessage string `json:"error_message"` // retained test failure message
-	LatencyMs    int64  `json:"latency_ms"`    // milliseconds
+	// Quality captures the inputs and outcome of an opted-in quality probe.
+	Quality      *ScheduledQualityObservation `json:"quality,omitempty"`
+	Status       string                       `json:"status"`
+	ResponseText string                       `json:"response_text"` // concatenated test content text
+	ErrorMessage string                       `json:"error_message"` // retained test failure message
+	LatencyMs    int64                        `json:"latency_ms"`    // milliseconds
 	// StartedAt and FinishedAt come from the TestService clock around execution;
 	// LatencyMs is their difference truncated to whole milliseconds for stored
 	// display.
@@ -82,7 +88,7 @@ type ScheduledTestPlanRepository interface {
 	// UpdateAfterRun stores lastRunAt and nextRunAt together after a completed
 	// executor call. Result persistence and recovery happen in separate earlier
 	// calls, so their outcomes remain independent of this timestamp update.
-	UpdateAfterRun(ctx context.Context, id int64, lastRunAt time.Time, nextRunAt time.Time) error
+	UpdateAfterRun(ctx context.Context, id int64, revision int64, lastRunAt time.Time, nextRunAt time.Time) error
 }
 
 // ScheduledTestResultRepository stores test results and prunes excess history.

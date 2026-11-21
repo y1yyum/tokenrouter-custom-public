@@ -352,7 +352,7 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	upstreamUsageHandler := provideUpstreamUsageHTTP(upstreamUsageService, balanceAlertMonitor)
 	scheduledTestPlanRepository := postgres11.NewScheduledTestPlanRepository(db)
 	scheduledTestResultRepository := postgres11.NewScheduledTestResultRepository(db)
-	scheduledTestService := provideScheduledTests(scheduledTestPlanRepository, scheduledTestResultRepository)
+	scheduledTestService := provideScheduledTests(scheduledTestPlanRepository, scheduledTestResultRepository, providerStore, db)
 	scheduledTestHandler := httpapi6.NewScheduledTestHandler(scheduledTestService)
 	ollamaUsageHandler := httpapi6.NewOllamaUsageHandler(ollamaCloudUsageService)
 	adminSubscriptionHandler := httpapi.NewAdminSubscriptionHandler(subscriptionService)

@@ -2,9 +2,11 @@ package postgres
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"time"
 
+	postgresinfra "github.com/TokenFlux/TokenRouter/internal/infra/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/provider"
 )
 
@@ -20,7 +22,13 @@ func (r *ProviderStore) ApplyPlanModelVerdict(ctx context.Context, verdict provi
 	if r.options.Events == nil {
 		return false, errors.New("plan model verdict requires scheduler events")
 	}
-	result, err := r.sql.ExecContext(ctx, `
+	return r.applyPlanModelVerdict(ctx, r.sql, verdict)
+}
+
+// applyPlanModelVerdict uses the caller's connection so a quality result,
+// its owner watermark, and its scheduling event can share one transaction.
+func (r *ProviderStore) applyPlanModelVerdict(ctx context.Context, db postgresinfra.Executor, verdict provider.PlanModelVerdict) (bool, error) {
+	result, err := db.ExecContext(ctx, `
 		WITH observed AS (
 			INSERT INTO provider_plan_model_verdicts
 				(result_id, provider_id, plan_id, policy_version, requested_model,
@@ -82,4 +90,50 @@ func (r *ProviderStore) ActivePlanModelRestrictions(ctx context.Context, provide
 		owners = append(owners, v)
 	}
 	return owners, rows.Err()
+}
+
+// SaveQualityResult binds a grade to its generated result ID before retention.
+// A plan edit is serialized against this transaction. Disabled and stale probes
+// keep a diagnostic history row without advancing the owner's watermark.
+func (r *ProviderStore) SaveQualityResult(ctx context.Context, db *sql.DB, result *provider.ScheduledTestResult) (*provider.ScheduledTestResult, error) {
+	if result.Quality == nil || r.options.Events == nil {
+		return nil, errors.New("quality observations require a grade and scheduler events")
+	}
+	tx, err := db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback()
+	var current bool
+	q := *result.Quality
+	err = tx.QueryRowContext(ctx, `SELECT enabled AND quality_enabled AND quality_revision=$2 AND provider_id=$3 AND model_id=$4
+   FROM scheduled_test_plans WHERE id=$1 FOR SHARE`, result.PlanID, q.Revision, q.ProviderID, q.RequestedModel).Scan(&current)
+	if err != nil {
+		return nil, err
+	}
+	if !current {
+		q.Grade = "ungraded"
+		q.Reason = "plan_changed"
+	}
+	observation := *result
+	observation.Quality = &q
+	stored, err := insertScheduledResult(ctx, tx, &observation)
+	if err != nil {
+		return nil, err
+	}
+	if q.Grade == "pass" || q.Grade == "fail" {
+		until := stored.StartedAt.Add(provider.QualityRestrictionTTL)
+		_, err = r.applyPlanModelVerdict(ctx, tx, provider.PlanModelVerdict{
+			ResultID: stored.ID, PlanID: stored.PlanID, ProviderID: q.ProviderID,
+			PolicyVersion: q.Version, RequestedModel: q.RequestedModel, UpstreamModel: q.UpstreamModel, Restricted: q.Grade == "fail",
+			Reason: q.Rule + ": " + q.Reason, ExpiresAt: &until,
+		})
+		if err != nil {
+			return nil, err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return nil, err
+	}
+	return stored, nil
 }

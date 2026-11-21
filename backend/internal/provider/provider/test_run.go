@@ -27,7 +27,9 @@ import (
 // TestRun retains cancellation, event output, and per-probe request and
 // execution state.
 type TestRun struct {
-	ProtocolRoute provider.TestProtocolRoute // selected group probe route
+	// ObserveResponsesModel receives the wire model of the successful HTTP attempt.
+	ObserveResponsesModel func(string)
+	ProtocolRoute         provider.TestProtocolRoute // selected group probe route
 	// GroupID selects model attributes for this probe. Zero uses catalogue defaults;
 	// the synchronous executor reads this value after its target initializes it.
 	GroupID int64

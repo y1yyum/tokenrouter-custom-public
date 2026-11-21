@@ -640,6 +640,9 @@
     <ScheduledTestsPanel
       :show="activeModal?.kind === 'schedule'"
       :provider-id="activeModal?.kind === 'schedule' ? activeModal.provider.id : null"
+      :quality-supported="
+        activeModal?.kind === 'schedule' && activeModal.provider.platform === 'openai'
+      "
       :model-options="scheduleModelOptions"
       @close="closeSchedulePanel"
     />

@@ -46,6 +46,8 @@ export default {
       '例如填写 100，表示最多保存最近 100 次测试结果；第 101 次结果写入后，最早的一条会被清理。',
     maxResultsTooltipRange:
       '推荐填写范围：一般可填 20 到 200。只关注近期可用性时可填 20-50；需要回看较长时间的波动趋势时可填 100-200。',
+    qualityProbe: 'Responses 质量检测',
+    qualityGrade: { pass: '质量通过', fail: '质量失败', ungraded: '未评分' },
     autoRecover: '自动恢复',
     autoRecoverHelp: '测试成功后自动恢复异常状态的提供商',
   },

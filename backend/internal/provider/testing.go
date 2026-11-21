@@ -70,9 +70,12 @@ type TestEvent struct {
 // test. Its pointed kind and SystemOne bytes remain caller-owned and stable
 // until Test returns.
 type TestRequest struct {
-	RequestSource  string // internal caller source, never upstream controlled
-	RequestedModel string // original model before group mapping
-	OperatorUserID *int64 // optional initiating administrator identifier
+	// ObserveResponsesModel is internal to a scheduled quality probe. The OpenAI
+	// Responses adapter reports the model from its accepted outbound payload.
+	ObserveResponsesModel func(string)
+	RequestSource         string // internal caller source, never upstream controlled
+	RequestedModel        string // original model before group mapping
+	OperatorUserID        *int64 // optional initiating administrator identifier
 	// ProtocolRoute fixes a group probe's entry and upstream endpoint together.
 	// Its zero value retains the standalone Protocol selector and type inference.
 	ProtocolRoute TestProtocolRoute
@@ -388,6 +391,9 @@ func (s *TestService) execute(ctx context.Context, request TestRequest, sink Tes
 		return s.fail(ctx, sink, "Provider not found")
 	}
 	info := target.Information()
+	if request.ObserveResponsesModel != nil && info.Platform != PlatformOpenAI {
+		return s.fail(ctx, sink, "Quality probes require an OpenAI provider")
+	}
 	if request.ProtocolRoute != (TestProtocolRoute{}) {
 		if request.Protocol != "" || mode != ProviderTestModeDefault || !request.ProtocolRoute.SupportsProvider(info.ProviderSnapshot, request.Model) {
 			return s.fail(ctx, sink, fmt.Sprintf("Provider test cannot execute route %s -> %s", request.ProtocolRoute.ClientProtocol, request.ProtocolRoute.UpstreamProtocol))

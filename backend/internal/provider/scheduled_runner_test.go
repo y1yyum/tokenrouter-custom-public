@@ -107,11 +107,11 @@ func (s *scheduledPlansStub) ListDue(context.Context, time.Time) ([]*ScheduledTe
 // UpdateAfterRun discards timestamps and returns the supplied context error. The
 // cancelled-execution fixture uses this to finish its late update attempt after
 // StopContext has already closed the runner lifetime.
-func (*scheduledPlansStub) UpdateAfterRun(ctx context.Context, _ int64, _, _ time.Time) error {
+func (*scheduledPlansStub) UpdateAfterRun(ctx context.Context, _, _ int64, _, _ time.Time) error {
 	return ctx.Err()
 }
 
-// RunTestBackground signals entry and holds this fixture execution until release
+// RunTestBackgroundRequest signals entry and holds this fixture execution until release
 // closes. It ignores cancellation so the runner must report unfinished test work
 // while the release remains held.
 //
@@ -119,7 +119,7 @@ func (*scheduledPlansStub) UpdateAfterRun(ctx context.Context, _ int64, _, _ tim
 // checking the timeout. This callback then returns the fixture error status with
 // a nil Go error, allowing the cancelled result-storage and timestamp paths to
 // run before round completion. Use the entry channel for one invocation.
-func (s scheduledExecutorStub) RunTestBackground(context.Context, int64, string) (*ScheduledTestResult, error) {
+func (s scheduledExecutorStub) RunTestBackgroundRequest(context.Context, TestRequest) (*ScheduledTestResult, error) {
 	// Signal execution entry before blocking on the independent release channel.
 	// Shutdown cancels the supplied context while this fixture deliberately keeps
 	// its admitted work unfinished.

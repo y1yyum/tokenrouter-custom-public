@@ -3,6 +3,7 @@ package provider
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -33,6 +34,8 @@ type ScheduledTestService struct {
 // ScheduledTestOptions supplies time and cron calculation for plan management
 // calls.
 type ScheduledTestOptions struct {
+	// SaveQuality commits a probe and its verdict in one database transaction.
+	SaveQuality func(context.Context, *ScheduledTestResult) (*ScheduledTestResult, error)
 	// Now and NextRun are required by CreatePlan and UpdatePlan. Now supplies the
 	// calculation origin, and NextRun validates the expression and computes its
 	// next execution time before either operation writes the plan.
@@ -61,6 +64,9 @@ func NewScheduledTestService(
 // NextRunAt is replaced and nonpositive MaxResults becomes fifty before storage.
 // Those input changes remain visible if persistence fails.
 func (s *ScheduledTestService) CreatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if plan.QualityEnabled && strings.TrimSpace(plan.ModelID) == "" {
+		return nil, fmt.Errorf("quality plan requires a model")
+	}
 	nextRun, err := s.options.NextRun(plan.CronExpression, s.options.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
@@ -88,6 +94,9 @@ func (s *ScheduledTestService) ListPlansByProvider(ctx context.Context, provider
 // caller-owned plan. MaxResults is passed through unchanged, and the calculated
 // input timestamp remains visible to the caller if the repository update fails.
 func (s *ScheduledTestService) UpdatePlan(ctx context.Context, plan *ScheduledTestPlan) (*ScheduledTestPlan, error) {
+	if plan.QualityEnabled && strings.TrimSpace(plan.ModelID) == "" {
+		return nil, fmt.Errorf("quality plan requires a model")
+	}
 	nextRun, err := s.options.NextRun(plan.CronExpression, s.options.Now())
 	if err != nil {
 		return nil, fmt.Errorf("invalid cron expression: %w", err)
@@ -115,24 +124,21 @@ func (s *ScheduledTestService) ListResults(ctx context.Context, planID int64, li
 	return s.resultRepo.ListByPlanID(ctx, planID, limit)
 }
 
-// SaveResult assigns planID to a nonnil result before calling Create, then
-// requests history pruning after creation reports success. A creation error
-// returns before pruning. maxResults reaches the pruning implementation
-// unchanged.
-//
-// Creation and retention are separate repository calls, so a returned pruning
-// error follows reported creation success. The repository determines the
-// resulting stored history; this method returns that error immediately. With
-// PostgreSQL, Create returns generated ID and creation time in a separate result
-// value discarded here, so the supplied input keeps its existing metadata apart
-// from PlanID assigned before the call.
-func (s *ScheduledTestService) SaveResult(ctx context.Context, planID int64, maxResults int, result *ScheduledTestResult) error {
+// SaveResult returns the exact inserted row, including when subsequent retention
+// fails. A nil row indicates that saving failed before a known commit. Quality
+// history and its routing decision share a commit ahead of any history pruning.
+func (s *ScheduledTestService) SaveResult(ctx context.Context, planID int64, maxResults int, result *ScheduledTestResult) (*ScheduledTestResult, error) {
 	result.PlanID = planID
-	// Insert before retention so the completed observation can participate in
-	// history ranking. These are separate store operations, and pruning starts only
-	// after creation returns success.
-	if _, err := s.resultRepo.Create(ctx, result); err != nil {
-		return err
+	save := s.resultRepo.Create
+	if result.Quality != nil {
+		if s.options.SaveQuality == nil {
+			return nil, fmt.Errorf("quality storage unavailable")
+		}
+		save = s.options.SaveQuality
 	}
-	return s.resultRepo.PruneOldResults(ctx, planID, maxResults)
+	stored, err := save(ctx, result)
+	if err != nil {
+		return nil, err
+	}
+	return stored, s.resultRepo.PruneOldResults(ctx, planID, maxResults)
 }
