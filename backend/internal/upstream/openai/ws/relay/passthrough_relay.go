@@ -880,9 +880,14 @@ func runUpstreamToClient(
 			}
 		}
 		observedEvent := observedUpstreamEvent{}
+		replayed := false
 		switch msgType {
 		case coderws.MessageText:
 			eventType := strings.TrimSpace(gjson.GetBytes(payload, "type").String())
+			replayed = repeatsCompletedResponse(state, eventType, payload)
+			if replayed {
+				break
+			}
 			// Settle the earlier bare error before parsing a later turn's snapshot,
 			// preventing that new usage from becoming the pending error's held counters.
 			if shouldFinalizePendingBareError(state, payload, eventType) {
@@ -928,13 +933,16 @@ func runUpstreamToClient(
 		}
 		// The gateway brackets terminal delivery with its admission mutex; run the
 		// paired after hook on errors too so that write phase can release its lock.
-		if beforeClientWrite != nil {
+		if !replayed && beforeClientWrite != nil {
 			beforeClientWrite(msgType, payload)
 		}
 		writeErr := writeClient(msgType, payload)
 		// Publish completion while terminal admission remains locked. The next turn
 		// cannot overtake its predecessor, and a panicking callback still releases the paired hook.
 		func() {
+			if replayed {
+				return
+			}
 			if afterClientWrite != nil {
 				defer afterClientWrite(msgType, payload, writeErr)
 			}
@@ -1217,6 +1225,21 @@ func observeUpstreamMessage(
 	// Relay's final join phase cannot later bill that pending observation again.
 	state.pendingBareError = nil
 	return finalizeObservedRelayTerminal(state, observed, now)
+}
+
+// repeatsCompletedResponse identifies a replay of the last completed turn.
+// Its bytes still go to the client, but its timing, usage and admission belong
+// to the original delivery even if the next request is already in flight.
+func repeatsCompletedResponse(state *relayState, eventType string, payload []byte) bool {
+	if state.lastResponseID == "" || (eventType != "response.completed" && eventType != "response.done") {
+		return false
+	}
+	for _, id := range gjson.GetManyBytes(payload, "response.id", "response_id", "id") {
+		if value := strings.TrimSpace(id.String()); value != "" {
+			return value == state.lastResponseID
+		}
+	}
+	return false
 }
 
 // shouldFinalizePendingBareError decides whether a new text event ends the
@@ -1537,7 +1560,7 @@ func openAIWSRelayActiveTurnID(state *relayState) string {
 // state and returns parsed terminal usage. The caller serializes state. Nested
 // response.usage takes precedence whenever present, and missing native input,
 // output, or cached fields can use Chat aliases. Input and output are required
-// at terminals; those fields and cached tokens require numeric JSON types,
+// at terminals without prior evidence. Present counts require numeric JSON types,
 // while optional image, reasoning, and cache-creation counters use their
 // separate coercion rules.
 //
@@ -1605,7 +1628,10 @@ func parseUsageAndAccumulate(
 		imageTokens = usageResult.Get("completion_tokens_details.image_tokens").Int()
 	}
 
-	requireTotals := isTerminalEvent(strings.TrimSpace(eventType)) && state.turnUsage.CacheWriteDetails == nil
+	// Earlier input or output evidence makes a partial terminal usable. Without
+	// a prior snapshot both aggregate fields remain required at the boundary.
+	sparse := relayUsageHasTokens(state.turnUsage) && (inputResult.Exists() != outputResult.Exists())
+	requireTotals := isTerminalEvent(strings.TrimSpace(eventType)) && state.turnUsage.CacheWriteDetails == nil && !sparse
 	inputTokens, inputOK := parseUsageIntField(inputResult, requireTotals)
 	outputTokens, outputOK := parseUsageIntField(outputResult, requireTotals)
 	cachedTokens, cachedOK := parseUsageIntField(cachedResult, false)
@@ -1630,7 +1656,7 @@ func parseUsageAndAccumulate(
 	}
 	// A timed cache split can precede the terminal usage frame. Keep the earlier
 	// same-turn totals where the terminal frame only supplies a subset of counters.
-	if previousDetails != nil {
+	if previousDetails != nil || sparse {
 		if !inputResult.Exists() {
 			inputTokens = state.turnUsage.InputTokens
 		}
@@ -1653,7 +1679,11 @@ func parseUsageAndAccumulate(
 			int64(inputTokens), int64(outputTokens), usageResult.Get("total_tokens").Int(), reasoningTokens,
 		))
 	}
-	cacheWrites, cacheWriteDetails := openai.ObserveCacheWriteDetails(usageResult, state.turnUsage.CacheCreationInputTokens, previousDetails)
+	previousWrites := 0
+	if previousDetails != nil || sparse {
+		previousWrites = state.turnUsage.CacheCreationInputTokens
+	}
+	cacheWrites, cacheWriteDetails := openai.ObserveCacheWriteDetails(usageResult, previousWrites, previousDetails)
 	parsedUsage := Usage{
 		CacheWriteDetails:        cacheWriteDetails,
 		InputTokens:              inputTokens,

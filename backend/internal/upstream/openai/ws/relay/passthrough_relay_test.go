@@ -2472,3 +2472,30 @@ func TestRelayZeroTerminalKeepsEntireCacheWriteObservation(t *testing.T) {
 		CacheWriteDetails: &openai.CacheWriteTokensDetails{Tokens30m: 3000, Tokens12h: 4000},
 	}, finalizeRelayTurnUsage(state))
 }
+
+// TestRelayRepeatedCompletionDuringNextTurn replays the previous completion
+// after the next response reports its input. All four frames reach the client
+// while the sparse terminal settles only the second turn's retained counters.
+func TestRelayRepeatedCompletionDuringNextTurn(t *testing.T) {
+	first := `{"type":"response.completed","response":{"id":"resp_first","usage":{"input_tokens":11,"output_tokens":2}}}`
+	events := []string{
+		first,
+		`{"type":"response.created","response":{"id":"resp_next","usage":{"input_tokens":42,"input_tokens_details":{"cached_tokens":6}}}}`,
+		first, `{"type":"response.completed","response":{"id":"resp_next","usage":{"output_tokens":8}}}`,
+	}
+	var frames []passthroughTestFrame
+	for _, event := range events {
+		frames = append(frames, passthroughTestFrame{msgType: coderws.MessageText, payload: []byte(event)})
+	}
+	client := newPassthroughTestFrameConn(nil, false)
+	var turns []RelayTurnResult
+	ctx, cancel := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancel()
+	result, exit := Relay(ctx, client, newPassthroughTestFrameConn(frames, true), []byte(`{"type":"response.create","model":"fixture"}`), RelayOptions{OnTurnComplete: func(turn RelayTurnResult) { turns = append(turns, turn) }})
+	require.Nil(t, exit)
+	require.Len(t, client.Writes(), 4)
+	require.Len(t, turns, 2)
+	require.Equal(t, "resp_next", turns[1].RequestID)
+	require.Equal(t, Usage{InputTokens: 42, OutputTokens: 8, CacheReadInputTokens: 6}, turns[1].Usage)
+	require.Equal(t, Usage{InputTokens: 53, OutputTokens: 10, CacheReadInputTokens: 6}, result.Usage)
+}

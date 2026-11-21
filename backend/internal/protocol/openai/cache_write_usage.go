@@ -67,10 +67,13 @@ func EffectiveCacheWriteTokens(total int, details *CacheWriteTokensDetails) int 
 func ObserveCacheWriteDetails(value gjson.Result, previousTotal int, previous *CacheWriteTokensDetails) (int, *CacheWriteTokensDetails) {
 	hasWrite := usageHasAny(value, cacheWriteDetailPaths...) || usageHasAny(value, cacheWriteAliasPaths...)
 	total := OpenAICacheCreationTokensFromUsage(value)
-	if previous != nil && !hasWrite {
+	if !hasWrite {
 		total = previousTotal
 	}
 	raw := value.Get(cacheWriteDetailsPath)
+	if !raw.Exists() {
+		raw = value.Get(promptWriteDetailsPath)
+	}
 	if !raw.Exists() {
 		if !hasWrite || (total > 0 && previous != nil) {
 			return total, previous
@@ -159,19 +162,24 @@ func IsExplicitZeroOpenAIUsage(raw gjson.Result, counts ForwardUsage) bool {
 		counts.ImageInputTokens == 0 && counts.ImageCacheReadTokens == 0 && counts.ImageOutputTokens == 0
 }
 
-// applyObservedCacheWriteDetails joins sparse writes before stream terminal selection.
+// applyObservedCacheWriteDetails joins raw write evidence and incomplete usage
+// snapshots before terminal selection. An output-only update can complete an
+// earlier input observation even when the upstream supplied no TTL breakdown.
+// A complete aggregate without lifetime details retains whole-snapshot semantics.
 func applyObservedCacheWriteDetails(previous, current *ForwardUsage, raw gjson.Result) {
 	// Leave a complete zero intact so each consumer can detect its existing reset
 	// or placeholder rule before cached counters make the observation appear positive.
-	if previous.CacheWriteDetails == nil || IsExplicitZeroOpenAIUsage(raw, *current) {
+	hasInput := usageHasAny(raw, "input_tokens", "prompt_tokens", "prompt_cache_miss_tokens")
+	hasOutput := usageHasAny(raw, "output_tokens", "completion_tokens")
+	if (previous.CacheWriteDetails == nil && hasInput == hasOutput) || IsExplicitZeroOpenAIUsage(raw, *current) {
 		return
 	}
 	// A terminal frame can contain only output usage. Retain observed input and
 	// reads with the split so ordinary input stays consistent with the aggregate.
-	if !usageHasAny(raw, "input_tokens", "prompt_tokens", "prompt_cache_miss_tokens") {
+	if !hasInput {
 		current.InputTokens = previous.InputTokens
 	}
-	if !usageHasAny(raw, "output_tokens", "completion_tokens") {
+	if !hasOutput {
 		current.OutputTokens = previous.OutputTokens
 	}
 	if !usageHasAny(raw, cacheReadDetailPaths...) && !usageHasAny(raw, cacheReadAliasPaths...) {

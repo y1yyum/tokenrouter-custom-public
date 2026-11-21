@@ -27,6 +27,8 @@ import (
 const (
 	// cacheWriteDetailsPath names the native Responses TTL usage object.
 	cacheWriteDetailsPath = "input_tokens_details.cache_write_tokens_details"
+	// promptWriteDetailsPath names the equivalent Chat-compatible lifetime object.
+	promptWriteDetailsPath = "prompt_tokens_details.cache_write_tokens_details"
 )
 
 var (
@@ -177,7 +179,7 @@ func (a *UsageAccumulator) observe(raw []byte, imageGen gjson.Result) *Responses
 	hasTotal := value.Get("total_tokens").Exists()
 	hasRead := usageHasAny(value, cacheReadDetailPaths...) || usageHasAny(value, cacheReadAliasPaths...)
 	hasWrite := usageHasAny(value, cacheWriteDetailPaths...) || usageHasAny(value, cacheWriteAliasPaths...)
-	hasWriteDetails := value.Get(cacheWriteDetailsPath).Exists()
+	hasWriteDetails := usageHasAny(value, cacheWriteDetailsPath, promptWriteDetailsPath)
 	if hasInput && hasOutput && current.InputTokens == 0 && current.OutputTokens == 0 &&
 		current.TotalTokens == 0 && current.CacheCreationInputTokens == 0 && !counters.CacheWriteDetails.HasTokens() &&
 		counters.ImageInputTokens == 0 && counters.ImageOutputTokens == 0 &&
@@ -373,19 +375,25 @@ func PatchResponseUsage(body []byte, usage *ResponsesUsage) ([]byte, error) {
 			values["usage."+path] = usage.CacheCreationInputTokens
 		}
 	}
-	if selected.CacheWriteDetails != nil {
-		values["usage.input_tokens_details.cache_write_tokens"] = usage.CacheCreationInputTokens
-		values["usage."+cacheWriteDetailsPath+".ttl_30m_tokens"] = selected.CacheWriteDetails.Tokens30m
-		values["usage."+cacheWriteDetailsPath+".ttl_12h_tokens"] = selected.CacheWriteDetails.Tokens12h
-	}
-	if selected.CacheWriteDetails == nil && current.CacheWriteDetails != nil {
-		// The current aggregate cleared an earlier split. Remove only the old
-		// breakdown so patched JSON cannot imply those counts apply to the new total.
-		updated, err := sjson.DeleteBytes(body, "usage."+cacheWriteDetailsPath)
-		if err != nil {
-			return nil, err
+	// Preserve an existing alias alongside the native split when patching a
+	// response. Clearing a split removes both spellings so a later reader
+	// cannot resurrect stale lifetimes through the compatibility field.
+	for _, path := range []string{cacheWriteDetailsPath, promptWriteDetailsPath} {
+		field := "usage." + path
+		if path == promptWriteDetailsPath && !gjson.GetBytes(body, field).Exists() {
+			continue
 		}
-		body = updated
+		if selected.CacheWriteDetails != nil {
+			values["usage.input_tokens_details.cache_write_tokens"] = usage.CacheCreationInputTokens
+			values[field+".ttl_30m_tokens"] = selected.CacheWriteDetails.Tokens30m
+			values[field+".ttl_12h_tokens"] = selected.CacheWriteDetails.Tokens12h
+		} else if current.CacheWriteDetails != nil {
+			updated, err := sjson.DeleteBytes(body, field)
+			if err != nil {
+				return nil, err
+			}
+			body = updated
+		}
 	}
 	for path, value := range values {
 		updated, err := sjson.SetBytes(body, path, value)
@@ -409,7 +417,7 @@ func PatchResponseUsage(body []byte, usage *ResponsesUsage) ([]byte, error) {
 func normalizeResponsesCacheUsage(value gjson.Result, usage *ResponsesUsage) {
 	hasRead := usageHasAny(value, cacheReadDetailPaths...) || usageHasAny(value, cacheReadAliasPaths...)
 	hasWrite := usageHasAny(value, cacheWriteDetailPaths...) || usageHasAny(value, cacheWriteAliasPaths...)
-	if hasRead || hasWrite || value.Get(cacheWriteDetailsPath).Exists() {
+	if hasRead || hasWrite || usageHasAny(value, cacheWriteDetailsPath, promptWriteDetailsPath) {
 		if usage.InputTokensDetails == nil {
 			usage.InputTokensDetails = &ResponsesInputTokensDetails{}
 		}

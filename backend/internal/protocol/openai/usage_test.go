@@ -196,3 +196,17 @@ func TestUsageAccumulatorRejectsAmbiguousDuplicateAndCasedUsage(t *testing.T) {
 	_, ok := ExtractOpenAIUsageFromJSONBytes(raw)
 	require.False(t, ok)
 }
+
+// TestCacheLifetimeAliasPrecedence checks that an explicit native zero split
+// masks conflicting compatibility details. Removing a selected split during
+// client repair must also remove an alias-only observation.
+func TestCacheLifetimeAliasPrecedence(t *testing.T) {
+	alias := `"prompt_tokens_details":{"cache_write_tokens":12,"cache_write_tokens_details":{"ttl_30m_tokens":5,"ttl_12h_tokens":7}}`
+	usage := gjson.Parse(`{` + alias + `,"input_tokens_details":{"cache_write_tokens":0,"cache_write_tokens_details":{"ttl_30m_tokens":0,"ttl_12h_tokens":0}}}`)
+	total, details := ObserveCacheWriteDetails(usage, 0, nil)
+	require.Zero(t, total)
+	require.Nil(t, details)
+	body, err := PatchResponseUsage([]byte(`{"usage":{`+alias+`}}`), &ResponsesUsage{})
+	require.NoError(t, err)
+	require.False(t, gjson.GetBytes(body, "usage."+promptWriteDetailsPath).Exists())
+}
