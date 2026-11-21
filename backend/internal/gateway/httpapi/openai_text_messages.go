@@ -55,6 +55,7 @@ func (h *OpenAITextHandler) Messages(c *gin.Context) {
 	// Request lifetime covers all admission callbacks and synchronous execution;
 	// deferred user cleanup runs before the entry leaves the application request barrier.
 	defer done()
+	c.Request = c.Request.WithContext(h.options.PlanModelRestrictions.WithRequest(c.Request.Context(), nil, false))
 
 	streamStarted := false
 	defer h.recoverAnthropicMessagesPanic(c, &streamStarted)

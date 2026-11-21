@@ -104,6 +104,9 @@ func (s *OpenAIRequests) SendChat(
 		return nil, err
 	}
 	body = stripOpenAIWireEffortIfMatched(ctx, c, provider, body, protocol.ProtocolOpenAIChatCompletions)
+	if err := checkPlanModelBody(ctx, c, provider, body); err != nil {
+		return nil, err
+	}
 	return openai.SendChatRequest(ctx, body, openai.CCRequestOptions{
 		URL: targetURL, Token: bearerToken, Stream: stream, Headers: c.Request.Header,
 		RequestContext:  gatewayprovider.DetachUpstreamContext,
@@ -167,6 +170,9 @@ func (s *OpenAIRequests) BuildAnthropic(ctx context.Context, c *gin.Context, pro
 		return nil, nil, err
 	}
 	body = stripOpenAIWireEffortIfMatched(ctx, c, provider, body, protocol.ProtocolAnthropicMessages)
+	if err := checkPlanModelBody(ctx, c, provider, body); err != nil {
+		return nil, nil, err
+	}
 	var headers http.Header
 	if c != nil && c.Request != nil {
 		headers = c.Request.Header

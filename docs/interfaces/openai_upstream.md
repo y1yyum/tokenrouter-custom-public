@@ -70,7 +70,15 @@ Messages 转 OpenAI 的提示缓存摘要按提供商与 API Key 隔离命名空
 | Images | 同步生成与编辑生命周期；批量图片归 Gemini/Vertex，见[批量图片作业](../domains/batch_image_jobs.md) |
 | Realtime、Live、sideband、Alpha Search | 仅限 OpenAI 提供商，受分组开关、提供商类型与传输能力约束（Live 计费为零） |
 
-`gateway.openai.plan_model_restrictions` 默认关闭。启用后，`POST /v1/responses` 按实际映射的模型检查每个 OpenAI 提供商。候选筛选和发送前都读取已提交的 PostgreSQL 判定；读取失败时排除该候选。发送前才出现限制时，普通请求可以重新选路，绑定前次响应的请求终止。检查与发送之间已经在途的请求仍按原归属结算。
+开启 `gateway.openai.plan_model_restrictions` 后，网关用「OpenAI 提供商 ID、实际出站模型」查找仍有效的计划判定。开关默认关闭。读取失败或出站模型缺失时，该次发送停止。已发出的请求按实际使用的提供商结算。
+
+| 入口 | 模型和重试规则 |
+|---|---|
+| Responses、Chat、Messages | 授权回退成功后，目的组重新解析请求模型和候选协议。普通请求可在输出前改选；绑定前次响应的 Responses 请求遇到迟到限制时终止。 |
+| `POST /v1/responses/compact` | 优先检查提供商的 Compact 映射，再考虑全局 Compact 配置和普通映射。请求体触发的原生压缩走 `/v1/responses`；若内部重试更换模型，按新请求体复核。 |
+| Responses WebSocket | 首次选路检查候选。专用连接、连接池和 HTTP 桥接在每轮发送时复核实际模型。固定提供商在轮间被限制时，客户端收到关闭码 1008，可重新连接；被拦截的帧不会产生用量。 |
+
+候选筛选可在同一次请求内复用同组、同提供商及同一实际模型的结论。每次向上游发送前独立读取 PostgreSQL。不同请求之间不共享判定，跨组回退也不会复用源组的筛选记录。
 
 管理员可在 OpenAI 提供商的定时测试计划中启用“Responses 质量检测”，或通过计划 API 设置 `quality_enabled: true` 并指定模型。原有计划默认继续测连通性。质量探测使用 Responses 文本请求，记录实际发出的模型；结果的 `status` 表示传输状态，`quality.grade` 表示作答结果。
 

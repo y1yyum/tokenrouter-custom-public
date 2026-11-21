@@ -43,6 +43,12 @@ type ResponsesWSFailure struct {
 	CredentialMessage string // safe credential client message
 }
 
+// PlanModelWebSocketClose terminates a fixed-provider session before the
+// restricted frame is written. The client receives a reconnect instruction.
+func PlanModelWebSocketClose(reason string) error {
+	return NewOpenAIWSClientCloseError(coderws.StatusPolicyViolation, "selected provider model is unavailable; reconnect required", errors.New(reason))
+}
+
 // CloseResponsesWSFailure records exhausted upstream failure details and closes
 // an upgraded client connection. The mark callback is required and runs before
 // closure. Credential, rate-limit, temporary-service and authentication

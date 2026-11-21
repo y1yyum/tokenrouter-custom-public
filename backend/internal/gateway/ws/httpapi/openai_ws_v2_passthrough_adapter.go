@@ -102,7 +102,7 @@ func (s *OpenAIWebSocketExecutor) proxyResponsesWebSocketV2Passthrough(
 	port := &wsPassthroughAdapter{service: s, request: c, provider: provider, token: token, hooks: hooks, decision: wsDecision, router: tlsRouterMatch}
 	var coreHooks *gatewayws.PassthroughHooks
 	if hooks != nil {
-		coreHooks = &gatewayws.PassthroughHooks{IngressHooks: wsIngressHooks(hooks), InitialRequestModel: hooks.InitialRequestModel, InitialTurnStartedAt: hooks.InitialTurnStartedAt, OnUpstreamError: hooks.OnUpstreamError}
+		coreHooks = &gatewayws.PassthroughHooks{IngressHooks: wsIngressHooks(ctx, provider, hooks), InitialRequestModel: hooks.InitialRequestModel, InitialTurnStartedAt: hooks.InitialTurnStartedAt, OnUpstreamError: hooks.OnUpstreamError}
 		coreHooks.BeginPerformance = func(turn int, started time.Time) *timing.Performance {
 			turnCtx := ctx
 			if hooks.ContextForTurn != nil {

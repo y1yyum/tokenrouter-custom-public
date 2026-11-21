@@ -55,6 +55,7 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 		restrict  bool   // supply plan A for the primary provider and X
 		want      int64  // provider expected to receive the only HTTP attempt
 		disabled  bool   // run the native route without reading restrictions
+		late      bool   // verdict appears after selection but before the wire check
 		readError bool   // simulate an unavailable durable store
 		bound     bool   // attach a continuation created with the primary credential
 		sticky    bool   // prime the primary session before restricting its model
@@ -66,6 +67,8 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 		{name: "remapped alias", requested: "client-x", actual: modelY, restrict: true, want: primary},
 		{name: "flag disabled", requested: "client-x", actual: modelX, restrict: true, want: primary, disabled: true},
 		{name: "unavailable store", requested: "client-x", actual: modelX, readError: true},
+		{name: "late restricted continuation", requested: "client-x", actual: modelX, bound: true, late: true},
+		{name: "late storage failure", requested: "client-x", actual: modelX, late: true, readError: true, want: backup},
 		{name: "healthy continuation", requested: "client-x", actual: modelX, bound: true, want: primary},
 		{name: "restricted continuation", requested: "client-x", actual: modelX, bound: true, restrict: true},
 		{name: "sticky migration", requested: "client-x", actual: modelX, sticky: true, want: backup},
@@ -73,8 +76,10 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			const groupID int64 = 42
-			group := &routing.Group{ID: groupID, Hydrated: true, Name: "G", Status: "active", RateMultiplier: 1,
-				AllowedProtocols: []protocol.ProtocolID{protocol.ProtocolOpenAIResponses}}
+			group := &routing.Group{
+				ID: groupID, Hydrated: true, Name: "G", Status: "active", RateMultiplier: 1,
+				AllowedProtocols: []protocol.ProtocolID{protocol.ProtocolOpenAIResponses},
+			}
 			cfg := &config.Config{}
 			cfg.Billing.FallbackRateMultiplier = 1
 			cfg.Gateway.OpenAI.PlanModelRestrictions = !tc.disabled
@@ -106,12 +111,14 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 					mixedUpstreamResponse(w, r, false)
 				}))
 				t.Cleanup(server.Close)
-				record := &provider.Record{ID: id, Name: fmt.Sprint(id), Platform: provider.PlatformOpenAI,
+				record := &provider.Record{
+					ID: id, Name: fmt.Sprint(id), Platform: provider.PlatformOpenAI,
 					Type: provider.ProviderTypeAPIKey, Status: "active", Schedulable: true, Priority: priority + 1,
 					Concurrency: 1, GroupIDs: []int64{groupID}, Credentials: map[string]any{
 						"api_key": "fixture-key", "base_url": server.URL,
 						"model_mapping": map[string]any{"client-x": tc.actual, modelY: modelY},
-					}}
+					},
+				}
 				if tc.failFirst && id == primary {
 					record.Credentials["pool_mode"] = true
 					record.Credentials["pool_mode_retry_count"] = float64(1)
@@ -147,12 +154,16 @@ func TestResponsesPlanModelRestrictionHTTP(t *testing.T) {
 			eligibility := newBillingEligibilityFixture(cfg)
 			t.Cleanup(eligibility.Stop)
 			resources := provideOpenAIHTTPResources(scheduler.NewConcurrencyService(nil), cfg)
+			var primaryChecks atomic.Int32
 			endpoints := newGatewayHTTPEndpoints(gatewayHTTPFixtureInput{
 				PlanModelRestrictions: func(_ context.Context, id int64, model string, at time.Time) ([]provider.ActivePlanModelRestriction, error) {
 					if tc.disabled {
 						t.Fatal("disabled route queried plan restrictions")
 					}
-					if tc.readError {
+					if tc.late && id == primary && primaryChecks.Add(1) > 1 {
+						restricted.Store(true)
+					}
+					if tc.readError && (!tc.late || (id == primary && restricted.Load())) {
 						return nil, errors.New("test storage outage")
 					}
 					if restricted.Load() && id == primary && model == modelX {

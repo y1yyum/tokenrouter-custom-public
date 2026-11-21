@@ -477,6 +477,11 @@ func (s *PassthroughSession) Run(ctx context.Context, clientConn ClientSocket, f
 						return payload, nil, err
 					}
 				}
+				if hooks != nil && hooks.CheckModel != nil {
+					if err := hooks.CheckModel(ctx, model); err != nil {
+						return payload, nil, err
+					}
+				}
 				usageMeta.UpdateFromResponseCreate(out)
 				// Capture one parameter value after later-turn admission succeeds, so relay
 				// write selection and upstream read timing use this accepted turn's
@@ -564,6 +569,11 @@ func (s *PassthroughSession) Run(ctx context.Context, clientConn ClientSocket, f
 	}
 	firstPerformance := beginPerformance(1, time.Now())
 	upstreamFirstMessageSent := false
+	if hooks != nil && hooks.CheckModel != nil {
+		if err := hooks.CheckModel(ctx, firstUpstreamModel); err != nil {
+			return err
+		}
+	}
 	firstWriteCtx, cancelFirstWrite := context.WithTimeout(ctx, o.WriteTimeout)
 	outboundFirstMessage := stripOutboundEffort(ctx, p, firstRoutingModel, firstClientMessage)
 	firstWriteErr := relayUpstreamFrameConn.WriteFrame(firstWriteCtx, TextFrame, outboundFirstMessage)

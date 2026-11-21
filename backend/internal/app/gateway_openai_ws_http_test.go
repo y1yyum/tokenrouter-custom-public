@@ -1727,6 +1727,13 @@ func (r *wsTurnGroups) revokeWS() {
 // moderation cleanup follow their respective test-fixture ownership.
 func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string) *openAIWSPassthroughHandlerHarness {
 	t.Helper()
+	return newConfiguredWSPassthroughHarness(t, upstreamURL, nil)
+}
+
+// newConfiguredWSPassthroughHarness allows a quality test to bind its actual
+// database provider and recorder before the upgraded request is admitted.
+func newConfiguredWSPassthroughHarness(t *testing.T, upstreamURL string, configure func(*gatewayHTTPFixtureInput, *gatewayprovider.ExecutionProvider, *routing.Group)) *openAIWSPassthroughHandlerHarness {
+	t.Helper()
 	gatewayCache := testutil.NewRedisGatewayCache(t)
 
 	settingRepo := &contentModerationHandlerSettingRepo{values: map[string]string{
@@ -1796,13 +1803,20 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string) *ope
 	keys := &wsTurnKeys{key: apikey.CopyAPIKey(apiKey)}
 	groups := &wsTurnGroups{group: *apiKey.Group}
 	keyService := testkit.NewService(keys, nil, groups, nil, nil, nil, nil)
-	h := newGatewayHTTPEndpoints(gatewayHTTPFixtureInput{
+	input := gatewayHTTPFixtureInput{
 		Source: gatewaySvc, Credentials: gatewaySvcCredentialPort,
 		Funding:     newFundingAdmissionFixture(billingCacheSvc, cfg),
 		Keys:        keyService,
 		Moderator:   moderationSvc,
 		Concurrency: gatewayhttp.NewConcurrencyHelper(scheduler.NewConcurrencyService(concurrencyCache, scheduler.Diagnostics{Logf: logging.LegacyPrintf, Event: logging.Event}), gatewayhttp.SSEPingFormatNone, time.Second), Availability: newExecutionAvailabilityForTest(providerRepo, nil, cfg), Choices: gatewaySvcChoices,
-	})
+	}
+	if configure != nil {
+		input.Config = cfg
+		configure(&input, &providerRepo.provider, apiKey.Group)
+		groups.group = *apiKey.Group
+		keys.key = apikey.CopyAPIKey(apiKey)
+	}
+	h := newGatewayHTTPEndpoints(input)
 
 	handlerDone := make(chan struct{})
 	router := gin.New()
@@ -1811,6 +1825,10 @@ func newOpenAIWSPassthroughHandlerHarness(t *testing.T, upstreamURL string) *ope
 		c.Set(string(authctx.ContextKeyUser), authctx.AuthSubject{UserID: apiKey.User.ID, Concurrency: 1})
 		c.Next()
 	})
+	if configure != nil {
+		guards := gatewayhttp.NewRouteGuards(legacyRouteMiddleware(nil, keyService, nil, nil, nil, cfg))
+		router.Use(guards.RequireGroupClientProtocol(capability.ProtocolResponsesWebSocket, gatewayhttp.GroupClientProtocolErrorOpenAI))
+	}
 	router.GET("/openai/v1/responses", func(c *gin.Context) {
 		h.ResponsesWebSocket(c)
 		// Publish handler return after its socket processing finishes so exit
@@ -2148,7 +2166,7 @@ func testOpenAIWSRevokedAccessRejectsFollowup(t *testing.T, revoke func(*openAIW
 func TestOpenAIWSAssemblyUpgradeAndStopBoundaries(t *testing.T) {
 	activity := &gatewayRequestActivity{Operations: lifecycle.NewOperations("ws-entry-contract")}
 	common := provideOpenAIAttemptBindings(nil, nil, nil, nil, nil, nil, GatewayCompletionRecorders{}, nil, nil, nil, nil, nil, nil, nil, nil, nil)
-	h := provideResponsesWSHTTP(nil, nil, nil, nil, common, nil, nil, nil, activity, nil, nil, nil, nil)
+	h := provideResponsesWSHTTP(nil, nil, nil, nil, common, nil, nil, nil, activity, nil, nil, nil, nil, nil)
 	for _, step := range []struct {
 		name    string // Admission boundary case name.
 		upgrade bool   // Supply valid upgrade headers.

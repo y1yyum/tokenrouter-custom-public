@@ -98,6 +98,7 @@ func provideOpenAITextHTTP(
 func openAITextOptions(cfg *config.Config) gatewayhttp.OpenAITextOptions {
 	options := gatewayhttp.OpenAITextOptions{MaxSwitches: 3}
 	if cfg != nil {
+		options.CompactModels.Default = cfg.Gateway.OpenAI.CompactModel
 		options.ForceCodexCLI = cfg.Gateway.OpenAI.Codex.ForceCLI
 		options.MaxBodyBytes = cfg.Gateway.MaxRequestBodyBytes
 		if cfg.Gateway.Failover.MaxProviderSwitches > 0 {

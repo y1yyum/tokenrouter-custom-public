@@ -248,7 +248,7 @@ func TestScheduledQualityResponses(t *testing.T) {
 	}
 	on := makeGateway(true)
 	on("client-x", 1, "gpt-5.4")
-	bad := tick()
+	bad := verifyQualityWSTurn(t, ids[0], provider.ResponsesWSPerSession, store.ActivePlanModelRestrictions, tick)
 	on("client-x", 2, "gpt-5.4")
 	on("gpt-5.2", 1, "gpt-5.2")
 	owners, err := store.ActivePlanModelRestrictions(ctx, ids[0], "gpt-5.4", time.Now())
@@ -301,13 +301,26 @@ func TestScheduledQualityResponses(t *testing.T) {
 			latencies = append(latencies, sample.send("client-x", 1, "gpt-5.4"))
 		}
 		if sample.name == "on" {
-			require.Greater(t, reads, before)
+			require.Equal(t, 3*n, reads-before)
 		} else {
 			require.Equal(t, before, reads)
 		}
 		slices.Sort(latencies)
 		t.Logf("flag=%s n=%d concurrency=1 candidates=2 reads/request=%.2f latency p50=%s p95=%s", sample.name, n, float64(reads-before)/n, latencies[11], latencies[22])
 	}
+	answer.Store("[0,0,0]")
+	for _, mode := range []string{provider.ResponsesWSPooled, "http_bridge"} {
+		verifyQualityWSTurn(t, ids[0], mode, store.ActivePlanModelRestrictions, tick)
+		answer.Store("[15,5,21]")
+		tick()
+		answer.Store("[0,0,0]")
+	}
+	for rank := 3; rank <= 4; rank++ {
+		row, err := client.Provider.Create().SetName(fmt.Sprintf("P%d", rank)).SetPlatform("openai").SetType("apikey").Save(ctx)
+		require.NoError(t, err)
+		ids = append(ids, row.ID)
+	}
+	verifyQualityRoutes(t, ids, store.ActivePlanModelRestrictions, func() { tick() }, func() { answer.Store("[15,5,21]"); tick() })
 }
 
 // qualityTestDatabase accepts a freshly provisioned fixture on hosts where

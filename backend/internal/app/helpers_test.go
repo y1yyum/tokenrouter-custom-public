@@ -174,7 +174,7 @@ type fixtureRetryStore struct {
 // gatewayHTTPFixtureInput supplies mutable handler dependencies and
 // provider-switch options for HTTP tests.
 type gatewayHTTPFixtureInput struct {
-	PlanModelRestrictions gatewayprovider.PlanModelRestrictionReader // saved quality owners for HTTP Responses tests
+	PlanModelRestrictions gatewayprovider.PlanModelRestrictionReader // committed quality verdicts for text and WS fixtures
 	// Request credential execution component.
 	Credentials *gatewayhttp.RequestCredentialExecutor
 	// Model availability diagnostic component.
@@ -1114,6 +1114,9 @@ func newGatewayHTTPEndpoints(input gatewayHTTPFixtureInput) *gatewayHTTPEndpoint
 	ws := func() *wshttp.ResponsesWSHandler {
 		common, _, blocks := base()
 		options := responsesWSOptions(input.Config)
+		if input.Config != nil && input.Config.Gateway.OpenAI.PlanModelRestrictions {
+			options.PlanModelRestrictions = input.PlanModelRestrictions
+		}
 		options.MaxProviderSwitches = input.MaxSwitches
 		return wshttp.New(options, responsesWSBindings(sockets, input.Credentials, input.Funding, input.Keys, common, input.Prompts, blocks, input.Choices, planner, nil))
 	}
@@ -3673,7 +3676,7 @@ func RegisterGatewayRoutes(
 	}
 	responsesWSHTTP := h.ResponsesWSHTTP
 	if responsesWSHTTP == nil && h.OpenAIEnabled {
-		responsesWSHTTP = provideResponsesWSHTTP(nil, nil, nil, nil, commonOpenAI, nil, nil, nil, activity, nil, nil, nil, nil)
+		responsesWSHTTP = provideResponsesWSHTTP(nil, nil, nil, nil, commonOpenAI, nil, nil, nil, activity, nil, nil, nil, nil, nil)
 	}
 	modelsHTTP := h.ModelsHTTP
 	if modelsHTTP == nil && h.TextEnabled {

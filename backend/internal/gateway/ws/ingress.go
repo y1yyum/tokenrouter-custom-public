@@ -899,6 +899,11 @@ func (s *IngressSession) Run(ctx context.Context, firstMessage []byte) error {
 			))
 		}
 
+		if hooks != nil && hooks.CheckModel != nil {
+			if err := hooks.CheckModel(ctx, payloadString(currentPayload, "model")); err != nil {
+				return err
+			}
+		}
 		result, relayErr := p.Relay(turn, sessionLease, ClientPayload{PayloadRaw: currentPayload, PayloadBytes: currentPayloadBytes, OriginalModel: currentOriginalModel, RoutingModel: currentRoutingModel, ImageBillingModel: currentImageBillingModel, ImageSizeTier: currentImageSizeTier, ImageInputSize: currentImageInputSize, RequestedReasoningEffort: currentRequestedReasoningEffort})
 		if relayErr != nil {
 			// Try bounded local recovery before reporting final completion, preserving

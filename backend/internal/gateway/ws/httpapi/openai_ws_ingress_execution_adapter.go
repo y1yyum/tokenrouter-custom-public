@@ -479,7 +479,7 @@ func (s *OpenAIWebSocketExecutor) executeWSIngressAdapter(
 			gatewayhttp.SetOpenAICodexRoutingHint(baseAcquireReq.Headers, provider, nextRoutingFields[0].String(), nextRoutingFields[1].String())
 		},
 	}
-	runtime := gatewayws.IngressSession{State: state, Store: stateStore, Codec: wsReplayCodec{}, Port: port, Hooks: wsIngressHooks(hooks), Refresh: func() gatewayws.Parameters {
+	runtime := gatewayws.IngressSession{State: state, Store: stateStore, Codec: wsReplayCodec{}, Port: port, Hooks: wsIngressHooks(ctx, provider, hooks), Refresh: func() gatewayws.Parameters {
 		if s.Options != nil {
 			return *s.Options
 		}

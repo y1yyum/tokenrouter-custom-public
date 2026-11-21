@@ -393,11 +393,19 @@ func (s wsStrictTurn) Keep(a []byte, b string, c bool) (bool, string, error) {
 // callbacks. Nil hooks return nil. AfterTurn converts result representation
 // while retaining request and replay metadata; payload bytes and hook
 // references keep their existing sharing and lifetime.
-func wsIngressHooks(h *gatewayws.OpenAIIngressHooks) *gatewayws.IngressHooks {
+func wsIngressHooks(ctx context.Context, provider *gatewayprovider.ExecutionProvider, h *gatewayws.OpenAIIngressHooks) *gatewayws.IngressHooks {
 	if h == nil {
 		return nil
 	}
 	out := &gatewayws.IngressHooks{TurnStarted: h.TurnStarted, BeforeTurn: h.BeforeTurn, BeforeRequest: h.BeforeRequest}
+	if gatewayprovider.HasPlanModelRestrictions(ctx) {
+		out.CheckModel = func(ctx context.Context, actual string) error {
+			if reason, _ := gatewayprovider.CheckPlanModelSend(ctx, provider, actual); reason != "" {
+				return gatewayhttp.PlanModelWebSocketClose(reason)
+			}
+			return nil
+		}
+	}
 	if h.AfterTurn != nil {
 		out.AfterTurn = func(c gatewayws.TurnCapture) {
 			h.AfterTurn(gatewayws.OpenAITurnCapture{Turn: c.Turn, StartedAt: c.StartedAt, RequestBody: c.RequestBody, OriginalModel: c.OriginalModel, PreviousResponseID: c.PreviousResponseID, Result: gatewayprovider.ForwardResultFromWS(c.Result), Err: c.Err, PayloadSource: c.PayloadSource})

@@ -15,6 +15,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/selection"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	wshttp "github.com/TokenFlux/TokenRouter/internal/gateway/ws/httpapi"
+	providerpostgres "github.com/TokenFlux/TokenRouter/internal/provider/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 )
 
@@ -41,8 +42,12 @@ func provideResponsesWSHTTP(
 	choices *selection.Compatible, planner *gatewayprovider.RoutePlanner,
 	subscriptions *billing.SubscriptionService,
 	prices *billing.PriceResolver,
+	verdicts *providerpostgres.ProviderStore,
 ) *wshttp.ResponsesWSHandler {
 	options := responsesWSOptions(cfg)
+	if cfg != nil && cfg.Gateway.OpenAI.PlanModelRestrictions {
+		options.PlanModelRestrictions = verdicts.ActivePlanModelRestrictions
+	}
 	if source != nil {
 		options.Runtime = source.Runtime
 	}

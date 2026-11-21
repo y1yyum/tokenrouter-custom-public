@@ -527,7 +527,7 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	openAITokensHandler := provideOpenAITokensHTTP(openAIAuxiliary, fundingAdmission, apiKeyService, concurrencyService, errorPassthroughService, cfg, appGatewayRequestActivity, promptpolicyService, appGatewayModelAvailability, compatible, routePlanner)
 	openAIWebSocketExecutor := provideOpenAIWebSockets(wsRuntime, cfg, openAIWSConnections, openAITextExecutor, promptpolicyService, compatible, openAIEncryptedLineage, responseImagePolicy, gatewayCache)
 	requestCredentialExecutor := provideRequestCredentialExecutor(requestCredentials)
-	responsesWSHandler := provideResponsesWSHTTP(openAIWebSocketExecutor, requestCredentialExecutor, fundingAdmission, apiKeyService, bindings, promptpolicyService, cyberBlocks, cfg, appGatewayRequestActivity, compatible, routePlanner, subscriptionService, priceResolver)
+	responsesWSHandler := provideResponsesWSHTTP(openAIWebSocketExecutor, requestCredentialExecutor, fundingAdmission, apiKeyService, bindings, promptpolicyService, cyberBlocks, cfg, appGatewayRequestActivity, compatible, routePlanner, subscriptionService, priceResolver, providerStore)
 	modelsHandler := provideModelsHTTP(providerService, requestableCatalogue, googleforwardGemini, appGatewayRequestActivity, gemini, modelAttributeService)
 	messagesHandler := provideMessagesHTTP(appMessageHTTPBindings, textattemptRuntime, appGatewayRequestActivity)
 	systemOneExecutor := provideSystemOneExecutor(cfg, transportClient, compiledHeaderFilter, upstreamHealth, priceResolver, appGatewayRequestActivity)

@@ -9,6 +9,7 @@ import (
 	"github.com/tidwall/gjson"
 
 	"github.com/TokenFlux/TokenRouter/internal/egress"
+	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	forward "github.com/TokenFlux/TokenRouter/internal/gateway/provider/openaiforward"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
@@ -98,6 +99,32 @@ func (s *OpenAIRequests) ResponseOptions(ctx context.Context, c *gin.Context, pr
 	}
 }
 
+// checkPlanModelBody validates the final wire model for every eligible exchange.
+// Local recovery may rewrite the model after scheduling. An immutable continuation
+// must terminate if its selected provider has since become restricted.
+func checkPlanModelBody(ctx context.Context, c *gin.Context, p *gatewayprovider.ExecutionProvider, body []byte) error {
+	if !gatewayprovider.HasPlanModelRestrictions(ctx) {
+		return nil
+	}
+	reason, bound := gatewayprovider.CheckPlanModelSend(ctx, p, gjson.GetBytes(body, "model").String())
+	if reason == "" {
+		return nil
+	}
+	if c != nil && IsResponsesWSUpgrade(c.Request) {
+		return PlanModelWebSocketClose(reason)
+	}
+	action := forwardcore.NextProviderRetry
+	if bound {
+		action = forwardcore.NextProviderStop
+	}
+	return &forwardcore.UpstreamFailoverError{
+		Stage: forwardcore.GatewayFailureStageSelection, Scope: forwardcore.GatewayFailureScopeRequest,
+		Reason: forwardcore.GatewayFailureReason(reason), NextProviderAction: action,
+		StatusCode: http.StatusServiceUnavailable, ClientStatusCode: http.StatusServiceUnavailable,
+		ClientMessage: "Selected provider model is unavailable",
+	}
+}
+
 // Build constructs an ordinary Responses request for the selected provider.
 // Model attribute preparation may fail before target construction. The
 // delegated builder records the selected endpoint, normalizes Kimi and DeepSeek
@@ -110,6 +137,9 @@ func (s *OpenAIRequests) Build(ctx context.Context, c *gin.Context, provider *ga
 		return nil, err
 	}
 	body = stripOpenAIWireEffortIfMatched(ctx, c, provider, body, protocol.ProtocolOpenAIResponses)
+	if err := checkPlanModelBody(ctx, c, provider, body); err != nil {
+		return nil, err
+	}
 	return forward.BuildResponsesRequest(ctx, body, promptCacheKey, s.Target(c, provider, false), func(path string) { SetActualOpenAIUpstreamEndpoint(c, path) }, func(b []byte) []byte {
 		return forward.NormalizeStatelessResponsesBody(provider != nil && gatewayprovider.ExecutionProtocolTarget(provider).UsesStatelessResponses(), b)
 	}, func(target string) openai.ResponsesRequestOptions {
@@ -136,6 +166,9 @@ func (s *OpenAIRequests) BuildPassthrough(
 		return nil, err
 	}
 	body = stripOpenAIWireEffortIfMatched(ctx, c, provider, body, protocol.ProtocolOpenAIResponses)
+	if err := checkPlanModelBody(ctx, c, provider, body); err != nil {
+		return nil, err
+	}
 	return forward.BuildPassthroughRequest(ctx, body, s.Target(c, provider, true), func(b []byte) []byte {
 		return forward.NormalizeStatelessResponsesBody(provider != nil && gatewayprovider.ExecutionProtocolTarget(provider).UsesStatelessResponses(), b)
 	}, func(target string) openai.PassthroughRequestOptions {

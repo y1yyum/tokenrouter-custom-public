@@ -1,7 +1,6 @@
 package httpapi
 
 import (
-	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"net/http"
 	"strconv"
 	"strings"
@@ -13,6 +12,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/gateway/execution"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/media"
+	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	textflow "github.com/TokenFlux/TokenRouter/internal/gateway/text"
@@ -71,9 +71,6 @@ func (h *OpenAITextHandler) Responses(c *gin.Context) {
 	defer h.recoverResponsesPanic(c, &streamStarted)
 	compactStartedAt := time.Now()
 	defer h.LogRemoteCompactOutcome(c, compactStartedAt)
-	if h.options.PlanModelRestrictions != nil && c.Request.URL.Path == "/v1/responses" {
-		c.Request = c.Request.WithContext(gatewayprovider.WithPlanModelRestrictions(c.Request.Context(), h.options.PlanModelRestrictions))
-	}
 	h.backend.TransportHTTP(c)
 
 	requestStart := time.Now()
@@ -228,6 +225,11 @@ func (h *OpenAITextHandler) Responses(c *gin.Context) {
 	}
 	reqLog = reqLog.With(zap.String("model", reqModel), zap.Bool("stream", reqStream))
 	previousResponseID := strings.Clone(strings.TrimSpace(wirejson.ParseView(body).Get("previous_response_id").String()))
+	var compactModels *gatewayprovider.CompactModels
+	if legacyCompact {
+		compactModels = &h.options.CompactModels
+	}
+	c.Request = c.Request.WithContext(h.options.PlanModelRestrictions.WithRequest(c.Request.Context(), compactModels, previousResponseID != ""))
 	if previousResponseID != "" {
 		previousResponseIDKind := h.backend.PreviousKind(previousResponseID)
 		reqLog = reqLog.With(

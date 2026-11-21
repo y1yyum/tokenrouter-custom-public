@@ -49,7 +49,9 @@ const (
 // uses body size, Compact interval and force-client diagnostic values
 // directly.
 type OpenAITextOptions struct {
-	// PlanModelRestrictions supplies current plan owners for plain HTTP Responses.
+	// CompactModels resolves legacy Compact overrides for candidate selection.
+	CompactModels gatewayprovider.CompactModels
+	// PlanModelRestrictions supplies committed quality verdicts for OpenAI text routes.
 	PlanModelRestrictions gatewayprovider.PlanModelRestrictionReader
 	// MaxBodyBytes bounds normalized lenient JSON bytes after reading and
 	// decoding. A nonpositive value uses the normalizer's 64 MiB default.

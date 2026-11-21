@@ -133,6 +133,9 @@ type TurnCapture struct {
 // IngressHooks supplies admission and completion callbacks called by the
 // sequential ingress loop.
 type IngressHooks struct {
+	// CheckModel reads the current verdict after turn admission and before writing.
+	CheckModel func(context.Context, string) error
+
 	// TurnStarted, BeforeTurn, BeforeRequest, and AfterTurn are optional
 	// synchronous hooks. Run ignores absent callbacks, while each execution path
 	// chooses its timing for observed, admitted, and completed turns.

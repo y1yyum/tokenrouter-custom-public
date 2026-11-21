@@ -13,6 +13,7 @@ import (
 	"go.uber.org/zap"
 
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
+	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	gatewayws "github.com/TokenFlux/TokenRouter/internal/gateway/ws"
 	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
 	"github.com/TokenFlux/TokenRouter/internal/protocol/wirejson"
@@ -39,7 +40,8 @@ import (
 // ResponsesWSOptions supplies entry limits and the provider-switch budget.
 // Runtime, when supplied, replaces connection and first-frame values at upgrade.
 type ResponsesWSOptions struct {
-	ForceCodexCLI bool // configured Codex client preparation
+	PlanModelRestrictions gatewayprovider.PlanModelRestrictionReader // selection and per-turn quality authority
+	ForceCodexCLI         bool                                       // configured Codex client preparation
 	// Runtime is optional; its snapshot overrides MaxIngressConnectionsPerAPIKey,
 	// ReadLimit, and FirstMessageTimeout before capacity acquisition. The static
 	// MaxProviderSwitches value continues into RunEntry independently of Runtime.
@@ -130,6 +132,7 @@ func (h *ResponsesWSHandler) ResponsesWebSocket(c *gin.Context) {
 		h.backend.Error(c, http.StatusUpgradeRequired, "invalid_request_error", "WebSocket upgrade required (Upgrade: websocket)")
 		return
 	}
+	c.Request = c.Request.WithContext(h.options.PlanModelRestrictions.WithRequest(c.Request.Context(), nil, false))
 	h.backend.Transport(c)
 
 	apiKey, ok := h.backend.Access(c)

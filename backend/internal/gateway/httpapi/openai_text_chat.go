@@ -54,6 +54,7 @@ func (h *OpenAITextHandler) ChatCompletions(c *gin.Context) {
 	// Keep request lifetime active through admission, execution and deferred slot
 	// release so application shutdown waits for the complete HTTP handling interval.
 	defer done()
+	c.Request = c.Request.WithContext(h.options.PlanModelRestrictions.WithRequest(c.Request.Context(), nil, false))
 
 	streamStarted := false
 	defer h.recoverResponsesPanic(c, &streamStarted)
