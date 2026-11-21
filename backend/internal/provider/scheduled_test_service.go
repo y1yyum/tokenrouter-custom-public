@@ -34,6 +34,7 @@ type ScheduledTestService struct {
 // ScheduledTestOptions supplies time and cron calculation for plan management
 // calls.
 type ScheduledTestOptions struct {
+	QualityReport func(context.Context, int64, string, time.Time) (*ModelQualityReport, error) // admin observations only
 	// SaveQuality commits a probe and its verdict in one database transaction.
 	SaveQuality func(context.Context, *ScheduledTestResult) (*ScheduledTestResult, error)
 	// Now and NextRun are required by CreatePlan and UpdatePlan. Now supplies the
@@ -141,4 +142,10 @@ func (s *ScheduledTestService) SaveResult(ctx context.Context, planID int64, max
 		return nil, err
 	}
 	return stored, s.resultRepo.PruneOldResults(ctx, planID, maxResults)
+}
+
+// ModelQuality returns one provider and actual model's observation window.
+// The service supplies a single timestamp for every count and expiry test.
+func (s *ScheduledTestService) ModelQuality(ctx context.Context, id int64, model string) (*ModelQualityReport, error) {
+	return s.options.QualityReport(ctx, id, model, s.options.Now().UTC())
 }

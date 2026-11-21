@@ -3,6 +3,7 @@ package httpapi
 import (
 	"net/http"
 	"strconv"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 
@@ -204,4 +205,21 @@ func (h *ScheduledTestHandler) ListResults(c *gin.Context) {
 		return
 	}
 	c.JSON(http.StatusOK, results)
+}
+
+// ModelQuality reports observed traffic, grades and active or historical
+// owners for the requested actual model. The administrative route is read-only.
+func (h *ScheduledTestHandler) ModelQuality(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	model := strings.TrimSpace(c.Query("model"))
+	if err != nil || id < 1 || model == "" || len(model) > 512 {
+		response.BadRequest(c, "positive provider ID and model are required")
+		return
+	}
+	report, err := h.scheduledTestSvc.ModelQuality(c.Request.Context(), id, model)
+	if err != nil {
+		response.InternalError(c, "Unable to read model quality")
+		return
+	}
+	c.JSON(http.StatusOK, report)
 }

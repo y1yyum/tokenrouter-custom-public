@@ -2,6 +2,7 @@ import { apiClient } from '../client'
 import type {
   ScheduledTestPlan,
   ScheduledTestResult,
+  ModelQualityReport,
   CreateScheduledTestPlanRequest,
   UpdateScheduledTestPlanRequest,
 } from '@/api/admin/scheduledTests.types'
@@ -76,6 +77,13 @@ export async function listResults(planId: number, limit?: number): Promise<Sched
  * using the module's named or default API object.
  */
 export const scheduledTestsAPI = {
+  async modelQuality(providerId: number, model: string): Promise<ModelQualityReport> {
+    const { data } = await apiClient.get<ModelQualityReport>(
+      `/admin/providers/${providerId}/model-quality`,
+      { params: { model } },
+    )
+    return data
+  },
   listByProvider,
   create,
   update,

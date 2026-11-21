@@ -65,3 +65,28 @@ export interface UpdateScheduledTestPlanRequest {
   quality_enabled?: boolean // Opt-in Responses quality grading.
   auto_recover?: boolean // Successful-test recovery activation.
 }
+
+// ModelQualityReport contains unrounded counters for one provider and wire model.
+export interface ModelQualityReport {
+  provider_id: number
+  model: string
+  from: string
+  until: string
+  success: number
+  failed: number
+  cache_samples: number
+  cache_hits: number
+  input_tokens: number
+  read_tokens: number
+  graded: number
+  wrong: number
+  owners: Array<{
+    plan_id: number
+    result_id: number
+    requested_model: string
+    reason: string
+    started_at: string
+    expires_at: string | null
+    state: 'passed' | 'restricted' | 'expired'
+  }>
+}

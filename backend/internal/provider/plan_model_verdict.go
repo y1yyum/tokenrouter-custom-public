@@ -27,3 +27,33 @@ type ActivePlanModelRestriction struct {
 	PlanModelVerdict
 	StartedAt time.Time // persisted probe start used for ordering concurrent results
 }
+
+// ModelQualityReport keeps raw counts so operators can reproduce every ratio.
+// Usage and terminal provider errors describe observed user traffic. Synthetic
+// outcomes come from the audit ledger that survives result retention.
+type ModelQualityReport struct {
+	From         time.Time           `json:"from"`          // inclusive UTC start
+	Until        time.Time           `json:"until"`         // exclusive UTC end and expiry reference
+	ProviderID   int64               `json:"provider_id"`   // selected provider
+	Model        string              `json:"model"`         // actual upstream identity
+	Success      int64               `json:"success"`       // observed successful user requests
+	Failed       int64               `json:"failed"`        // observed terminal provider failures
+	CacheSamples int64               `json:"cache_samples"` // successes with positive normalized input
+	CacheHits    int64               `json:"cache_hits"`    // successes with cache reads
+	InputTokens  int64               `json:"input_tokens"`  // normalized input including creation and reads
+	ReadTokens   int64               `json:"read_tokens"`   // cached input tokens read
+	Graded       int64               `json:"graded"`        // audited pass and fail results
+	Wrong        int64               `json:"wrong"`         // audited failing results
+	Owners       []ModelQualityOwner `json:"owners"`        // latest applied result per owning plan
+}
+
+// ModelQualityOwner identifies the durable audit record even after pruning.
+type ModelQualityOwner struct {
+	PlanID         int64      `json:"plan_id"`         // schedule that owns this decision
+	ResultID       int64      `json:"result_id"`       // original persisted probe ID
+	RequestedModel string     `json:"requested_model"` // literal plan input at execution
+	Reason         string     `json:"reason"`          // original grading explanation
+	StartedAt      time.Time  `json:"started_at"`      // probe start
+	ExpiresAt      *time.Time `json:"expires_at"`      // optional deadline
+	State          string     `json:"state"`           // restricted, expired or passed
+}

@@ -1001,6 +1001,12 @@ var ManagementOperations = map[string]*adminapi.Operation{
 		BrowserPath: "/admin/providers",
 		Input:       adminapi.Arguments("/api/v1/admin/providers/:id/schedulable", []string{}, (*SetSchedulableRequest)(nil)),
 	}),
+	"providers.model_quality.list": adminapi.Define(adminapi.Operation{
+		ID: "providers.model_quality.list", Module: "providers", Title: "Model quality",
+		Description: "Read observed request counts and scheduled verdicts for one actual model over the last 24 hours.",
+		Method:      "GET", Path: "/api/v1/admin/providers/:id/model-quality", ReadOnly: true, Response: "json",
+		BrowserPath: "/admin/model-attributes", Input: adminapi.Arguments("/api/v1/admin/providers/:id/model-quality", []string{"model"}, nil),
+	}),
 	"providers.scheduled_test_plans.list": adminapi.Define(adminapi.Operation{
 		ID:     "providers.scheduled_test_plans.list",
 		Module: "providers",

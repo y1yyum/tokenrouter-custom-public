@@ -70,7 +70,7 @@ func provideProviderProbeTasks(store *providerpostgres.ProviderStore, connection
 // provideScheduledTestRunner and started later through the application's
 // lifecycle registration.
 func provideScheduledTests(plans provider.ScheduledTestPlanRepository, results provider.ScheduledTestResultRepository, store *providerpostgres.ProviderStore, db *sql.DB) *provider.ScheduledTestService {
-	return provider.NewScheduledTestService(plans, results, provider.ScheduledTestOptions{SaveQuality: func(ctx context.Context, result *provider.ScheduledTestResult) (*provider.ScheduledTestResult, error) {
+	return provider.NewScheduledTestService(plans, results, provider.ScheduledTestOptions{QualityReport: store.ModelQuality, SaveQuality: func(ctx context.Context, result *provider.ScheduledTestResult) (*provider.ScheduledTestResult, error) {
 		return store.SaveQualityResult(ctx, db, result)
 	}, Now: time.Now, NextRun: provideradapter.NextScheduledTestRun})
 }

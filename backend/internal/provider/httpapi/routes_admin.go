@@ -122,6 +122,7 @@ func RegisterScheduledTestRoutes(admin *gin.RouterGroup, endpoint *ScheduledTest
 		adminapi.Register(plans, ManagementOperations["scheduled_test_plans.results.list"], endpoint.ListResults)
 	}
 	// Nested under providers
+	adminapi.Register(admin, ManagementOperations["providers.model_quality.list"], endpoint.ModelQuality)
 	adminapi.Register(admin, ManagementOperations["providers.scheduled_test_plans.list"], endpoint.ListByProvider)
 }
 

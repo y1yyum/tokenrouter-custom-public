@@ -2,7 +2,9 @@ import { flushPromises, shallowMount } from '@vue/test-utils'
 import { expect, it, vi } from 'vitest'
 import ScheduledTestsPanel from '../ScheduledTestsPanel.vue'
 
-// Capture the public admin request and leave every test plan in local memory.
+// ScheduledTestsPanel.spec.ts exercises the visible quality-probe form with
+// an in-memory administration client. It checks the saved plan and the reset
+// that keeps a previous provider's draft from reaching the next selection.
 const create = vi.hoisted(() => vi.fn().mockResolvedValue({}))
 vi.mock('@/api/admin', () => ({
   adminAPI: { scheduledTests: { create, listByProvider: async () => [] } },

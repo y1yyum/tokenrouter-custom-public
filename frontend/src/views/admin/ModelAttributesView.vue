@@ -6,7 +6,7 @@
       class="mb-4 flex border-b border-gray-200 dark:border-dark-700"
     >
       <button
-        v-for="tab in ['configs', 'defaults'] as const"
+        v-for="tab in ['configs', 'defaults', 'quality'] as const"
         :key="tab"
         type="button"
         role="tab"
@@ -22,7 +22,8 @@
         {{ t(`admin.modelAttributes.tabs.${tab}`) }}
       </button>
     </div>
-    <TablePageLayout>
+    <ModelQualityPanel v-if="activeTab === 'quality'" />
+    <TablePageLayout v-else>
       <template #filters>
         <div class="space-y-2">
           <div class="flex flex-wrap items-start justify-between gap-2">
@@ -475,6 +476,7 @@ import { validateModelReferences } from '@/components/admin/model-attributes/mod
 import ModelAttributeDisclosure from '@/components/admin/model-attributes/ModelAttributeDisclosure.vue'
 import ModelAttributesFields from '@/components/admin/model-attributes/ModelAttributesFields.vue'
 import ModelAttributeRouteFields from '@/components/admin/model-attributes/ModelAttributeRouteFields.vue'
+import ModelQualityPanel from '@/components/admin/model-attributes/ModelQualityPanel.vue'
 import ModelCatalogInfo from '@/components/admin/model-attributes/ModelCatalogInfo.vue'
 import ModelTagInput from '@/components/admin/pricing/ModelTagInput.vue'
 import ModelAttributesSummary from '@/components/common/ModelAttributesSummary.vue'
@@ -507,7 +509,7 @@ import { SEARCH_DEBOUNCE_MS } from '@/constants/ui'
 const { t, te } = useI18n()
 // activeTab selects configuration management or catalog defaults, and searchPlaceholder
 // describes the model or configuration search for that selection.
-const activeTab = ref<'configs' | 'defaults'>('configs')
+const activeTab = ref<'configs' | 'defaults' | 'quality'>('configs')
 const searchPlaceholder = computed(() =>
   t(
     activeTab.value === 'configs'
@@ -699,6 +701,7 @@ async function load() {
   // Advance the list generation before dispatch so a later tab or filter query invalidates
   // this response and its loading completion.
   const current = ++sequence
+  if (activeTab.value === 'quality') return
   loading.value = true
   error.value = ''
   try {

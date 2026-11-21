@@ -4,6 +4,7 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -25,6 +26,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/selection"
 	gatewaytestkit "github.com/TokenFlux/TokenRouter/internal/gateway/testkit"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/TokenFlux/TokenRouter/internal/protocol"
@@ -32,6 +34,8 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	routingtestkit "github.com/TokenFlux/TokenRouter/internal/routing/testkit"
 	"github.com/TokenFlux/TokenRouter/internal/scheduler"
+	schedulerhttp "github.com/TokenFlux/TokenRouter/internal/scheduler/httpapi"
+	"github.com/TokenFlux/TokenRouter/internal/scheduler/policy"
 )
 
 // gateway_quality_routes_integration_test.go drives real gateway requests while
@@ -43,6 +47,7 @@ import (
 type qualityHTTPCase struct {
 	path, model, actual       string // inbound path, inbound name and expected wire model
 	count, winner             int    // pool size and one-based rank of the successful provider
+	preview                   bool   // compare the real admin preview with the expected wire recipient
 	native                    bool   // body-signaled compaction on the ordinary Responses path
 	cross, denied, off, retry bool   // authorized fallback, denied destination, bypass and HTTP 502 controls
 }
@@ -168,6 +173,7 @@ func verifyQualityRoutes(t *testing.T, ids []int64, read gatewayprovider.PlanMod
 	}
 	newQualityHTTPClient(t, ids, compact, late)()
 	require.GreaterOrEqual(t, primaryReads.Load(), int32(2))
+	compact.preview = true
 	newQualityHTTPClient(t, ids, compact, read)()
 	remap := compact
 	remap.model, remap.actual, remap.winner = "compact-y", "gpt-5.2", 1
@@ -178,12 +184,12 @@ func verifyQualityRoutes(t *testing.T, ids []int64, read gatewayprovider.PlanMod
 		t.Error("disabled gate queried")
 		return nil, nil
 	})()
-	cross := qualityHTTPCase{path: "/v1/chat/completions", model: "public-x", actual: "gpt-5.4", count: 2, winner: 2, cross: true}
+	cross := qualityHTTPCase{preview: true, path: "/v1/chat/completions", model: "public-x", actual: "gpt-5.4", count: 2, winner: 2, cross: true}
 	newQualityHTTPClient(t, ids, cross, read)()
 	messages := cross
 	messages.path = "/v1/messages"
 	newQualityHTTPClient(t, ids, messages, read)()
-	native := qualityHTTPCase{native: true, path: "/v1/responses", model: "compact-y", actual: "gpt-5.4", count: 2, winner: 2}
+	native := qualityHTTPCase{preview: true, native: true, path: "/v1/responses", model: "compact-y", actual: "gpt-5.4", count: 2, winner: 2}
 	newQualityHTTPClient(t, ids, native, read)()
 	cross.denied = true
 	newQualityHTTPClient(t, ids, cross, read)()
@@ -313,8 +319,63 @@ func newQualityHTTPClient(t *testing.T, ids []int64, tc qualityHTTPCase, read ga
 		endpoint = endpoints.Messages
 	}
 	router.POST(tc.path, gin.HandlerFunc(auth), guards.RequireGroupClientProtocol(inbound, gatewayhttp.GroupClientProtocolErrorOpenAI), endpoint)
+	if tc.preview && !tc.denied {
+		destination := *group
+		destination.SchedulerType = routing.GroupSchedulerTypeAdvanced
+		src := qualityPreviewPool{group: &destination, origin: origin, mixedHTTPProviders: pool}
+		var reader gatewayprovider.PlanModelRestrictionReader
+		if !tc.off {
+			reader = read
+		}
+		d := selection.NewDiagnostics(src, selection.Shared{PlanModelRestrictions: reader}, nil, choices)
+		router.POST("/preview/:id", schedulerhttp.NewDiagnosticsHandler(d).PreviewAdvancedSchedulerScore)
+	}
 	server := httptest.NewServer(router)
 	t.Cleanup(server.Close)
+	if tc.preview && !tc.denied {
+		entry := inbound
+		if wirePath == "/v1/responses/compact" {
+			entry = protocol.ProtocolResponsesCompact
+		}
+		wire := protocol.ProtocolOpenAIResponses
+		if entry == protocol.ProtocolResponsesCompact {
+			wire = entry
+		}
+		payload := fmt.Sprintf(`{"client_protocol":%q,"requested_model":%q,"source_group_id":%d,"group_id":%d}`, entry, tc.model, origin.ID, group.ID)
+		for i, id := range ids[:tc.count] {
+			resp, err := server.Client().Post(fmt.Sprintf("%s/preview/%d", server.URL, id), "application/json", strings.NewReader(payload))
+			require.NoError(t, err)
+			var envelope struct {
+				Data policy.AdvancedSchedulerScoreDiagnosticResponse `json:"data"`
+			}
+			data, err := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			require.NoError(t, err)
+			require.Equal(t, 200, resp.StatusCode, string(data))
+			require.NoError(t, json.Unmarshal(data, &envelope))
+			d := envelope.Data.Detail
+			require.NotNil(t, d)
+			check := d.PlanModelCheck
+			require.NotNil(t, check)
+			require.Equal(t, origin.ID, check.SourceGroupID)
+			require.Equal(t, group.ID, check.GroupID)
+			require.Equal(t, string(wire), check.UpstreamProtocol)
+			require.Equal(t, tc.actual, check.ActualModel)
+			if tc.cross {
+				require.Equal(t, "client-x", check.RoutingModel)
+			}
+			require.NotEmpty(t, d.CandidatePool.Candidates)
+			require.Equal(t, ids[tc.winner-1], d.CandidatePool.Candidates[0].ID)
+			if i == 0 && tc.winner == 2 {
+				require.Contains(t, d.HardFilterReasons, "plan_model_restricted")
+				require.Len(t, check.Owners, 1)
+			}
+			t.Logf("preview P%d group=%d->%d entry=%s->%s model=%s->%s->%s rank1=%d reasons=%v", i+1, origin.ID, group.ID, entry, wire, tc.model, check.RoutingModel, check.ActualModel, d.CandidatePool.Candidates[0].ID, d.HardFilterReasons)
+		}
+		require.Empty(t, seen)
+		require.Zero(t, logs.Calls)
+		require.Zero(t, funds.Calls)
+	}
 	server.Client().Timeout = 15 * time.Second
 	return func() time.Duration {
 		t.Helper()

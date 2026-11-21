@@ -3,6 +3,7 @@
 package app
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -51,6 +52,7 @@ import (
 // A controlled clock tick drives the production runner through a loopback probe.
 // Independent loopback clients then observe which provider serves each model.
 type qualityPreviewPool struct {
+	origin              *routing.Group // optional distinct client group before fallback
 	group               *routing.Group // selected diagnostic group
 	*mixedHTTPProviders                // candidate records shared with the HTTP fixture
 }
@@ -256,6 +258,7 @@ func TestScheduledQualityResponses(t *testing.T) {
 	require.Len(t, owners, 1)
 	require.Equal(t, bad, owners[0].ResultID)
 	require.Equal(t, plan.ID, owners[0].PlanID)
+	verifyModelQualityPage(t, db, store, scheduled, plan.ID, ids[0], bad)
 	previewGroup := *group
 	previewGroup.SchedulerType = routing.GroupSchedulerTypeAdvanced
 	previewPool := qualityPreviewPool{group: &previewGroup, mixedHTTPProviders: &mixedHTTPProviders{values: slices.Clone(providers.values)}}
@@ -279,6 +282,12 @@ func TestScheduledQualityResponses(t *testing.T) {
 	answer.Store("[15,5,21]")
 	good := tick()
 	require.Greater(t, good, bad)
+	report, err := store.ModelQuality(ctx, ids[0], "gpt-5.4", time.Now())
+	require.NoError(t, err)
+	require.EqualValues(t, 2, report.Graded)
+	require.EqualValues(t, 1, report.Wrong)
+	require.Equal(t, "passed", report.Owners[0].State)
+	t.Logf("recovery quality failures=%d/%d owner=passed result=%d", report.Wrong, report.Graded, report.Owners[0].ResultID)
 	on("client-x", 1, "gpt-5.4")
 	owners, err = store.ActivePlanModelRestrictions(ctx, ids[0], "gpt-5.4", time.Now())
 	require.NoError(t, err)
@@ -287,6 +296,29 @@ func TestScheduledQualityResponses(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, detail.Detail.PlanModelCheck.Owners)
 	require.NotContains(t, detail.Detail.HardFilterReasons, "plan_model_restricted")
+	// Replay an additive one-point sensitivity experiment against eligible
+	// candidates only. Missing samples contribute the neutral value 0.5.
+	var shadow []policy.AdvancedSchedulerScoreDiagnosticCandidate
+	for _, candidate := range detail.Detail.CandidatePool.Candidates {
+		sample, err := store.ModelQuality(ctx, candidate.ID, "gpt-5.4", report.Until)
+		require.NoError(t, err)
+		ratio := func(n, d int64) float64 {
+			if d == 0 {
+				return .5
+			}
+			return float64(n) / float64(d)
+		}
+		delta := (ratio(sample.Success, sample.Success+sample.Failed) + ratio(sample.CacheHits, sample.CacheSamples) +
+			ratio(sample.ReadTokens, sample.InputTokens) + ratio(sample.Graded-sample.Wrong, sample.Graded)) / 4
+		t.Logf("offline P%d baseline=%.4f observation=%.4f adjusted=%.4f", candidate.ID, candidate.FinalScore, delta, candidate.FinalScore+delta)
+		candidate.FinalScore += delta
+		shadow = append(shadow, candidate)
+	}
+	require.Len(t, shadow, 2)
+	slices.SortStableFunc(shadow, func(a, b policy.AdvancedSchedulerScoreDiagnosticCandidate) int {
+		return cmp.Compare(b.FinalScore, a.FinalScore)
+	})
+	t.Logf("offline eligible order baseline=%d,%d adjusted=%d,%d", detail.Detail.CandidatePool.Candidates[0].ID, detail.Detail.CandidatePool.Candidates[1].ID, shadow[0].ID, shadow[1].ID)
 	var restricted bool
 	require.NoError(t, db.QueryRowContext(ctx, "SELECT restricted FROM provider_plan_model_verdicts WHERE result_id=$1", good).Scan(&restricted))
 	require.False(t, restricted)
@@ -344,7 +376,13 @@ func qualityTestDatabase(t *testing.T) *sql.DB {
 }
 
 // GetGroup supplies the single group selected by the HTTP scenario.
-func (p qualityPreviewPool) GetGroup(context.Context, int64) (*routing.Group, error) {
+func (p qualityPreviewPool) GetGroup(_ context.Context, id int64) (*routing.Group, error) {
+	if p.origin != nil && id != p.group.ID && id == p.origin.ID {
+		return p.origin, nil
+	}
+	if id != p.group.ID {
+		return nil, fmt.Errorf("unknown test group %d", id)
+	}
 	return p.group, nil
 }
 
@@ -361,4 +399,69 @@ func (p qualityPreviewPool) ListProvidersForSchedulerScoreFilter(ctx context.Con
 // ListSchedulableProvidersForAdvancedSchedulerScore shares the group pool with scoring.
 func (p qualityPreviewPool) ListSchedulableProvidersForAdvancedSchedulerScore(ctx context.Context, _ *int64, _ string) ([]gatewayprovider.ExecutionProvider, error) {
 	return p.ListSchedulableByGroupIDAndPlatform(ctx, p.group.ID, "openai")
+}
+
+// verifyModelQualityPage uses real management HTTP calls for plan edits,
+// retained results and report counts. Boundary and exclusion controls share
+// the migrated database used by the runner and the gateway contract.
+func verifyModelQualityPage(t *testing.T, db *sql.DB, store *providerpg.ProviderStore, svc *provider.ScheduledTestService, planID, id, bad int64) {
+	t.Helper()
+	ctx := t.Context()
+	var uid, kid int64
+	require.NoError(t, db.QueryRowContext(ctx, `INSERT INTO users(email,password_hash) VALUES('quality@example.invalid','fixture') RETURNING id`).Scan(&uid))
+	require.NoError(t, db.QueryRowContext(ctx, `INSERT INTO api_keys(name,key,user_id) VALUES('quality','quality-test-key',$1) RETURNING id`, uid).Scan(&kid))
+	_, err := db.ExecContext(ctx, `INSERT INTO usage_logs(user_id,billing_user_id,api_key_id,provider_id,request_id,model,upstream_model,input_tokens,cache_read_tokens,cache_creation_tokens,created_at)
+	SELECT $1,$1,$2,$3,r,'alias','gpt-5.4',i,c,w,now()-age FROM (VALUES
+	('a',4,4,2,interval '1 minute'),('b',10,0,0,interval '1 minute'),('outside',20,8,0,interval '25 hours')
+	) AS samples(r,i,c,w,age)`, uid, kid, id)
+	require.NoError(t, err)
+	_, err = db.ExecContext(ctx, `INSERT INTO ops_error_logs(api_key_id,provider_id,request_id,upstream_model,status_code,error_phase,error_type,error_owner,is_business_limited)
+	SELECT $1,$2,r,'gpt-5.4',code,'upstream','upstream_error','provider',limited FROM (VALUES
+	('c',502,false),('c',502,false),('recovered',200,false),('a',502,false),('business',429,true)
+	) AS failures(r,code,limited)`, kid, id)
+	require.NoError(t, err)
+	h := providerhttp.NewScheduledTestHandler(svc)
+	router := gin.New()
+	providerhttp.RegisterScheduledTestRoutes(router.Group("/api/v1/admin"), h)
+	server := httptest.NewServer(router)
+	defer server.Close()
+	call := func(method, path, body string) []byte {
+		t.Helper()
+		req, err := http.NewRequestWithContext(ctx, method, server.URL+"/api/v1/admin/"+path, strings.NewReader(body))
+		require.NoError(t, err)
+		req.Header.Set("Content-Type", "application/json")
+		res, err := server.Client().Do(req)
+		require.NoError(t, err)
+		defer res.Body.Close()
+		data, err := io.ReadAll(res.Body)
+		require.NoError(t, err)
+		require.Equal(t, 200, res.StatusCode, string(data))
+		return data
+	}
+	read := func(model string) provider.ModelQualityReport {
+		var report provider.ModelQualityReport
+		require.NoError(t, json.Unmarshal(call("GET", fmt.Sprintf("providers/%d/model-quality?model=%s", id, model), ""), &report))
+		return report
+	}
+	planPath := fmt.Sprintf("scheduled-test-plans/%d", planID)
+	call("PUT", planPath, `{"enabled":false}`)
+	plans := call("GET", fmt.Sprintf("providers/%d/scheduled-test-plans", id), "")
+	require.False(t, gjson.GetBytes(plans, "0.enabled").Bool())
+	r := read("gpt-5.4")
+	require.Equal(t, 24*time.Hour, r.Until.Sub(r.From))
+	require.Equal(t, []int64{2, 1, 1, 2, 4, 20, 1, 1}, []int64{r.Success, r.Failed, r.CacheHits, r.CacheSamples, r.ReadTokens, r.InputTokens, r.Wrong, r.Graded})
+	require.Len(t, r.Owners, 1)
+	require.Equal(t, bad, r.Owners[0].ResultID)
+	require.Equal(t, "restricted", r.Owners[0].State)
+	history := call("GET", planPath+"/results?limit=20", "")
+	require.Equal(t, bad, gjson.GetBytes(history, "0.id").Int())
+	y := read("gpt-5.2")
+	require.Empty(t, y.Owners)
+	require.Zero(t, y.Success+y.Failed+y.Graded+y.InputTokens+y.CacheSamples)
+	expired, err := store.ModelQuality(ctx, id, "gpt-5.4", *r.Owners[0].ExpiresAt)
+	require.NoError(t, err)
+	require.Equal(t, "expired", expired.Owners[0].State)
+	require.Equal(t, bad, expired.Owners[0].ResultID)
+	t.Logf("management HTTP paused=true result=%d owner=restricted at expiry=expired other_model=Unknown availability=2/3 cache_hits=1/2 read_tokens=4/20 synthetic_fail=1/1", bad)
+	call("PUT", planPath, `{"enabled":true}`)
 }

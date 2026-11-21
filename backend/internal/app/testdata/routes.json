@@ -170,6 +170,7 @@
   "GET /api/v1/admin/providers/:id",
   "GET /api/v1/admin/providers/:id/advanced-scheduler-score",
   "GET /api/v1/admin/providers/:id/codex/invite-reset/status",
+  "GET /api/v1/admin/providers/:id/model-quality",
   "GET /api/v1/admin/providers/:id/models",
   "GET /api/v1/admin/providers/:id/ollama-cloud-usage",
   "GET /api/v1/admin/providers/:id/scheduled-test-plans",

@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
+import { scheduledTestsAPI } from '@/api/admin/scheduledTests'
 import ModelAttributesView from '../ModelAttributesView.vue'
 import { modelAttributesAPI } from '@/api/admin/modelAttributes'
 import ModelAttributesFields from '@/components/admin/model-attributes/ModelAttributesFields.vue'
@@ -14,6 +15,14 @@ import { originalContent } from '@/i18n/content'
 // implementation, while controlled API and display dependencies expose the observable updates
 // asserted by each scenario.
 
+vi.mock('@/api/admin/scheduledTests', () => ({
+  scheduledTestsAPI: {
+    modelQuality: vi.fn(),
+    listByProvider: vi.fn(),
+    listResults: vi.fn(),
+    update: vi.fn(),
+  },
+}))
 vi.mock('@/api/admin/modelAttributes', () => ({
   modelAttributesAPI: {
     list: vi.fn(),
@@ -683,4 +692,66 @@ it.each(['', '  '])('keeps saved reference mode when the target becomes %j', asy
     }),
   )
   wrapper.unmount()
+})
+
+// The quality tab uses the server counters, retains a paused plan's owner,
+// and clears previous model evidence immediately when the operator changes it.
+it('traces a paused plan and its original result from the model quality tab', async () => {
+  const plan = { id: 3, model_id: 'alias', quality_enabled: true, enabled: true } as Awaited<
+    ReturnType<typeof scheduledTestsAPI.update>
+  >
+  vi.mocked(scheduledTestsAPI.listByProvider).mockImplementation(async () => [{ ...plan }])
+  vi.mocked(scheduledTestsAPI.update).mockImplementation(async (_, changes) =>
+    Object.assign(plan, changes),
+  )
+  vi.mocked(scheduledTestsAPI.modelQuality).mockResolvedValue({
+    provider_id: 7,
+    model: 'wire-x',
+    from: 'start',
+    until: 'end',
+    success: 2,
+    failed: 1,
+    cache_samples: 2,
+    cache_hits: 1,
+    read_tokens: 4,
+    input_tokens: 20,
+    wrong: 0,
+    graded: 0,
+    owners: [
+      {
+        plan_id: 3,
+        result_id: 12,
+        requested_model: 'alias',
+        reason: 'incorrect_answer',
+        started_at: 'start',
+        expires_at: 'end',
+        state: 'restricted',
+      },
+    ],
+  })
+  vi.mocked(scheduledTestsAPI.listResults).mockResolvedValue([])
+  const page = mount(ModelAttributesView, {
+    global: { stubs: { ...stubs, AdvancedSchedulerScoreModal: true } },
+  })
+  await page.get('[role="tablist"]').findAll('button')[2].trigger('click')
+  const form = page.get('form')
+  await form.get('input[type="number"]').setValue('7')
+  await form.findAll('input')[1].setValue('wire-x')
+  await form.trigger('submit')
+  await flushPromises()
+  expect(scheduledTestsAPI.modelQuality).toHaveBeenCalledWith(7, 'wire-x')
+  for (const value of ['66.7%', '50.0%', '20.0%', 'Unknown', '#12', 'incorrect_answer'])
+    expect(page.text()).toContain(value)
+  const button = (key: string) => page.findAll('button').find((b) => b.text().endsWith('.' + key))!
+  await button('pause').trigger('click')
+  await flushPromises()
+  expect(scheduledTestsAPI.update).toHaveBeenCalledWith(3, { enabled: false })
+  expect(page.text()).toContain('quality.paused')
+  expect(page.text()).toContain('#12')
+  await button('history').trigger('click')
+  await flushPromises()
+  expect(scheduledTestsAPI.listResults).toHaveBeenCalledWith(3, 20)
+  await form.findAll('input')[1].setValue('wire-y')
+  expect(page.text()).not.toContain('#12')
+  page.unmount()
 })

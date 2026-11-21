@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -136,4 +137,60 @@ func (r *ProviderStore) SaveQualityResult(ctx context.Context, db *sql.DB, resul
 		return nil, err
 	}
 	return stored, nil
+}
+
+// ModelQuality reads all counters and watermarks in one PostgreSQL snapshot.
+// Only identified user traffic contributes. Recovered errors have a successful
+// client status. Duplicate terminal errors for the same key and request count
+// once, and a recorded success takes precedence over a matching error.
+func (r *ProviderStore) ModelQuality(ctx context.Context, id int64, model string, at time.Time) (*provider.ModelQualityReport, error) {
+	report := &provider.ModelQualityReport{From: at.Add(-24 * time.Hour), Until: at, ProviderID: id, Model: model}
+	var owners []byte
+	rows, err := r.sql.QueryContext(ctx, `
+		WITH successes AS (
+			SELECT api_key_id, request_id, cache_read_tokens,
+			       input_tokens::bigint + cache_creation_tokens + cache_read_tokens AS total_input
+			FROM usage_logs WHERE provider_id=$1 AND COALESCE(NULLIF(upstream_model,''),model)=$2
+			  AND request_source='user' AND request_type <> 4 AND created_at >= $3 AND created_at < $4
+		), failures AS (
+			SELECT DISTINCT e.api_key_id, e.request_id FROM ops_error_logs e
+			WHERE e.provider_id=$1 AND e.upstream_model=$2 AND e.created_at >= $3 AND e.created_at < $4
+			  AND e.api_key_id IS NOT NULL AND NULLIF(e.request_id,'') IS NOT NULL
+			  AND e.status_code >= 400 AND e.error_owner='provider' AND NOT e.is_business_limited
+			  AND NOT EXISTS (SELECT 1 FROM successes s WHERE s.api_key_id=e.api_key_id AND s.request_id=e.request_id)
+		), grades AS (
+			SELECT restricted FROM provider_plan_model_verdicts WHERE provider_id=$1 AND upstream_model=$2
+			  AND started_at >= $3 AND started_at < $4
+		), owners AS (
+			SELECT v.plan_id, v.result_id, v.requested_model, v.reason, v.started_at, v.expires_at,
+			       CASE WHEN NOT v.restricted THEN 'passed' WHEN v.expires_at <= $4 THEN 'expired' ELSE 'restricted' END AS state
+			FROM provider_plan_model_state s JOIN provider_plan_model_verdicts v USING(result_id)
+			JOIN scheduled_test_plans p ON p.id=s.plan_id AND p.provider_id=s.provider_id
+			WHERE s.provider_id=$1 AND s.upstream_model=$2
+		)
+		SELECT count(*), (SELECT count(*) FROM failures), count(*) FILTER (WHERE total_input>0),
+		       count(*) FILTER (WHERE total_input>0 AND cache_read_tokens>0), COALESCE(sum(total_input) FILTER (WHERE total_input>0),0),
+		       COALESCE(sum(cache_read_tokens) FILTER (WHERE total_input>0),0),
+		       (SELECT count(*) FROM grades), (SELECT count(*) FROM grades WHERE restricted),
+		       (SELECT COALESCE(json_agg(owners ORDER BY plan_id),'[]') FROM owners)
+		FROM successes`, id, model, report.From, report.Until)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	if !rows.Next() {
+		if err := rows.Err(); err != nil {
+			return nil, err
+		}
+		return nil, sql.ErrNoRows
+	}
+	err = rows.Scan(&report.Success, &report.Failed, &report.CacheSamples,
+		&report.CacheHits, &report.InputTokens, &report.ReadTokens, &report.Graded, &report.Wrong, &owners)
+	if err != nil {
+		return nil, err
+	}
+	if err := json.Unmarshal(owners, &report.Owners); err != nil {
+		return nil, err
+	}
+	return report, nil
 }
