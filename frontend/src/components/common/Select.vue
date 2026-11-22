@@ -18,8 +18,7 @@
         error && 'select-trigger-error',
         disabled && 'select-trigger-disabled',
       ]"
-      @keydown.down.prevent="onTriggerKeyDown"
-      @keydown.up.prevent="onTriggerKeyDown"
+      @keydown="onTriggerKeyDown"
     >
       <span class="select-value">
         <slot name="selected" :option="selectedOption">
@@ -535,9 +534,15 @@ const clearSelection = () => {
   emit('change', null, null)
 }
 
-// onTriggerKeyDown opens the menu when a trigger keyboard action requests it.
-const onTriggerKeyDown = () => {
-  if (!isOpen.value) {
+// onTriggerKeyDown keeps a non-searchable list operable while focus stays on
+// the trigger. Closed buttons retain native Enter and Space activation. Events
+// from the nested clear control belong to that control.
+const onTriggerKeyDown = (event: KeyboardEvent) => {
+  if (event.target !== triggerRef.value) return
+  if (isOpen.value) {
+    onDropdownKeyDown(event)
+  } else if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+    event.preventDefault()
     isOpen.value = true
   }
 }
