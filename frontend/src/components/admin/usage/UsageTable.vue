@@ -289,12 +289,19 @@
               </div>
             </div>
             <!-- Token Detail Tooltip -->
-            <div
+            <button
+              type="button"
               class="group relative"
+              :aria-label="t('usage.tokenDetails')"
+              :aria-describedby="tokenTooltipData === row ? tokenTooltipId : undefined"
+              @focus="showTokenTooltip($event, row)"
+              @click="showTokenTooltip($event, row)"
+              @blur="hideTokenTooltip"
+              @keydown.esc="hideTokenTooltip"
               @mouseenter="showTokenTooltip($event, row)"
               @mouseleave="hideTokenTooltip"
             >
-              <div
+              <span
                 class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-primary-100 dark:bg-gray-700 dark:group-hover:bg-primary-500/8"
               >
                 <Icon
@@ -302,8 +309,8 @@
                   size="xs"
                   class="text-gray-400 group-hover:text-primary-500 dark:text-gray-500 dark:group-hover:text-primary-500"
                 />
-              </div>
-            </div>
+              </span>
+            </button>
           </div>
         </template>
 
@@ -336,12 +343,19 @@
                 >L</span
               >
               <!-- Cost details -->
-              <div
+              <button
+                type="button"
                 class="group relative"
+                :aria-label="t('usage.costDetails')"
+                :aria-describedby="tooltipData === row ? costTooltipId : undefined"
+                @focus="showTooltip($event, row)"
+                @click="showTooltip($event, row)"
+                @blur="hideTooltip"
+                @keydown.esc="hideTooltip"
                 @mouseenter="showTooltip($event, row)"
                 @mouseleave="hideTooltip"
               >
-                <div
+                <span
                   class="flex h-4 w-4 cursor-help items-center justify-center rounded-full bg-gray-100 transition-colors group-hover:bg-primary-100 dark:bg-gray-700 dark:group-hover:bg-primary-500/8"
                 >
                   <Icon
@@ -349,8 +363,8 @@
                     size="xs"
                     class="text-gray-400 group-hover:text-primary-500 dark:text-gray-500 dark:group-hover:text-primary-500"
                   />
-                </div>
-              </div>
+                </span>
+              </button>
             </div>
             <div
               v-if="row.system_usage?.cost_state === 'partial'"
@@ -507,6 +521,8 @@
         v-if="tokenTooltipVisible"
         :inert="!tokenTooltipVisible || undefined"
         ref="tokenTooltipRef"
+        :id="tokenTooltipId"
+        role="tooltip"
         data-testid="token-detail-tooltip"
         class="pointer-events-none fixed z-teleport-tooltip"
         :class="{ invisible: !tokenTooltipReady }"
@@ -768,6 +784,8 @@
         v-if="tooltipVisible"
         :inert="!tooltipVisible || undefined"
         ref="tooltipRef"
+        :id="costTooltipId"
+        role="tooltip"
         data-testid="cost-detail-tooltip"
         class="pointer-events-none fixed z-teleport-tooltip"
         :class="{ invisible: !tooltipReady }"
@@ -1103,7 +1121,7 @@
 import RequestTimingDetails from '@/components/requests/RequestTimingDetails.vue'
 import RequestIdLink from '@/components/common/RequestIdLink.vue'
 import MotionTransition from '@/components/common/MotionTransition.vue'
-import { computed, nextTick, onMounted, onUnmounted, ref } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, useId } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { useClipboard } from '@/composables/useClipboard'
@@ -1352,6 +1370,10 @@ const copyUpstreamRequestId = async (upstreamRequestId: string) => {
     if (copiedRequestId.value === upstreamRequestId) copiedRequestId.value = null
   }, COPY_FEEDBACK_MS)
 }
+
+// Each table's focused trigger describes its own floating panel.
+const tokenTooltipId = useId()
+const costTooltipId = useId()
 
 // tooltipVisible, tooltipReady, tooltipRef, tooltipPosition, and tooltipData coordinate the
 // cost panel: selection and mounting precede measured positioning, then readiness reveals
@@ -1643,7 +1665,7 @@ const formatDuration = (ms: number | null | undefined): string => {
 // a mounted element. These checks discard work from an opening superseded by another row or
 // a close action. Only a current panel receives its calculated position and becomes ready
 // for display.
-const showTooltip = async (event: MouseEvent, row: AdminUsageLog) => {
+const showTooltip = async (event: Event, row: AdminUsageLog) => {
   // Capture the cost selection before rendering, then reject hidden or replaced
   // rows before publishing measured position and readiness.
   const target = event.currentTarget as HTMLElement
@@ -1672,7 +1694,7 @@ const hideTooltip = () => {
 // closed or replaced while rendering. The accepted opening computes its viewport position
 // before exposing the ready state, so another row's measurement cannot be published into
 // the current token panel.
-const showTokenTooltip = async (event: MouseEvent, row: AdminUsageLog) => {
+const showTokenTooltip = async (event: Event, row: AdminUsageLog) => {
   // Capture the token selection before rendering, then reject hidden or replaced
   // rows before publishing measured position and readiness.
   const target = event.currentTarget as HTMLElement

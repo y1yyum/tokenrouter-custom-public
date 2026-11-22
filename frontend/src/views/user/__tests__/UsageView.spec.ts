@@ -178,11 +178,13 @@ const chartStub = { template: '<div />' }
 // user permissions and team attribution configuration.
 const UsageTableStub = {
   props: [
+    'data', // records on the selected usage page
     'columns', // visible table column definitions
     'userClickable', // administrator navigation permission flag
     'compactUserColumn', // compact member attribution flag
   ],
-  template: '<div data-test="usage-table" />',
+  template:
+    '<div data-test="usage-table"><span v-for="row in data" :key="row.id">{{ row.request_id }}</span></div>',
 }
 // UsageExportDialogStub captures inherited date, filter, and chip props and exposes events
 // used to drive active background export badge transitions.
@@ -354,6 +356,67 @@ describe('user UsageView', () => {
     )
     expect(list).toHaveBeenCalledWith(1, 100, { scope: 'personal' })
     expect(getAvailable).toHaveBeenCalledWith('personal', undefined, false)
+  })
+
+  // A second page fails after the first page has rendered. Retrying must read
+  // the selected page and keep the summary for the entire date range.
+  it('retries a failed page without showing rows from the previous page', async () => {
+    query.mockResolvedValueOnce({ items: [usageLog], total: 51 })
+    const wrapper = mountUsageView()
+    await flushPromises()
+    expect(wrapper.get('[data-test="usage-table"]').text()).toBe(usageLog.request_id)
+
+    query.mockRejectedValueOnce(new Error('unavailable'))
+    wrapper.getComponent({ name: 'Pagination' }).vm.$emit('update:page', 2)
+    await flushPromises()
+    expect(wrapper.find('[data-test="usage-table"]').exists()).toBe(false)
+    expect(wrapper.findComponent({ name: 'Pagination' }).exists()).toBe(false)
+    const failure = wrapper.get('[role="alert"]')
+    expect(failure.text()).toContain('Failed to load')
+
+    query.mockResolvedValueOnce({
+      items: [{ ...usageLog, id: 2, request_id: 'page-two' }],
+      total: 51,
+    })
+    await failure.get('button').trigger('click')
+    await flushPromises()
+    expect(query.mock.lastCall?.[0]).toMatchObject({ page: 2 })
+    expect(wrapper.get('[data-test="usage-table"]').text()).toBe('page-two')
+    expect(getStats).toHaveBeenCalledTimes(1)
+  })
+
+  // A new date range has no matching records while an older request is still
+  // pending. Its late failure must leave the successful empty result visible.
+  it('resets the page on date changes and ignores superseded list failures', async () => {
+    let rejectOld!: (error: Error) => void
+    query.mockResolvedValueOnce({ items: [usageLog], total: 51 })
+    const wrapper = mountUsageView()
+    await flushPromises()
+    query.mockImplementationOnce(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectOld = reject
+        }),
+    )
+    wrapper.getComponent({ name: 'Pagination' }).vm.$emit('update:page', 2)
+    query.mockResolvedValueOnce({ items: [], total: 0 })
+    wrapper.getComponent({ name: 'DateRangePicker' }).vm.$emit('change', {
+      startDate: '2026-11-20',
+      endDate: '2026-11-20',
+      preset: null,
+    })
+    await flushPromises()
+    rejectOld(new Error('superseded'))
+    await flushPromises()
+    expect(query.mock.lastCall?.[0]).toMatchObject({
+      page: 1,
+      start_date: '2026-11-20',
+      end_date: '2026-11-20',
+    })
+    expect(wrapper.get('[data-test="usage-table"]').text()).toBe('')
+    expect(wrapper.findComponent({ name: 'Pagination' }).exists()).toBe(false)
+    expect(wrapper.find('[role="alert"]').exists()).toBe(false)
+    expect(showError).not.toHaveBeenCalled()
   })
 
   // Group options contain translated and legacy names before a locale change. The test

@@ -24,7 +24,8 @@ import (
 // indexed access with isolated PostgreSQL fixtures. Exact local request identity
 // takes precedence over an unrelated upstream alias with the same text. Other
 // transactional scenarios verify response-model migration defaults, historical
-// deleted-user hydration, and requested display-model ordering.
+// deleted-user hydration, requested display-model ordering, and agreement between
+// paginated personal records and the selected day's summary.
 
 // TestUsageRequestIDConditionUsesIndexes creates sparse indexed records with a
 // conflicting upstream alias and legacy null ID after warming public-table plans.
@@ -266,4 +267,69 @@ func (s *UsageLogRepoSuite) TestListWithFilters_SortByModelAsc() {
 	s.Require().Len(logs, 2)
 	s.Require().Equal("a-model", logs[0].RequestedModel)
 	s.Require().Equal("z-model", logs[1].RequestedModel)
+}
+
+// TestPersonalUsagePagesMatchSummary records three charges across one local day.
+// It checks each page against the whole day's totals while excluding another
+// actor and both adjacent dates, then verifies a successful empty window.
+func (s *UsageLogRepoSuite) TestPersonalUsagePagesMatchSummary() {
+	reader := mustCreateUser(s.T(), s.client, &identity.User{Email: "usage-reader@example.test"})
+	other := mustCreateUser(s.T(), s.client, &identity.User{Email: "other-reader@example.test"})
+	key := mustCreateApiKey(s.T(), s.client, &apikey.APIKey{UserID: reader.ID, Key: "usage-reader", Name: "reader"})
+	otherKey := mustCreateApiKey(s.T(), s.client, &apikey.APIKey{UserID: other.ID, Key: "other-reader", Name: "other"})
+	provider := mustCreateProvider(s.T(), s.client, &providercore.Record{Name: "usage-pages"})
+	loc, err := time.LoadLocation("Africa/Johannesburg")
+	s.Require().NoError(err)
+	start := time.Date(2026, 11, 20, 0, 0, 0, 0, loc)
+	end := start.AddDate(0, 0, 1)
+	for _, row := range []usage.UsageLog{
+		{Model: "f04-alpha", CreatedAt: start, InputTokens: 60, OutputTokens: 30, CacheCreationTokens: 10, CacheReadTokens: 25, ActualCost: 0.25},
+		{Model: "f04-beta", CreatedAt: start.Add(12*time.Hour + 30*time.Minute), InputTokens: 35, OutputTokens: 15, CacheCreationTokens: 5, CacheReadTokens: 10, ActualCost: 0.50},
+		{Model: "f04-alpha", CreatedAt: end.Add(-time.Second), InputTokens: 5, OutputTokens: 5, CacheCreationTokens: 5, CacheReadTokens: 5, ActualCost: 0.25},
+	} {
+		row.UserID, row.APIKeyID, row.ProviderID = reader.ID, key.ID, provider.ID
+		row.TotalCost = 2 * row.ActualCost
+		_, err := s.repo.Create(s.ctx, &row)
+		s.Require().NoError(err)
+	}
+	s.createUsageLog(reader, key, provider, 100, 100, 8, start.Add(-time.Second))
+	s.createUsageLog(reader, key, provider, 100, 100, 8, end)
+	s.createUsageLog(other, otherKey, provider, 100, 100, 8, start)
+
+	filters := UsageLogFilters{UserID: reader.ID, IncludeOwnedTeam: true, StartTime: &start, EndTime: &end}
+	params := pagination.PaginationParams{Page: 1, PageSize: 2, SortBy: "created_at", SortOrder: "desc"}
+	first, page, err := s.repo.ListWithFilters(s.ctx, params, filters)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), page.Total)
+	s.Require().Len(first, 2)
+	params.Page = 2
+	second, page, err := s.repo.ListWithFilters(s.ctx, params, filters)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(3), page.Total)
+	s.Require().Len(second, 1)
+	rows := append(first, second...)
+	for i, row := range rows {
+		s.Equal(reader.ID, row.UserID)
+		s.Equal([]string{"f04-alpha", "f04-beta", "f04-alpha"}[i], row.Model)
+		s.Equal([]int{20, 65, 125}[i], row.TotalTokens())
+		s.Equal([]float64{0.25, 0.50, 0.25}[i], row.ActualCost)
+	}
+	stats, err := s.repo.GetUserStatsWithFilters(s.ctx, filters)
+	s.Require().NoError(err)
+	s.Equal(int64(3), stats.TotalRequests)
+	s.Equal(int64(210), stats.TotalTokens)
+	s.Equal(2.0, stats.TotalCost)
+	s.Equal(1.0, stats.TotalActualCost)
+
+	start, end = end.AddDate(0, 0, 1), end.AddDate(0, 0, 2)
+	params.Page = 1
+	empty, page, err := s.repo.ListWithFilters(s.ctx, params, filters)
+	s.Require().NoError(err)
+	s.Empty(empty)
+	s.Zero(page.Total)
+	stats, err = s.repo.GetUserStatsWithFilters(s.ctx, filters)
+	s.Require().NoError(err)
+	s.Zero(stats.TotalRequests)
+	s.Zero(stats.TotalTokens)
+	s.Zero(stats.TotalActualCost)
 }

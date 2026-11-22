@@ -13,7 +13,7 @@
   - [身份登录与 One Tap](#身份登录与-one-tap)、[API Key 结算策略](#api-key-结算策略)、[API Key 凭据轮换](#api_key_rotation)。
   - [分组协议、价格与路由策略](#分组协议价格与路由策略)、[提供商管理、测试与调度诊断](#提供商管理测试与调度诊断)、[创作台接口与管理设置](#创作台接口与管理设置)。
   - [支付管理恢复](#payment_admin_recovery)、[用户专属充值倍率与下单校验](#personal_recharge_multiplier_api)、[订阅自助撤销](#subscription_self_revoke_api)、[使用记录后台导出与统计筛选](#usage_export_tasks_api)。
-  - [普通用户概览](#user_dashboard_usage)、[公告接口](#announcement_api)、[社交分享封面](#social_share_image)、[站点页面](#site_pages)、[备份与系统维护](#备份与系统维护)、[SystemOne 与 MCP OAuth 入口](#systemone-与-mcp-oauth-入口)。
+  - [普通用户概览](#user_dashboard_usage)、[普通用户使用记录](#user_usage_records)、[公告接口](#announcement_api)、[社交分享封面](#social_share_image)、[站点页面](#site_pages)、[备份与系统维护](#备份与系统维护)、[SystemOne 与 MCP OAuth 入口](#systemone-与-mcp-oauth-入口)。
 - [面板命令幂等](#write_idempotency)：幂等键构成、重放、冲突和存储故障策略。
 - [响应、错误与性能计时](#response_errors)：面板 envelope、协议错误格式与 `usage_logs.timings` 指标口径。
 - [请求关联](#请求关联)：本地请求 ID 透传、资金去重与诊断查询。
@@ -277,6 +277,18 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 无已保存的偏好时，趋势卡默认选中今天。日期选择器包含结束日，浏览器发送起始日零点和结束日的次日零点，接口按左闭右开区间取数。以 `Africa/Johannesburg` 的 2026-11-20 为例，UTC 窗口从 11 月 19 日 22:00 到 11 月 20 日 22:00，当地 00:00 和 23:59:59 分别落在当天第一个和最后一个小时桶。普通用户查询本人记录，团队所有者另可见其团队范围内的使用记录。
 
 缺记录的小时在图上补零。查询成功且整窗为空时，请求数、Token、消费为零，缓存命中率显示 `—`。本期趋势读取失败时，四张卡显示 `—`，图表提示刷新重试。当前只经过部分时段时，卡片环比和对照线使用上期相同数量的桶，包含与当前进行中时段对应的上期桶。
+
+<a id="user_usage_records"></a>
+### 普通用户使用记录
+
+| `/usage` 的读取 | 范围与返回值 |
+| --- | --- |
+| 日期与身份 | 页面默认选浏览器当地今天。列表和摘要共用 `start_date`、`end_date` 与 IANA `timezone`。两个日期相同时，从当地零点读到次日零点，含起点。登录用户可见自己的记录，团队所有者还可见所拥有团队的记录。 |
+| 明细与分页 | `GET /api/v1/usage` 返回当前页的 `items` 和全部匹配记录数 `total`。`page` 从 1 开始，`page_size` 控制每页条数。默认按 `created_at` 倒序，同一时刻按记录 ID 倒序。页面按浏览器当地时间显示每笔请求。 |
+| 用量与扣费 | 一笔请求的 Token 合计为 `input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens`。该笔实扣取 `actual_cost`。逐笔 Token 与费用明细可通过鼠标或键盘焦点查看，Esc 关闭。 |
+| 整窗摘要 | `GET /api/v1/usage/stats` 返回同一筛选范围内的 `total_requests`、`total_tokens`、标价 `total_cost` 和实扣 `total_actual_cost`。翻页只重读列表，页头消费显示整窗实扣。 |
+
+更改日期或筛选条件后从第 1 页开始。窗口内没有匹配记录时，列表返回 `items: []`、`total: 0`，页面显示空态并隐藏分页，摘要中的请求、Token 和费用均为零。列表读取失败时，页面隐藏上一页的明细及分页，显示错误和重试按钮。重试保留当前日期、筛选条件、排序和页码。
 
 <a id="usage_export_tasks_api"></a>
 ### 使用记录后台导出与统计筛选

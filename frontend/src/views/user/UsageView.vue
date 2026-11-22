@@ -312,7 +312,9 @@
         class="card overflow-hidden"
         data-tour="team-usage-records"
       >
+        <LoadErrorState v-if="logsFailed" :message="t('usage.failedToLoad')" @retry="loadLogs" />
         <UsageTable
+          v-else
           flat
           column-order-storage-key="user-usage-column-order"
           :data="usageLogs"
@@ -388,6 +390,7 @@ import {
 } from '@/api/team'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import Pagination from '@/components/common/Pagination.vue'
+import LoadErrorState from '@/components/common/LoadErrorState.vue'
 import Select, { type SelectOption } from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import FilterDropdown from '@/components/common/FilterDropdown.vue'
@@ -481,6 +484,8 @@ const teamMemberSeries = ref<
 // Loading flags distinguish the records table and chart requests so each section can render
 // its own progress while showExportDialog coordinates background CSV export tasks.
 const loading = ref(false)
+// A failed page offers a retry for the same filters and page number.
+const logsFailed = ref(false)
 const chartsLoading = ref(false)
 const modelStatsLoading = ref(false)
 const endpointStatsLoading = ref(true)
@@ -810,8 +815,9 @@ const buildUsageListParams = (page: number, pageSize: number): UsageQueryParams 
 //
 // A response publishes rows and total only while its signal remains active. Finalization
 // checks controller identity so a superseded request cannot hide the loading indicator of a
-// newer request. The error path retains previously displayed rows, with cancellation and
-// ordinary failures handled by the page's notification policy.
+// newer request. A current failure clears the previous rows and count so neither
+// can be mistaken for results from the selected page. Retrying preserves the selection.
+// @project-doc docs/interfaces/http_api.md#user_usage_records
 const loadLogs = async () => {
   // Abort the previous list owner before installing the new controller so late completion
   // can identify that it no longer owns publication.
@@ -819,6 +825,7 @@ const loadLogs = async () => {
   const controller = new AbortController()
   abortController = controller
   loading.value = true
+  logsFailed.value = false
   try {
     const res = await usageAPI.query(buildUsageListParams(pagination.page, pagination.page_size), {
       signal: controller.signal,
@@ -828,11 +835,14 @@ const loadLogs = async () => {
       pagination.total = res.total
     }
   } catch (error: any) {
-    // AbortError and client cancellation codes identify superseded work; other failures
-    // notify the user while retaining the previously displayed usage records.
-    if (error?.name !== 'AbortError' && error?.code !== 'ERR_CANCELED') {
-      appStore.showError(t('usage.failedToLoad'))
-    }
+    // Older requests may reject after another page succeeds, even when their exception
+    // does not identify cancellation. Only the current request owns the failure state.
+    if (controller.signal.aborted || error?.name === 'AbortError' || error?.code === 'ERR_CANCELED')
+      return
+    usageLogs.value = []
+    pagination.total = 0
+    logsFailed.value = true
+    appStore.showError(t('usage.failedToLoad'))
   } finally {
     if (abortController === controller) loading.value = false
   }

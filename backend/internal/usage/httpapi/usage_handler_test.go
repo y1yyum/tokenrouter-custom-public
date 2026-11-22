@@ -383,6 +383,42 @@ func TestDashboardTrendForwardsBrowserCalendar(t *testing.T) {
 	}
 }
 
+// TestUserUsageListAndStatsShareLocalDate checks the two reads issued for
+// one selected date. Paging the rows preserves the actor and UTC boundaries
+// used by the summary, including the shorter local day when DST starts.
+func TestUserUsageListAndStatsShareLocalDate(t *testing.T) {
+	for _, tc := range []struct {
+		zone  string // browser timezone name
+		date  string // selected local date
+		start string // inclusive UTC boundary
+		end   string // exclusive UTC boundary
+	}{
+		{"Africa/Johannesburg", "2026-11-20", "2026-11-19T22:00:00Z", "2026-11-20T22:00:00Z"},
+		{"America/New_York", "2026-03-08", "2026-03-08T05:00:00Z", "2026-03-09T04:00:00Z"},
+	} {
+		t.Run(tc.zone, func(t *testing.T) {
+			repo := &userUsageRepoCapture{}
+			router := newUserUsageRequestTypeTestRouter(repo)
+			query := "?start_date=" + tc.date + "&end_date=" + tc.date + "&timezone=" + tc.zone
+			for _, path := range []string{"/usage" + query + "&page=2&page_size=10", "/usage/stats" + query} {
+				rec := httptest.NewRecorder()
+				router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path, nil))
+				require.Equal(t, http.StatusOK, rec.Code)
+			}
+			require.Equal(t, 2, repo.listParams.Page)
+			require.Equal(t, 10, repo.listParams.PageSize)
+			for _, filters := range []usage.UsageLogFilters{repo.listFilters, repo.statsFilters} {
+				require.Equal(t, int64(42), filters.UserID)
+				require.True(t, filters.IncludeOwnedTeam)
+				require.NotNil(t, filters.StartTime)
+				require.NotNil(t, filters.EndTime)
+				require.Equal(t, tc.start, filters.StartTime.UTC().Format(time.RFC3339))
+				require.Equal(t, tc.end, filters.EndTime.UTC().Format(time.RFC3339))
+			}
+		})
+	}
+}
+
 // TestUserUsageListRequestTypePriority sends WS v2 beside malformed stream
 // text. It checks authenticated actor and owned-team scope, nonpersonal
 // selection, captured category and absent legacy stream.

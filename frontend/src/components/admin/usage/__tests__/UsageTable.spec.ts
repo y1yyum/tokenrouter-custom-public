@@ -292,13 +292,14 @@ describe('admin UsageTable request ID column', () => {
     })
 
     expect(wrapper.text()).toContain('req-admin-visible-id')
-    await wrapper.get('button[title="Copy request ID"]').trigger('click')
+    const copyButton = wrapper.get('button[title="Copy request ID"]')
+    await copyButton.trigger('click')
 
     expect(clipboardMocks.copyToClipboard).toHaveBeenCalledWith(
       'req-admin-visible-id',
       'Request ID copied',
     )
-    expect(wrapper.get('button').attributes('title')).toBe('Copied')
+    expect(copyButton.attributes('title')).toBe('Copied')
   })
 })
 
@@ -541,6 +542,56 @@ describe('admin UsageTable tooltip', () => {
     expect(text).toContain('$5.0000 / 1M tokens')
     expect(text).toContain('$30.0000 / 1M tokens')
     expect(text).toContain('$0.069568')
+  })
+
+  // A personal usage row has cache traffic and a discounted charge. Keyboard
+  // focus exposes its full token count and the amount deducted from the user.
+  it('exposes token and charge details to keyboard users', async () => {
+    const wrapper = mount(UsageTable, {
+      props: {
+        data: [
+          {
+            ...baseImageRow,
+            billing_mode: 'token',
+            image_count: 0,
+            model: 'f04-alpha',
+            input_tokens: 60,
+            output_tokens: 30,
+            cache_creation_tokens: 10,
+            cache_read_tokens: 25,
+            total_cost: 0.5,
+            actual_cost: 0.25,
+          },
+        ],
+        columns: [],
+        showProviderBilling: false,
+        showStandardCost: false,
+      },
+      global: {
+        stubs: {
+          DataTable: DataTableStub,
+          Icon: true,
+          Teleport: true,
+          MotionTransition: { template: '<slot />' },
+        },
+      },
+    })
+    const tokens = wrapper.get('button[aria-label="usage.tokenDetails"]')
+    await tokens.trigger('focus')
+    const breakdown = wrapper.get('[data-testid="token-detail-tooltip"]')
+    expect(tokens.attributes('aria-describedby')).toBe(breakdown.attributes('id'))
+    expect(breakdown.text()).toContain('125')
+    await tokens.trigger('blur')
+    expect(wrapper.find('[data-testid="token-detail-tooltip"]').exists()).toBe(false)
+
+    const cost = wrapper.get('button[aria-label="Cost Breakdown"]')
+    await cost.trigger('focus')
+    const charges = wrapper.get('[data-testid="cost-detail-tooltip"]')
+    expect(cost.attributes('aria-describedby')).toBe(charges.attributes('id'))
+    expect(charges.text()).toContain('$0.250000')
+    expect(charges.text()).not.toContain('$0.500000')
+    await cost.trigger('keydown', { key: 'Escape' })
+    expect(wrapper.find('[data-testid="cost-detail-tooltip"]').exists()).toBe(false)
   })
 
   // Floating detail panels open near the edge of a narrow viewport. The test protects their
