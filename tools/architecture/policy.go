@@ -240,6 +240,11 @@ func rulesFor(filename, standardLibrary string) []*dependencyRule {
 			external = append(external, expression(library))
 		}
 	}
+	// The cross-adapter MCP scenario uses the official client for the SDK
+	// handshake and tool calls. Keep that dependency scoped to its test file.
+	if filename == "tests/integration/mcp/management_authorization_scenario_test.go" {
+		external = append(external, expression("github.com/modelcontextprotocol/go-sdk/mcp"))
+	}
 	rules := []*dependencyRule{{ShouldOnlyDependsOn: &dependencies{
 		Internal: []string{"^" + regexp.QuoteMeta(modulePath) + "(/|$)"},
 		External: closed(external), Standard: standard,

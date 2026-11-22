@@ -38,7 +38,8 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/scheduler/policy"
 )
 
-// gateway_quality_routes_integration_test.go drives real gateway requests while
+// gateway_quality_routes_scenario_integration_test.go drives the real HTTP and
+// WebSocket routes assembled by gateway_openai_text_http.go and gateway_openai_ws_http.go while
 // a scheduled probe changes a provider's eligibility. Loopback servers record
 // the final model independently of scheduler observations. Each load worker
 // owns its billing journals and reads the same PostgreSQL database.

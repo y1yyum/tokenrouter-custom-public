@@ -47,7 +47,8 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/testutil/postgrescontainer"
 )
 
-// A controlled clock tick drives the production runner through a loopback probe.
+// provider_scheduled_quality_scenario_integration_test.go drives provider_testing.go
+// and the production scheduled runner through a loopback probe using a controlled clock.
 // Independent loopback clients then observe which provider serves each model.
 type qualityPreviewPool struct {
 	origin              *routing.Group // optional distinct client group before fallback

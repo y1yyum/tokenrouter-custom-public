@@ -1,13 +1,13 @@
-package httpapi
+package mcp_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/gin-gonic/gin"
@@ -21,6 +21,7 @@ import (
 	identityhttp "github.com/TokenFlux/TokenRouter/internal/identity/httpapi"
 	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
 	control "github.com/TokenFlux/TokenRouter/internal/mcp"
+	mcphttp "github.com/TokenFlux/TokenRouter/internal/mcp/httpapi"
 	"github.com/TokenFlux/TokenRouter/internal/mcp/rediscache"
 	providerhttp "github.com/TokenFlux/TokenRouter/internal/provider/httpapi"
 	"github.com/TokenFlux/TokenRouter/internal/server/adminapi"
@@ -49,6 +50,11 @@ type operationAuditStore struct {
 type fixedApplication struct {
 	identity.MCPOAuthResolver                   // stable browser grant lookup is outside this fixture
 	grant                     identity.MCPToken // immutable synthetic application grant
+}
+
+// sdkBearerTransport supplies the fixture credential to every SDK HTTP request.
+type sdkBearerTransport struct {
+	credential string // manual or delegated credential exercised by this case
 }
 
 // GetValue observes a business read of the registered key status endpoint.
@@ -122,8 +128,7 @@ func TestF06MCPToolAuthorization(t *testing.T) {
 		{"browser_continuation", "oauth", "read_operation", browser, "interaction_required", 0, 0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			accounts := &accountFixture{}
-			accounts.role.Store(identity.RoleAdmin)
+			accounts := userReader{}
 			// Both sources use the same numeric ID. Independent permissions and audit attribution must survive this overlap through internal HTTP dispatch.
 			manual := identity.MCPToken{ID: 1, UserID: 1, Enabled: true, SkipBrowserConfirmation: true, Prefix: "manual-example", Permissions: []string{list, remove, connectProvider, listProviders}}
 			app := identity.MCPToken{ID: 1, UserID: 1, Enabled: true, SkipBrowserConfirmation: true, Source: "oauth", Prefix: "oauth:1", Permissions: []string{list, browser, connectProvider}}
@@ -136,7 +141,7 @@ func TestF06MCPToolAuthorization(t *testing.T) {
 				state = rediscache.NewState(client, nil)
 			}
 			credential := "tr_mcp_" + strings.Repeat("a", 43)
-			tokens := identity.NewMCPTokenService(&tokenFixture{token: manual, digest: identity.MCPTokenDigest(credential)}, accounts, nil)
+			tokens := identity.NewMCPTokenService(tokenRepository{token: manual, digest: identity.MCPTokenDigest(credential)}, accounts, nil)
 			tokens.SetOAuth(fixedApplication{grant: app})
 			grant := manual
 			if tc.source == "oauth" {
@@ -167,13 +172,13 @@ func TestF06MCPToolAuthorization(t *testing.T) {
 					c.Status(http.StatusNoContent)
 				})
 			}
-			handler := NewHandler(tokens, state, nil, accounts, nil, Options{})
+			handler := mcphttp.NewHandler(tokens, state, nil, accounts, nil, mcphttp.Options{})
 			require.NoError(t, handler.Mount(router, admin, auditor))
 			server := httptest.NewServer(router)
 			t.Cleanup(server.Close)
 			client := mcp.NewClient(&mcp.Implementation{Name: "contract", Version: "1"}, nil)
 			session, err := client.Connect(t.Context(), &mcp.StreamableClientTransport{
-				Endpoint: server.URL + "/mcp", HTTPClient: &http.Client{Transport: bearerTransport{credential}},
+				Endpoint: server.URL + "/mcp", HTTPClient: &http.Client{Transport: sdkBearerTransport{credential: credential}},
 				MaxRetries: -1, DisableStandaloneSSE: true,
 			}, nil)
 			require.NoError(t, err)
@@ -182,8 +187,7 @@ func TestF06MCPToolAuthorization(t *testing.T) {
 			if tc.op != "" {
 				args["operation_id"] = tc.op
 			}
-			sdk := &mcpFixture{session: session}
-			result, data := sdk.invoke(t, tc.tool, args)
+			result, data := invokeManagementTool(t, session, tc.tool, args)
 			if confirmed {
 				require.False(t, result.IsError)
 				require.Equal(t, "confirmation_required", data["status"])
@@ -199,7 +203,7 @@ func TestF06MCPToolAuthorization(t *testing.T) {
 				require.NoError(t, response.Body.Close())
 				require.Equal(t, http.StatusOK, response.StatusCode)
 				args["confirmation_id"] = id
-				result, data = sdk.invoke(t, tc.tool, args)
+				result, data = invokeManagementTool(t, session, tc.tool, args)
 			}
 			server.Close()
 			// Flush every event emitted during this call before checking the per-operation audit count and the authenticated actor.
@@ -288,40 +292,30 @@ func TestF06MCPToolAuthorization(t *testing.T) {
 	}
 }
 
-// TestF06MCPCredentialAdmission changes the persisted state of a previously
-// admitted manual token. The next ordinary request observes each rejection at
-// transport admission before any tool can perform a fixture mutation.
-func TestF06MCPCredentialAdmission(t *testing.T) {
-	for _, state := range []string{"expired", "revoked", "disabled", "owner_demoted"} {
-		t.Run(state, func(t *testing.T) {
-			f := newMCPFixture(t)
-			past := time.Unix(1, 0).UTC()
-			// Set the persisted state under the same fixture lock used by transport reads before sending the next ordinary request.
-			f.repo.mu.Lock()
-			switch state {
-			case "expired":
-				f.repo.token.ExpiresAt = &past
-			case "revoked":
-				f.repo.token.RevokedAt = &past
-			case "disabled":
-				f.repo.token.Enabled = false
-			case "owner_demoted":
-				f.accounts.role.Store(identity.RoleUser)
-			}
-			f.repo.mu.Unlock()
-			// Send a valid, granted fixture write so only transport authentication determines whether the mounted business handler can run.
-			body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_operation","arguments":{"operation_id":"fixture.create","body":{}}}}`)
-			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, f.server.URL+"/mcp", body)
-			require.NoError(t, err)
-			req.Header.Set("Content-Type", "application/json")
-			req.Header.Set("Accept", "application/json, text/event-stream")
-			req.Header.Set("Authorization", "Bearer "+f.credential)
-			response, err := f.server.Client().Do(req)
-			require.NoError(t, err)
-			require.NoError(t, response.Body.Close())
-			require.Equal(t, http.StatusUnauthorized, response.StatusCode)
-			require.Zero(t, f.writes.Load())
-			t.Logf("credential=manual state=%s entry=POST /mcp http=%d writes=%d actor=none", state, response.StatusCode, f.writes.Load())
-		})
-	}
+// RoundTrip copies the request before attaching the case's bearer credential.
+func (b sdkBearerTransport) RoundTrip(request *http.Request) (*http.Response, error) {
+	cloned := request.Clone(request.Context())
+	cloned.Header.Set("Authorization", "Bearer "+b.credential)
+	return http.DefaultTransport.RoundTrip(cloned)
+}
+
+// invokeManagementTool calls tools through the authenticated SDK session. Decode
+// structured content so the assertions observe JSON numbers and collections.
+func invokeManagementTool(t *testing.T, session *mcp.ClientSession, name string, arguments map[string]any) (*mcp.CallToolResult, map[string]any) {
+	t.Helper()
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: arguments})
+	require.NoError(t, err)
+	raw, err := json.Marshal(result.StructuredContent)
+	require.NoError(t, err)
+	var decoded map[string]any
+	require.NoError(t, json.Unmarshal(raw, &decoded))
+	return result, decoded
+}
+
+// jsonTestValue asserts a decoded field's type before the scenario uses it.
+func jsonTestValue[T any](t *testing.T, value any) T {
+	t.Helper()
+	result, ok := value.(T)
+	require.True(t, ok, "unexpected JSON value type %T", value)
+	return result
 }

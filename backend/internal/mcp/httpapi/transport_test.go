@@ -886,3 +886,41 @@ func TestResultParsingRequiresOneCompleteJSONValue(t *testing.T) {
 	require.True(t, result.IsError)
 	require.Equal(t, "outcome_unknown", jsonTestValue[map[string]any](t, result.StructuredContent)["status"])
 }
+
+// TestF06MCPCredentialAdmission changes the persisted state of a previously
+// admitted manual token. The next ordinary request observes each rejection at
+// transport admission before any tool can perform a fixture mutation.
+func TestF06MCPCredentialAdmission(t *testing.T) {
+	for _, state := range []string{"expired", "revoked", "disabled", "owner_demoted"} {
+		t.Run(state, func(t *testing.T) {
+			f := newMCPFixture(t)
+			past := time.Unix(1, 0).UTC()
+			// Set the persisted state under the same fixture lock used by transport reads before sending the next ordinary request.
+			f.repo.mu.Lock()
+			switch state {
+			case "expired":
+				f.repo.token.ExpiresAt = &past
+			case "revoked":
+				f.repo.token.RevokedAt = &past
+			case "disabled":
+				f.repo.token.Enabled = false
+			case "owner_demoted":
+				f.accounts.role.Store(identity.RoleUser)
+			}
+			f.repo.mu.Unlock()
+			// Send a valid, granted fixture write so only transport authentication determines whether the mounted business handler can run.
+			body := strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"execute_operation","arguments":{"operation_id":"fixture.create","body":{}}}}`)
+			req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, f.server.URL+"/mcp", body)
+			require.NoError(t, err)
+			req.Header.Set("Content-Type", "application/json")
+			req.Header.Set("Accept", "application/json, text/event-stream")
+			req.Header.Set("Authorization", "Bearer "+f.credential)
+			response, err := f.server.Client().Do(req)
+			require.NoError(t, err)
+			require.NoError(t, response.Body.Close())
+			require.Equal(t, http.StatusUnauthorized, response.StatusCode)
+			require.Zero(t, f.writes.Load())
+			t.Logf("credential=manual state=%s entry=POST /mcp http=%d writes=%d actor=none", state, response.StatusCode, f.writes.Load())
+		})
+	}
+}

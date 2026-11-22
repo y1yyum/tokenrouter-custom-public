@@ -1,4 +1,4 @@
-package httpapi_test
+package identityhttp_test
 
 import (
 	"context"
