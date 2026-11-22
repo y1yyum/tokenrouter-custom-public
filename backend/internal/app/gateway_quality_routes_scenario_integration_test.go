@@ -81,7 +81,7 @@ func verifyQualityWSTurn(t *testing.T, id int64, mode string, read gatewayprovid
 			t.Error(err)
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		for {
 			_, body, err := conn.Read(r.Context())
 			if err != nil {
@@ -205,7 +205,7 @@ func verifyQualityRoutes(t *testing.T, ids []int64, read gatewayprovider.PlanMod
 		durations := make([]time.Duration, n)
 		var wg sync.WaitGroup
 		start := make(chan struct{})
-		for worker := 0; worker < m.workers; worker++ {
+		for worker := range m.workers {
 			c := qualityHTTPCase{path: "/v1/responses", model: "client-x", actual: "gpt-5.4", count: m.candidates, winner: 1 + m.retries, retry: m.retries > 0}
 			call := newQualityHTTPClient(t, ids, c, counted)
 			wg.Go(func() {
@@ -263,12 +263,12 @@ func newQualityHTTPClient(t *testing.T, ids []int64, tc qualityHTTPCase, read ga
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			body, err := io.ReadAll(r.Body)
 			if err != nil {
-				http.Error(w, "bad request", 400)
+				http.Error(w, "bad request", http.StatusBadRequest)
 				return
 			}
 			seen <- fmt.Sprintf("P%d %s %s", rank, r.URL.Path, gjson.GetBytes(body, "model").String())
 			if tc.retry && rank == 1 {
-				http.Error(w, "temporarily unavailable", 502)
+				http.Error(w, "temporarily unavailable", http.StatusBadGateway)
 				return
 			}
 			r.Body = io.NopCloser(strings.NewReader(string(body)))
@@ -350,7 +350,7 @@ func newQualityHTTPClient(t *testing.T, ids []int64, tc qualityHTTPCase, read ga
 				Data policy.AdvancedSchedulerScoreDiagnosticResponse `json:"data"`
 			}
 			data, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			require.NoError(t, resp.Body.Close())
 			require.NoError(t, err)
 			require.Equal(t, 200, resp.StatusCode, string(data))
 			require.NoError(t, json.Unmarshal(data, &envelope))
@@ -388,7 +388,7 @@ func newQualityHTTPClient(t *testing.T, ids []int64, tc qualityHTTPCase, read ga
 		if tc.native {
 			payload = fmt.Sprintf(`{"model":%q,"stream":true,"input":[{"type":"compaction_trigger"}]}`, tc.model)
 		}
-		req, err := http.NewRequestWithContext(t.Context(), "POST", server.URL+tc.path, strings.NewReader(payload))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+tc.path, strings.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set("Authorization", "Bearer fixture-client")
 		req.Header.Set("Content-Type", "application/json")
@@ -396,7 +396,7 @@ func newQualityHTTPClient(t *testing.T, ids []int64, tc qualityHTTPCase, read ga
 		resp, err := server.Client().Do(req)
 		require.NoError(t, err)
 		data, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
+		require.NoError(t, resp.Body.Close())
 		elapsed := time.Since(start)
 		require.NoError(t, err)
 		if tc.denied {

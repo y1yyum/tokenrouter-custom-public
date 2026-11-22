@@ -232,7 +232,7 @@ func driveStreamWS(t *testing.T, recorder *completion.Recorder, id, scenario str
 			t.Error(err)
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		_, body, err := conn.Read(r.Context())
 		if err != nil {
 			t.Error(err)
@@ -260,7 +260,7 @@ func driveStreamWS(t *testing.T, recorder *completion.Recorder, id, scenario str
 	if scenario == "retry" {
 		runs = 2
 	}
-	for i := 0; i < runs; i++ {
+	for i := range runs {
 		h := newConfiguredWSPassthroughHarness(t, upstream.URL, func(f *gatewayHTTPFixtureInput, p *gatewayprovider.ExecutionProvider, g *routing.Group) {
 			f.Moderator = nil
 			g.RateMultiplier = 1
@@ -290,7 +290,7 @@ func driveStreamWS(t *testing.T, recorder *completion.Recorder, id, scenario str
 		if i == runs-1 {
 			require.Equal(t, want, ends)
 		}
-		h.clientConn.CloseNow()
+		_ = h.clientConn.CloseNow()
 		select {
 		case <-h.handlerDone:
 		case <-ctx.Done():
@@ -326,8 +326,14 @@ func driveStreamHTTP(t *testing.T, recorder *completion.Recorder, id, transport,
 			}
 		}
 		for _, frame := range send {
-			fmt.Fprintf(w, "event: %s\ndata: %s\n\n", gjson.Get(frame, "type").String(), frame)
-			w.(http.Flusher).Flush()
+			if _, err := fmt.Fprintf(w, "event: %s\ndata: %s\n\n", gjson.Get(frame, "type").String(), frame); err != nil {
+				t.Errorf("write upstream SSE: %v", err)
+				return
+			}
+			if err := http.NewResponseController(w).Flush(); err != nil {
+				t.Errorf("flush upstream SSE: %v", err)
+				return
+			}
 			t.Logf("upstream SSE %s", frame)
 		}
 	}))
@@ -379,12 +385,12 @@ func driveStreamHTTP(t *testing.T, recorder *completion.Recorder, id, transport,
 	server := httptest.NewServer(router)
 	defer server.Close()
 	send := func() string {
-		req, err := http.NewRequestWithContext(t.Context(), "POST", server.URL+path, strings.NewReader(payload))
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, server.URL+path, strings.NewReader(payload))
 		require.NoError(t, err)
 		req.Header.Set("Content-Type", "application/json")
 		res, err := server.Client().Do(req)
 		require.NoError(t, err)
-		defer res.Body.Close()
+		defer func() { require.NoError(t, res.Body.Close()) }()
 		body, err := io.ReadAll(res.Body)
 		require.NoError(t, err)
 		t.Logf("client SSE HTTP=%d body=%s", res.StatusCode, body)

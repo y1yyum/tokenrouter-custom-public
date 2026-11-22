@@ -80,7 +80,7 @@ func (r *ProviderStore) ActivePlanModelRestrictions(ctx context.Context, provide
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var owners []provider.ActivePlanModelRestriction
 	for rows.Next() {
 		var v provider.ActivePlanModelRestriction
@@ -104,7 +104,7 @@ func (r *ProviderStore) SaveQualityResult(ctx context.Context, db *sql.DB, resul
 	if err != nil {
 		return nil, err
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	var current bool
 	q := *result.Quality
 	err = tx.QueryRowContext(ctx, `SELECT enabled AND quality_enabled AND quality_revision=$2 AND provider_id=$3 AND model_id=$4
@@ -177,7 +177,7 @@ func (r *ProviderStore) ModelQuality(ctx context.Context, id int64, model string
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if !rows.Next() {
 		if err := rows.Err(); err != nil {
 			return nil, err

@@ -95,7 +95,15 @@ func TestScheduledQualityResponses(t *testing.T) {
 			if r.Header.Get("X-Fixture-Probe") == "1" {
 				probeWire <- fmt.Sprintf("%s %s %s", r.URL.Path, actual, gjson.GetBytes(body, "input.0.content.0.text").String())
 				w.Header().Set("Content-Type", "text/event-stream")
-				fmt.Fprintf(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\ndata: {\"type\":\"response.completed\"}\n\n", answer.Load().(string))
+				probeAnswer, ok := answer.Load().(string)
+				if !ok {
+					t.Error("probe response fixture has no answer")
+					http.Error(w, "missing fixture answer", http.StatusInternalServerError)
+					return
+				}
+				if _, err := fmt.Fprintf(w, "data: {\"type\":\"response.output_text.delta\",\"delta\":%q}\n\ndata: {\"type\":\"response.completed\"}\n\n", probeAnswer); err != nil {
+					t.Errorf("write probe response: %v", err)
+				}
 				return
 			}
 			received <- fmt.Sprintf("P%d %s %s", rank, r.URL.Path, actual)
@@ -119,7 +127,7 @@ func TestScheduledQualityResponses(t *testing.T) {
 	admin := gin.New()
 	admin.POST("/plans", providerhttp.NewScheduledTestHandler(scheduled).Create)
 	body := fmt.Sprintf(`{"provider_id":%d,"model_id":"client-x","cron_expression":"* * * * *","quality_enabled":true}`, ids[0])
-	create := httptest.NewRequest("POST", "/plans", strings.NewReader(body))
+	create := httptest.NewRequest(http.MethodPost, "/plans", strings.NewReader(body))
 	create.Header.Set("Content-Type", "application/json")
 	out := httptest.NewRecorder()
 	admin.ServeHTTP(out, create)
@@ -228,7 +236,7 @@ func TestScheduledQualityResponses(t *testing.T) {
 			resp, err := server.Client().Do(req)
 			require.NoError(t, err)
 			data, err := io.ReadAll(resp.Body)
-			resp.Body.Close()
+			require.NoError(t, resp.Body.Close())
 			require.NoError(t, err)
 			elapsed := time.Since(start)
 			require.Equal(t, 200, resp.StatusCode, string(data))
@@ -328,7 +336,7 @@ func TestScheduledQualityResponses(t *testing.T) {
 		const n = 24
 		before := reads
 		var latencies []time.Duration
-		for i := 0; i < n; i++ {
+		for range n {
 			latencies = append(latencies, sample.send("client-x", 1, "gpt-5.4"))
 		}
 		if sample.name == "on" {
@@ -419,7 +427,7 @@ func verifyModelQualityPage(t *testing.T, db *sql.DB, store *providerpg.Provider
 		req.Header.Set("Content-Type", "application/json")
 		res, err := server.Client().Do(req)
 		require.NoError(t, err)
-		defer res.Body.Close()
+		defer func() { require.NoError(t, res.Body.Close()) }()
 		data, err := io.ReadAll(res.Body)
 		require.NoError(t, err)
 		require.Equal(t, 200, res.StatusCode, string(data))
