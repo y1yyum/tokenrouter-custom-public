@@ -52,6 +52,10 @@
 <a id="authentication_boundaries"></a>
 ## 认证入口
 
+1. 站点管理 Key 以首个启用管理员的身份执行普通管理操作。直接查询、轮换和删除这枚 Key 由管理员 JWT 负责。已识别的站点 Key 请求这些操作时，审计记录其管理员身份和 403 状态。
+2. MCP 按手工令牌或 OAuth 应用获授的操作 ID 进入管理路由。站点 Key 的三个管理操作沿用 MCP 的敏感操作确认策略。见 [MCP 工具调用](../interfaces/mcp_management.md#tool_execution)。
+3. 多枚 REST 管理 Key 及其逐资源、逐字段授权仍待兼容。当前站点 Key 只有一个配置值。团队 owner 和 member 的权限只在所属团队内生效。
+
 面板认证路由由 `RegisterAuthRoutes` 注册。公开的登录、注册、验证码、Passkey 登录、token 刷新、密码找回和高风险校验各有服务端限流；依赖 Redis 的限流器在缓存故障时拒绝请求（fail-close）。OAuth 的 start 和 callback 建立外部身份流程，受保护账户管理入口附加 JWT 中间件。
 
 ### 注册邮箱域名

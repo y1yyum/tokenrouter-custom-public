@@ -18,10 +18,8 @@ var ManagementOperations = map[string]*adminapi.Operation{
 		ID:     "settings.admin_api_key.delete",
 		Module: "settings",
 		Title:  "Delete Admin API Key",
-		Description: "DeleteAdminAPIKey removes the stored administrator credential and writes a success message. " +
-			"Settings errors use the shared response mapping, and callers install administrator " +
-			"authentication before exposing this handler. Browser confirmation by the token owner is " +
-			"required.",
+		Description: "Remove the site management key. Direct REST requires an administrator session. " +
+			"For MCP, check requires_confirmation before dispatch.",
 		Method:      "DELETE",
 		Path:        "/api/v1/admin/settings/admin-api-key",
 		Sensitive:   true,
@@ -33,10 +31,8 @@ var ManagementOperations = map[string]*adminapi.Operation{
 		ID:     "settings.admin_api_key.list",
 		Module: "settings",
 		Title:  "Get Admin API Key",
-		Description: "GetAdminAPIKey writes credential existence and its masked display value in the panel " +
-			"envelope. Settings-read errors are mapped through the shared HTTP helper; callers install " +
-			"administrator authentication on the route. This operation is available through " +
-			"read_operation. Browser confirmation by the token owner is required.",
+		Description: "Read credential presence and masked display text. Direct REST requires an administrator session. " +
+			"For MCP, check requires_confirmation before dispatch.",
 		Method:      "GET",
 		Path:        "/api/v1/admin/settings/admin-api-key",
 		ReadOnly:    true,
@@ -49,9 +45,8 @@ var ManagementOperations = map[string]*adminapi.Operation{
 		ID:     "settings.admin_api_key.regenerate.create",
 		Module: "settings",
 		Title:  "Regenerate Admin API Key",
-		Description: "RegenerateAdminAPIKey generates and saves a replacement administrator credential before " +
-			"returning its full value. The route requires administrator authentication; settings errors " +
-			"produce the shared error response. Browser confirmation by the token owner is required.",
+		Description: "Replace the site management key. The administrator session receives the new value once. " +
+			"MCP delivers it as a protected file. Check requires_confirmation before dispatch.",
 		Method:      "POST",
 		Path:        "/api/v1/admin/settings/admin-api-key/regenerate",
 		Sensitive:   true,

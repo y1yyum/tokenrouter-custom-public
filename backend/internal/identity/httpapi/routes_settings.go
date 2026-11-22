@@ -1,8 +1,11 @@
 package httpapi
 
 import (
+	"net/http"
+
 	"github.com/gin-gonic/gin"
 
+	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
 	"github.com/TokenFlux/TokenRouter/internal/server/adminapi"
 )
 
@@ -33,9 +36,24 @@ type IdentitySettingsEndpoints interface {
 // RegisterIdentitySettingsRoutes adds management-key status, regeneration, and
 // deletion endpoints to administrator settings. The caller installs
 // authentication and auditing on the supplied group before exposing the
-// credential operations.
+// credential operations. The per-route guard runs inside audit so a verified
+// site key receives an attributed denial before any credential handler runs.
 func RegisterIdentitySettingsRoutes(adminSettings *gin.RouterGroup, endpoint IdentitySettingsEndpoints) {
-	adminapi.Register(adminSettings, ManagementOperations["settings.admin_api_key.list"], endpoint.GetAdminAPIKey)
-	adminapi.Register(adminSettings, ManagementOperations["settings.admin_api_key.regenerate.create"], endpoint.RegenerateAdminAPIKey)
-	adminapi.Register(adminSettings, ManagementOperations["settings.admin_api_key.delete"], endpoint.DeleteAdminAPIKey)
+	adminapi.Register(adminSettings, ManagementOperations["settings.admin_api_key.list"], authorizeKeyManagement, endpoint.GetAdminAPIKey)
+	adminapi.Register(adminSettings, ManagementOperations["settings.admin_api_key.regenerate.create"], authorizeKeyManagement, endpoint.RegenerateAdminAPIKey)
+	adminapi.Register(adminSettings, ManagementOperations["settings.admin_api_key.delete"], authorizeKeyManagement, endpoint.DeleteAdminAPIKey)
+}
+
+// authorizeKeyManagement admits administrator sessions and authorized internal
+// MCP calls to the site key lifecycle. The parent group authenticates callers
+// first so missing identity fails closed and audit can attribute key denials.
+//
+// @project-doc docs/domains/identity_and_tenancy.md#authentication_boundaries
+func authorizeKeyManagement(c *gin.Context) {
+	principal, ok := authctx.GetPrincipal(c)
+	if !ok || (principal.CredentialKind != "jwt" && principal.CredentialKind != "mcp_token") {
+		AbortWithError(c, http.StatusForbidden, "FORBIDDEN", "Use an administrator session to manage the site API key")
+		return
+	}
+	c.Next()
 }

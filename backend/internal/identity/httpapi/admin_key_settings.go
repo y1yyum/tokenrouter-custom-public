@@ -43,7 +43,7 @@ func (h *AdminKeySettingsHandler) GetAdminAPIKey(c *gin.Context) {
 }
 
 // RegenerateAdminAPIKey generates and saves a replacement administrator
-// credential before returning its full value. The route requires administrator
+// credential before returning its full value with caching disabled. The route requires administrator
 // authentication; settings errors produce the shared error response.
 func (h *AdminKeySettingsHandler) RegenerateAdminAPIKey(c *gin.Context) {
 	key, err := h.settingService.GenerateAdminAPIKey(c.Request.Context())
@@ -52,6 +52,7 @@ func (h *AdminKeySettingsHandler) RegenerateAdminAPIKey(c *gin.Context) {
 		return
 	}
 
+	c.Header("Cache-Control", "no-store")
 	httpx.Success(c, gin.H{
 		"key": key, // The full value is exposed in the generation response.
 	})

@@ -14,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"strings"
 	"sync"
 	"testing"
@@ -90,7 +91,7 @@ type failingRevocationRepository struct {
 func newOAuthFixture(t *testing.T) *oauthFixture {
 	t.Helper()
 	base := newMCPFixture(t)
-	db := postgrescontainer.New(t)
+	db := postgrescontainer.NewOrExternal(t, os.Getenv("TOKENROUTER_MCP_TEST_DSN"), "tokenrouter_f06_contract")
 	var id int64
 	require.NoError(t, db.QueryRow(`INSERT INTO users(email,password_hash,role,status) VALUES('oauth@example.invalid','unused','admin','active') RETURNING id`).Scan(&id))
 	router, ok := base.handler.router.(*gin.Engine)

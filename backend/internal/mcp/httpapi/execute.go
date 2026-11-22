@@ -90,8 +90,10 @@ func (h *Handler) call(ctx context.Context, req *mcp.CallToolRequest, readOnly b
 		}
 		result := map[string]any{"status": "interaction_required", "url": h.browserLink(ctx, destination), "message": "Continue this operation in the administrator browser session."}
 		if destination == "/admin/providers" {
-			result["message"] = "Use Add provider or Reauthorize in provider management to complete this upstream authorization. The browser saves the provider; query providers.list afterward to continue configuration."
-			result["follow_up_operation"] = "providers.list"
+			result["message"] = "Use Add provider or Reauthorize in provider management to complete this upstream authorization."
+			if _, mounted := h.catalog.Get("providers.list"); mounted && token.Allows("providers.list") {
+				result["follow_up_operation"] = "providers.list"
+			}
 		}
 		return toolResult(result)
 	}

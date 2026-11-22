@@ -55,7 +55,7 @@ RequestLogger
 | `/api/v1/marketplace/models/available` | 用户 JWT | `routing`：公开分组与当前用户获授权的专属分组，返回私有、不缓存响应 |
 | `/api/v1/admin/plugins*`、`/api/v1/admin/plugin-catalog*`、`/api/v1/admin/plugin-indexes*` | 管理员（执行代码与来源变更另需 step-up） | `plugin`：安装、更新回滚、市场与索引来源，见[安装管理](plugin_contracts.md#administration) |
 | `/api/v1/plugins/*` | UI 描述需用户 JWT；静态资源公开；API 按 manifest 决定 | `plugin`：插件页面描述、版本化静态资源和非流式 HTTP 代理，见[插件契约](plugin_contracts.md#http_contributions) |
-| `/api/v1/admin/*` | 管理员 JWT 或受限管理密钥（部分操作另需 step-up） | 各领域管理入口：用户、分组、提供商、价格配置、设置、运维、备份、支付和安全管理 |
+| `/api/v1/admin/*` | 管理员 JWT 或站点管理 Key（部分路由要求浏览器会话或 step-up） | 各领域管理入口：用户、分组、提供商、价格配置、设置、运维、备份、支付和安全管理 |
 | `/mcp` | 专用 MCP Bearer 令牌或 OAuth access token | MCP 管理入口：四个通用管理工具，按操作授权，MCP JSON-RPC 协议，见 [MCP 管理接口](mcp_management.md) |
 | `/api/v1/admin/mcp/oauth/*` | 管理员 JWT | MCP OAuth 浏览器授权与应用管理，见 [MCP OAuth 应用授权](mcp_management.md#oauth_authorization) |
 | `/api/v1/payment/*` | 用户 JWT | `payment`：配置和套餐查询、下单、查单、取消、invoice 和申请退款 |
@@ -95,14 +95,19 @@ RequestLogger
 | --- | --- | --- |
 | JWT access token | 面板 `Authorization: Bearer`，少数 WebSocket 用子协议 | 校验用户状态、token version 及可选会话绑定；管理员路由另校验角色 |
 | Refresh token | `/api/v1/auth/refresh` 及 logout 约定 payload 或 cookie | 仅用于令牌轮换和撤销，不可直接访问业务资源 |
-| 管理 API Key | 管理接口 `x-api-key` | 代表首个实际管理员；开启敏感操作 step-up 后，无法执行需要近期 TOTP 的操作 |
+| 管理 API Key | 管理接口 `x-api-key` | 站点只保存一个当前值，以 ID 最小的启用管理员为 actor。轮换或删除后旧值失效。此 Key 无独立到期时间、逐操作授权或团队范围，要求浏览器会话或近期 TOTP 的路由另行校验 |
 | TokenRouter API Key | 网关 `Authorization: Bearer`、`x-api-key`，Gemini 入口另支持 `x-goog-api-key` | 校验 Key、用户与团队、分组、IP、额度、订阅和资源归属；通用网关拒绝 query 参数传 Key |
+| MCP 专用令牌、MCP OAuth access token | `/mcp` 的 `Authorization: Bearer` | 归属当前启用的全局管理员，按操作 ID 授权。OAuth 另绑定站点的 MCP resource。到期、撤销及审计归属见 [MCP 管理接口](mcp_management.md#access_tokens) |
 | OAuth 与 pending 补全状态 | auth callback 与补全接口 | 由 provider state、浏览器会话、一次性完成码和过期时间共同约束 |
 | Google GIS ID Token | `/api/v1/auth/oauth/google/one-tap` 请求体 | 经官方验证器校验后，提取 `sub` 和已验证邮箱进入 Google 身份或 pending 流程，仅限该接口使用 |
 | 支付 webhook 签名 | 原始 body 或 query，加 provider header | 仅授权解释已绑定本地订单的通知，仍须校验金额和 metadata |
 | 下载与 resume 票据 | 指定公共恢复或下载路由 | 有时限且限定单个资源和操作，无法升级为普通会话 |
 
 认证中间件只确认请求者身份。资源归属、团队成员权限、管理员 step-up、支付订单 user ID、批任务 owner 和分组能力，仍由对应 HTTP 适配层和业务用例分别检查。
+
+站点管理 Key 的状态查询、轮换和删除要求直接 REST 客户端使用管理员 JWT。已认证的 `admin_api_key` 调用这三个接口均返回 HTTP 403（`FORBIDDEN`），已挂载的一般管理查询仍按原路由授权。
+
+`GET /api/v1/admin/settings/admin-api-key` 只返回 `exists` 和 `masked_key`。已配置值不超过 14 字节时显示 `****`，更长的值保留前 10 字节和末 4 字节。`POST /api/v1/admin/settings/admin-api-key/regenerate` 在新值保存成功后返回完整 `data.key`，响应带 `Cache-Control: no-store`。状态查询、轮换和删除的审计分别记录 `admin.admin_api_key.read`、`admin.admin_api_key.regenerate` 和 `admin.admin_api_key.delete`。
 
 ### 外部支付管理集成
 

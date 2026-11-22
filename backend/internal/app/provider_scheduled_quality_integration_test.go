@@ -35,7 +35,6 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/selection"
 	gatewaytestkit "github.com/TokenFlux/TokenRouter/internal/gateway/testkit"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
-	postgresinfra "github.com/TokenFlux/TokenRouter/internal/infra/postgres"
 	catalogtest "github.com/TokenFlux/TokenRouter/internal/modelcatalog/testkit"
 	"github.com/TokenFlux/TokenRouter/internal/protocol"
 	"github.com/TokenFlux/TokenRouter/internal/provider"
@@ -46,7 +45,6 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/scheduler"
 	"github.com/TokenFlux/TokenRouter/internal/scheduler/policy"
 	"github.com/TokenFlux/TokenRouter/internal/testutil/postgrescontainer"
-	"github.com/TokenFlux/TokenRouter/migrations"
 )
 
 // A controlled clock tick drives the production runner through a loopback probe.
@@ -360,19 +358,7 @@ func TestScheduledQualityResponses(t *testing.T) {
 // eligible for the embedded migrations. The default uses Testcontainers.
 func qualityTestDatabase(t *testing.T) *sql.DB {
 	t.Helper()
-	dsn := os.Getenv("TOKENROUTER_QUALITY_TEST_DSN")
-	if dsn == "" {
-		return postgrescontainer.New(t)
-	}
-	db, err := sql.Open("postgres", dsn)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	var fixture bool
-	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT current_database()='tokenrouter_m2a_contract'
- AND NOT EXISTS(SELECT 1 FROM information_schema.tables WHERE table_schema='public')`).Scan(&fixture))
-	require.True(t, fixture, "expected an empty tokenrouter_m2a_contract database")
-	require.NoError(t, postgresinfra.ApplyMigrations(t.Context(), db, migrations.FS))
-	return db
+	return postgrescontainer.NewOrExternal(t, os.Getenv("TOKENROUTER_QUALITY_TEST_DSN"), "tokenrouter_m2a_contract")
 }
 
 // GetGroup supplies the single group selected by the HTTP scenario.

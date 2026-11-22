@@ -18,12 +18,12 @@ import (
 	"github.com/TokenFlux/TokenRouter/migrations"
 )
 
-// postgres.go starts a dedicated PostgreSQL test container and applies
-// application migrations.
+// postgres.go prepares migrated PostgreSQL databases for integration tests.
 // PostgreSQL storage fixtures apply the application's embedded migrations
 // before domain records are read or written. New starts a dedicated container,
 // obtains a UTC connection, and registers cleanup so the SQL pool closes before
-// container termination at test completion.
+// container termination at test completion. NewOrExternal also accepts a fresh
+// database owned by a runner that controls the container lifecycle.
 
 // New returns a pool for a dedicated migrated PostgreSQL fixture or fails the
 // calling test. Container startup, connection-string discovery, and migrations
@@ -63,5 +63,26 @@ func New(t *testing.T) *sql.DB {
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
 	require.NoError(t, postgresinfra.ApplyMigrations(ctx, db, migrations.FS))
+	return db
+}
+
+// NewOrExternal opens an exclusively owned, empty contract database when the
+// runner provides a DSN. Each call needs a separate database that the runner
+// destroys afterward. Without a DSN the test owns a fresh container. Check
+// the expected database name and its public schema before applying migrations.
+func NewOrExternal(t *testing.T, dsn, databaseName string) *sql.DB {
+	t.Helper()
+	if dsn == "" {
+		return New(t)
+	}
+	db, err := sql.Open("postgres", dsn)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, db.Close()) })
+	var emptyFixture bool
+	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT current_database() = $1 AND NOT EXISTS (
+		SELECT 1 FROM information_schema.tables WHERE table_schema = 'public'
+	)`, databaseName).Scan(&emptyFixture))
+	require.True(t, emptyFixture, "expected an empty %s database", databaseName)
+	require.NoError(t, postgresinfra.ApplyMigrations(t.Context(), db, migrations.FS))
 	return db
 }

@@ -102,6 +102,7 @@ OAuth 直接复用站点的 `frontend_url`（后台非空值优先，未填用�
 | `read_operation` | 执行明确声明为只读的操作 |
 | `execute_operation` | 执行授权动作，或发起必要的浏览器接续 |
 
+- 站点管理 Key 的状态查询、轮换和删除各有独立操作 ID，均为敏感操作。发现结果中的 `requires_confirmation` 反映当前授权的确认策略。轮换成功经受保护文件交付。直接 REST 的凭据要求见 [HTTP 接口](http_api.md#认证与安全机制)。
 - 执行参数：支持 `operation_id`、`path`、`query`、`body`，按需附带 `idempotency_key`、`confirmation_id`、`file_id`。省略 JSON body 与显式 `null` 保持区别；`file_id` 可代替上传的 JSON body，两者互斥。
 - 特殊探测操作：主动提供商用量查询与 Grok 配额探测可能恢复状态或调整限流，归 `execute_operation`；`providers.usage.passive.list`（`GET /api/v1/admin/providers/:id/usage/passive`）只读 Anthropic OAuth/SetupToken 已采集数据，其他平台保留原不支持错误。
 - 安全分发：目录决定方法和路径，拒绝可改变路由的路径分隔符、转义和未知参数，调用方不能指定目标主机或认证头。内部 HTTP 经私有 context 携带令牌身份，原管理员中间件复核最终路由后再执行限流、审计、强认证和业务处理。
@@ -144,7 +145,7 @@ OAuth 直接复用站点的 `frontend_url`（后台非空值优先，未填用�
 
 ### 特殊交互流程
 
-提供商连接测试复用原测试入口，有限 SSE 需成功终态，流中错误不因 HTTP 200 视作成功。OAuth、PAT、SSO 等交互授权接续到原提供商管理页（「添加提供商」或「重新授权」），保存后可用 `providers.list` 查询并续配。实时 QPS/TPS 使用现有查询接口返回对应时间窗口数据。
+提供商连接测试复用原测试入口，有限 SSE 需成功终态，流中错误不因 HTTP 200 视作成功。OAuth、PAT、SSO 等交互授权接续到原提供商管理页（「添加提供商」或「重新授权」），工具只在当前目录已挂载 `providers.list` 且当前授权包含该 ID 时返回 `follow_up_operation`，供保存后查询。实时 QPS/TPS 使用现有查询接口返回对应时间窗口数据。
 
 <a id="client_setup"></a>
 ## 客户端接入与部署

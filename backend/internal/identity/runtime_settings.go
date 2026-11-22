@@ -387,7 +387,8 @@ func (s *RuntimeSettings) GenerateAdminAPIKey(ctx context.Context) (string, erro
 // GetAdminAPIKeyStatus reports whether an administrator credential is stored
 // and returns its display value. Missing settings and empty values report false
 // with no error; other read failures remain errors. Values longer than fourteen
-// bytes show their first ten and final four bytes around an ellipsis.
+// bytes show their first ten and final four bytes around an ellipsis. Shorter
+// nonempty credentials have only a fixed presence marker.
 func (s *RuntimeSettings) GetAdminAPIKeyStatus(ctx context.Context) (maskedKey string, exists bool, err error) {
 	key, err := s.settingRepo.GetValue(ctx, SettingKeyAdminAPIKey)
 	if err != nil {
@@ -407,7 +408,7 @@ func (s *RuntimeSettings) GetAdminAPIKeyStatus(ctx context.Context) (maskedKey s
 	if len(key) > 14 {
 		maskedKey = key[:10] + "..." + key[len(key)-4:]
 	} else {
-		maskedKey = key
+		maskedKey = "****"
 	}
 
 	return maskedKey, true, nil
