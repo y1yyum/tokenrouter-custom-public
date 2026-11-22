@@ -72,7 +72,7 @@
         </div>
 
         <div
-          v-else-if="!isValidUrl"
+          v-else-if="!embeddedUrl"
           class="flex h-full items-center justify-center p-10 text-center"
         >
           <EmptyState
@@ -95,7 +95,12 @@
             <Icon name="externalLink" size="sm" class="mr-1.5" :stroke-width="2" />
             {{ t('customPage.openInNewTab') }}
           </a>
-          <iframe :src="embeddedUrl" class="custom-embed-frame" allowfullscreen></iframe>
+          <iframe
+            referrerpolicy="no-referrer"
+            :src="embeddedUrl"
+            class="custom-embed-frame"
+            allowfullscreen
+          ></iframe>
         </div>
       </div>
     </div>
@@ -127,7 +132,7 @@ import DOMPurify from 'dompurify'
 // CustomPageView.vue displays a configured menu page as either embedded content
 // or server-hosted Markdown. Public menu settings take precedence, with cached
 // administrator menus available only to administrator accounts. Embedded URLs
-// use the existing substitution helper for identity, language, and theme; Markdown
+// carry the current theme, language, and embedded display mode. Markdown
 // is fetched with the current locale and optional authentication header.
 //
 // Markdown rendering rewrites eligible relative image paths, sanitizes generated
@@ -155,7 +160,7 @@ const adminSettingsStore = useAdminSettingsStore()
 // Display state holds the active mode's rendered content, theme, DOM container,
 // and heading index while settings or Markdown requests are being resolved.
 const loading = ref(false)
-const pageTheme = ref<'light' | 'dark'>('light')
+const pageTheme = ref(detectTheme())
 const renderedHtml = ref('')
 const markdownContainer = ref<HTMLElement | null>(null)
 const tocItems = ref<TocItem[]>([])
@@ -199,23 +204,11 @@ const markdownSlug = computed(() => {
 
 const isMarkdownMode = computed(() => !!markdownSlug.value)
 
-// Embedded content uses the shared placeholder substitution contract, including
-// account token input; this page then requires an HTTP(S) prefix for rendering.
+// The frame and new-tab link share a destination that follows menu, theme, and
+// language changes. An empty result selects the unconfigured-page message.
 const embeddedUrl = computed(() => {
   if (!menuItem.value || isMarkdownMode.value) return ''
-  return buildEmbeddedUrl(
-    menuItem.value.url,
-    authStore.user?.id,
-    authStore.token,
-    pageTheme.value,
-    locale.value,
-  )
-})
-
-const isValidUrl = computed(() => {
-  if (isMarkdownMode.value) return false
-  const url = embeddedUrl.value
-  return url.startsWith('http://') || url.startsWith('https://')
+  return buildEmbeddedUrl(menuItem.value.url, pageTheme.value, locale.value)
 })
 
 // generateHeadingId derives a readable anchor and appends its document-local index.
@@ -316,13 +309,21 @@ async function fetchAndRenderMarkdown(slug: string) {
     const sanitized = DOMPurify.sanitize(html, {
       ADD_TAGS: ['iframe'],
       ADD_ATTR: ['allowfullscreen', 'frameborder', 'src'],
+      RETURN_DOM_FRAGMENT: true,
     })
+    // Apply the host's referrer policy before publishing the article, so frames
+    // in Markdown follow the same navigation rule as a configured menu frame.
+    for (const frame of sanitized.querySelectorAll('iframe')) {
+      frame.setAttribute('referrerpolicy', 'no-referrer')
+    }
+    const template = document.createElement('template')
+    template.content.appendChild(sanitized)
 
     // Assign document-local indexes after sanitization so repeated headings get
     // different anchors and contents entries refer to the HTML that will render.
     const toc: TocItem[] = []
     let headingIndex = 0
-    const withIds = sanitized.replace(
+    const withIds = template.innerHTML.replace(
       /<(h[1-4])[^>]*>(.*?)<\/h[1-4]>/gi,
       (_, tag: string, content: string) => {
         const level = Number.parseInt(tag[1], 10)

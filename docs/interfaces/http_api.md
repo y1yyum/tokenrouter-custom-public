@@ -115,8 +115,7 @@ RequestLogger
 
 - 余额发放：优先调用 `POST /api/v1/admin/redeem-codes/create-and-redeem`，原子创建并兑换余额兑换码。调用方须提供稳定的业务 `code` 和 `Idempotency-Key`，重试复用这两个值，并按 200、409 和业务错误区分重放、冲突和失败。
 - 查询与手工调账：前置查询使用 `GET /api/v1/admin/users/:id`；`POST /api/v1/admin/users/:id/balance` 仅用于明确的人工增减或补偿，同样要求幂等键。
-- 嵌入页透传参数：购买页和用户自定义页面 URL 由前端追加 `user_id`、`token`、`theme`、`lang`、`ui_mode`、`src_host` 和 `src_url`。
-- 凭据安全：`token` 是用户 Bearer 凭据，仅可发往部署者信任的 HTTPS 页面，接收方不得写入访问日志、分析参数或转发第三方。请求示例见[外部支付管理 API 指南](../guides/payments/admin_integration_api.md)。
+- 自定义菜单嵌入外部支付页面时，宿主只追加主题、语言和嵌入模式。支付服务需自行确认要充值的 TokenRouter 账户。地址参数和示例见[外部支付管理 API 指南](../guides/payments/admin_integration_api.md#自定义菜单的展示参数)。
 
 ## 关键业务接口约定
 

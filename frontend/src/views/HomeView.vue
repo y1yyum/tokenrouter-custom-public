@@ -6,6 +6,7 @@
     <!-- HTTP(S) content is embedded directly as the configured full-page destination. -->
     <iframe
       v-if="isHomeContentUrl"
+      referrerpolicy="no-referrer"
       :src="homeContent.trim()"
       class="h-screen w-full border-0"
       allowfullscreen

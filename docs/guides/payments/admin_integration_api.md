@@ -9,7 +9,7 @@
 - 支付成功后充值
 - 用户查询
 - 人工余额修正
-- 前端购买页参数透传
+- 自定义菜单中外部支付页的展示参数
 
 ## 基础地址
 
@@ -107,25 +107,17 @@ curl -X POST "${BASE}/api/v1/admin/users/123/balance" \
   }'
 ```
 
-## 购买页与自定义页面参数透传
+## 自定义菜单的展示参数
 
-TokenRouter 打开 `purchase_subscription_url` 或用户侧自定义页面 iframe URL 时，会统一追加：
+原生充值和订阅入口为 `/purchase`。通过自定义菜单接入的外部支付页使用 `/custom/:id`。旧充值设置迁移生成的菜单 ID 为 `migrated_purchase_subscription`。
 
-- `user_id`
-- `token`
-- `theme`（`light` 或 `dark`）
-- `lang`（例如 `zh` 或 `en`，表示当前界面语言）
-- `ui_mode`（固定为 `embedded`）
-- `src_host`（TokenRouter 页面来源）
-- `src_url`（TokenRouter 当前页面 URL）
-
-示例：
+自定义菜单的 iframe 和“新标签页打开”使用同一个 HTTP(S) 地址。宿主设置 `theme`（`light` 或 `dark`）、`lang`（当前界面语言）和 `ui_mode=embedded`。切换主题或语言时，两个入口同步更新。配置中的套餐参数和片段路由均保留，例如
 
 ```text
-https://pay.example.com/pay?user_id=123&token=<jwt>&theme=light&lang=zh&ui_mode=embedded&src_host=https%3A%2F%2Frouter.example.com&src_url=https%3A%2F%2Frouter.example.com%2Fpurchase
+https://pay.example.com/pay?plan=pro&theme=dark&lang=zh&ui_mode=embedded#checkout
 ```
 
-`token` 是用户的 Bearer 凭据。购买页和自定义页面只配置成受信任的 HTTPS 来源；接收方把这个参数当作密钥处理，不写日志、不转发，也不交给第三方分析脚本。
+宿主从菜单地址移除旧参数 `user_id`、`token`、`src_host` 和 `src_url`，并在打开页面时省略 HTTP `Referer`。外部支付系统需自行确认订单对应的 TokenRouter 账户，再由服务端调用管理接口。
 
 ## 失败处理建议
 
