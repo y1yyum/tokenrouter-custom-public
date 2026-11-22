@@ -111,13 +111,13 @@ curl -X POST "${BASE}/api/v1/admin/users/123/balance" \
 
 原生充值和订阅入口为 `/purchase`。通过自定义菜单接入的外部支付页使用 `/custom/:id`。旧充值设置迁移生成的菜单 ID 为 `migrated_purchase_subscription`。
 
-自定义菜单的 iframe 和“新标签页打开”使用同一个 HTTP(S) 地址。宿主设置 `theme`（`light` 或 `dark`）、`lang`（当前界面语言）和 `ui_mode=embedded`。切换主题或语言时，两个入口同步更新。配置中的套餐参数和片段路由均保留，例如
+自定义菜单的 iframe 和“新标签页打开”使用同一个 HTTP(S) 地址。宿主设置 `theme`（`light` 或 `dark`）、`lang`（当前界面语言）和 `ui_mode=embedded`。切换主题或语言时，两个入口同步更新。管理 API 保存菜单时要求地址没有片段。可用 `plan=pro` 这样的查询参数指定目标套餐，渲染后的地址如下。
 
 ```text
-https://pay.example.com/pay?plan=pro&theme=dark&lang=zh&ui_mode=embedded#checkout
+https://pay.example.com/pay?plan=pro&theme=dark&lang=zh&ui_mode=embedded
 ```
 
-宿主从菜单地址移除旧参数 `user_id`、`token`、`src_host` 和 `src_url`，并在打开页面时省略 HTTP `Referer`。外部支付系统需自行确认订单对应的 TokenRouter 账户，再由服务端调用管理接口。
+若已有配置含片段，前端构造地址时会保留它。宿主从菜单地址移除旧参数 `user_id`、`token`、`src_host` 和 `src_url`，并在打开页面时省略 HTTP `Referer`。外部支付系统需自行确认订单对应的 TokenRouter 账户，再由服务端调用管理接口。
 
 ## 失败处理建议
 
