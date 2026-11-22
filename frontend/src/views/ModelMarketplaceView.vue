@@ -92,7 +92,7 @@
             </button>
 
             <router-link
-              to="/login"
+              :to="{ path: '/login', query: { redirect: loginReturnPath } }"
               class="inline-flex items-center rounded-full bg-gray-950 px-4 py-2 text-xs font-semibold text-white transition hover:bg-gray-800 dark:bg-white dark:text-dark-950 dark:hover:bg-dark-200"
             >
               {{ t('home.login') }}
@@ -171,14 +171,17 @@
             <Icon name="inbox" size="xl" />
           </div>
           <h2 class="mt-6 text-center text-2xl font-semibold text-gray-950 dark:text-white">
-            {{ t('marketplace.emptyTitle') }}
+            {{
+              hasCatalogModels ? t('marketplace.emptyTitle') : t('marketplace.catalogEmptyTitle')
+            }}
           </h2>
           <p
+            v-if="hasCatalogModels"
             class="mx-auto mt-3 max-w-xl text-center text-sm leading-7 text-gray-600 dark:text-dark-300"
           >
             {{ t('marketplace.emptyDescription') }}
           </p>
-          <div class="mt-6 text-center">
+          <div v-if="hasCatalogModels" class="mt-6 text-center">
             <button class="btn btn-secondary" type="button" @click="resetFilters">
               {{ t('common.reset') }}
             </button>
@@ -456,9 +459,14 @@ const docUrl = computed(() =>
   sanitizeUrl(appStore.cachedPublicSettings?.doc_url || appStore.docUrl || ''),
 )
 
-// Search normalization and the select-only active count feed the shared filter
-// controls; the free-text query is intentionally absent from the select badge count.
+// Trim and fold the input for matching while retaining the typed spelling at login.
 const normalizedSearch = computed(() => search.value.trim().toLowerCase())
+// Returning through the existing q route restores the query typed before login.
+const loginReturnPath = computed(() => {
+  const query = search.value.trim()
+  return query ? `/models?${new URLSearchParams({ q: query })}` : '/models'
+})
+// The filter badge counts selected options independently of the free-text query.
 const activeFilterCount = computed(
   () =>
     [
@@ -588,6 +596,9 @@ const filteredGroups = computed<VisibleMarketplaceGroup[]>(() => {
 // hasMarketplaceResults selects the populated versus empty display after loading
 // and error presentation have taken precedence in the page template.
 const hasMarketplaceResults = computed(() => filteredGroups.value.length > 0)
+
+// Only a populated catalog can recover results by resetting local filters.
+const hasCatalogModels = computed(() => groups.value.some((group) => group.models.length > 0))
 
 // hasPositiveValue accepts numeric values greater than zero without a finiteness check.
 function hasPositiveValue(value?: number | null): value is number {
@@ -894,9 +905,8 @@ function tokenPricingRowsFromValues(
 }
 
 // compactTokenPricingRows prefers ordinary input and output prices for card summaries.
-// When absent, it uses at most two other standard categories. A completely empty
-// price list receives two zero-priced input and output rows; a fast-only list
-// has no standard fallback rows.
+// When absent, it uses at most two other standard categories. A priced quote
+// with no standard amounts has free input and output even if Fast has a price.
 function compactTokenPricingRows(
   pricing: MarketplaceModelPricing | MarketplacePricingInterval,
 ): PricingRow[] {
@@ -919,17 +929,10 @@ function compactTokenPricingRows(
     return primaryRows
   }
 
-  // Inspect all price categories after ordinary input/output are absent so a
-  // completely empty quote can show free input/output prices while fast-only
-  // quotes stay distinct.
-  const rows = tokenPricingRowsFromValues(pricing)
-  if (rows.length === 0) {
-    return zeroTokenPricingRows()
-  }
-
-  // Use at most two standard alternatives for the card summary; fast categories
-  // belong to the expanded speed selector and cannot replace standard summary prices.
-  return rows.filter((row) => !row.key.startsWith('fast_')).slice(0, 2)
+  // The API omits zero standard token amounts. Paid Fast rows belong to the
+  // detail panel and do not change the price shown for Standard.
+  const rows = tokenPricingRowsFromValues(pricing).filter((row) => !row.key.startsWith('fast_'))
+  return rows.length > 0 ? rows.slice(0, 2) : zeroTokenPricingRows()
 }
 
 // zeroTokenPricingRows formats the input and output categories with explicit free amounts.
@@ -1056,7 +1059,7 @@ function imagePricingRows(pricing: MarketplaceModelPricing): PricingRow[] {
 // Each request captures its generation and user before awaiting the API. A newer
 // request, account change, or unmount prevents that completion from publishing
 // data, errors, or loading state. Same-account refresh failures retain previous
-// data behind the error view; successful refreshes reset unavailable group filters.
+// data behind the error view; successful refreshes reset unavailable groups and brands.
 //
 // Public and personal endpoints remain distinct so homepage behavior stays public.
 // Request completion checks identity as well as generation because authentication
@@ -1080,6 +1083,10 @@ async function fetchMarketplace() {
     const result = await (authenticated ? getAvailableMarketplaceModels() : getMarketplaceModels())
     if (!isCurrent()) return
     groups.value = result
+    if (selectedBrand.value !== 'all') {
+      const key = brandKey(selectedBrand.value)
+      selectedBrand.value = availableBrands.value.find((brand) => brandKey(brand) === key) ?? 'all'
+    }
     if (
       selectedGroupId.value !== 'all' &&
       !result.some((group) => group.id === selectedGroupId.value)

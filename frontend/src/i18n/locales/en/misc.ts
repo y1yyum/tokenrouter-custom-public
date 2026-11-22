@@ -113,8 +113,9 @@ export default {
       'Time-of-day prices use {timezone} time and apply Monday to Friday. Weekends use the other-hours price.',
     unpriced: 'Unpriced',
     pricingUnavailable: 'No display pricing is currently available for this model.',
+    catalogEmptyTitle: 'No models available',
     emptyTitle: 'No matching models',
-    emptyDescription: 'Try a different keyword or switch the brand filter.',
+    emptyDescription: 'Try a different search term or adjust the filters.',
     platforms: {
       openai: 'OpenAI API',
       anthropic: 'Anthropic API',

@@ -108,8 +108,9 @@ export default {
     timePricingNoteWeekdays: '分时价格按 {timezone} 时间计算，周一至周五生效，周末按其他时段计费。',
     unpriced: '暂无定价',
     pricingUnavailable: '暂未找到可展示的定价信息。',
+    catalogEmptyTitle: '暂无可展示的模型',
     emptyTitle: '没有匹配的模型',
-    emptyDescription: '可以尝试切换品牌筛选，或者修改搜索关键词。',
+    emptyDescription: '请修改搜索关键词或筛选条件。',
     platforms: {
       openai: 'OpenAI 格式',
       anthropic: 'Anthropic 格式',

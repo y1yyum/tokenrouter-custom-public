@@ -1,13 +1,19 @@
-import { defineComponent, nextTick, reactive } from 'vue'
-import { enableAutoUnmount, flushPromises, mount, type VueWrapper } from '@vue/test-utils'
+import { nextTick, reactive } from 'vue'
+import {
+  enableAutoUnmount,
+  flushPromises,
+  mount,
+  RouterLinkStub,
+  type VueWrapper,
+} from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import ModelMarketplaceView from '../ModelMarketplaceView.vue'
 import { modelIconData } from '@/utils/modelIconData'
 import type { MarketplaceGroup, MarketplaceModelPricing } from '@/api/marketplace.types'
 
 // ModelMarketplaceView.spec.ts checks the mounted public model catalog with
-// deterministic group and price responses. Interactive substitutes preserve
-// filter and clipboard events while real cards verify loading placeholders,
+// deterministic group and price responses. The real search field filters model
+// cards while the clipboard substitute records copies. Tests cover placeholders,
 // modality metadata, protocol tooltips, brand artwork, and expandable price rows.
 
 // Hoisted collaborators isolate public data loading, session initialization,
@@ -99,27 +105,8 @@ vi.mock('vue-i18n', async () => {
   }
 })
 
-// SearchInputStub forwards native input text immediately through the model event
-// so the mounted page updates its filters; debounce timing belongs to the real SearchInput.
-const SearchInputStub = defineComponent({
-  name: 'SearchInput',
-  props: {
-    // Current search field text.
-    modelValue: {
-      type: String,
-      default: '',
-    },
-  },
-  // Input publishes the browser field's current text to the page-owned search state.
-  emits: ['update:modelValue'],
-  template: `
-    <input
-      data-testid="marketplace-search"
-      :value="modelValue"
-      @input="$emit('update:modelValue', $event.target.value)"
-    />
-  `,
-})
+// The marketplace search field is distinct from the global search and the group filter.
+const searchField = 'input[placeholder="marketplace.searchPlaceholder"]'
 
 // tokenPricing includes ordinary and image-input token rates plus a distinct fast
 // image rate, exposing metadata inference and the panel's speed-tier selection.
@@ -218,19 +205,18 @@ async function chooseFilterOption(wrapper: VueWrapper, fieldLabel: string, value
 }
 
 // mountMarketplace mounts the real catalog page with inert layout collaborators.
-// Filter substitutes retain user events, while model cards remain real components.
+// The search field, filter options, and model cards remain real components.
 // The helper drains pending promises before returning the wrapper to its caller.
 async function mountMarketplace() {
   const wrapper = mount(ModelMarketplaceView, {
     global: {
       stubs: {
         AppLayout: { template: '<div><slot name="page-heading-actions" /><slot /></div>' },
-        RouterLink: { template: '<a><slot /></a>' },
+        RouterLink: RouterLinkStub,
         Icon: { template: '<span />' },
         LoadingSpinner: { template: '<span />' },
         LocaleSwitcher: { template: '<span />' },
         GroupCapacityBadge: { template: '<span data-testid="group-capacity" />' },
-        SearchInput: SearchInputStub,
       },
     },
   })
@@ -271,9 +257,7 @@ describe('ModelMarketplaceView', () => {
     routeState.query = { q: 'gpt-5.5' }
     const wrapper = await mountMarketplace()
 
-    expect(
-      (wrapper.get('[data-testid="marketplace-search"]').element as HTMLInputElement).value,
-    ).toBe('gpt-5.5')
+    expect((wrapper.get(searchField).element as HTMLInputElement).value).toBe('gpt-5.5')
     const cards = wrapper.findAll('[data-model-id="gpt-5.5"]')
     expect(cards).toHaveLength(4)
     expect(cards.every((card) => card.classes('marketplace-card-flash'))).toBe(true)
@@ -316,10 +300,10 @@ describe('ModelMarketplaceView', () => {
       'Plus 2',
     ])
     expect(wrapper.findAll('[data-testid="group-exclusive-tag"]')).toHaveLength(2)
-    await wrapper.get('[data-testid="marketplace-search"]').setValue('Pro 2')
+    await wrapper.get(searchField).setValue('Pro 2')
     expect(wrapper.findAll('[data-testid="marketplace-group-section"]')).toHaveLength(1)
     expect(wrapper.get('[data-testid="group-exclusive-tag"]').text()).toBe('marketplace.exclusive')
-    await wrapper.get('[data-testid="marketplace-search"]').setValue('')
+    await wrapper.get(searchField).setValue('')
     await chooseFilterOption(wrapper, 'marketplace.filterGroup', '2')
     expect(wrapper.findAll('[data-testid="marketplace-group-section"]')).toHaveLength(1)
     expect(wrapper.get('[data-testid="group-exclusive-tag"]').exists()).toBe(true)
@@ -401,6 +385,97 @@ describe('ModelMarketplaceView', () => {
     await flushPromises()
     expect(wrapper.text()).toContain('Latest account')
     expect(wrapper.text()).not.toContain('Previous locale')
+  })
+
+  // The login destination reopens the current search, including literal punctuation.
+  // Clearing the field before leaving takes the user back to the full personal catalog.
+  it('returns from the guest login link to the current model search', async () => {
+    authState.isAuthenticated = false
+    authState.user = null
+    const wrapper = await mountMarketplace()
+    const login = wrapper
+      .findAllComponents(RouterLinkStub)
+      .find((link) => link.text() === 'home.login')!
+    await wrapper.get(searchField).setValue(' Model A+B & C/D ')
+    expect(login.props('to')).toEqual({
+      path: '/login',
+      query: { redirect: '/models?q=Model+A%2BB+%26+C%2FD' },
+    })
+    await wrapper.get(searchField).setValue('')
+    expect(login.props('to')).toEqual({ path: '/login', query: { redirect: '/models' } })
+  })
+
+  // Empty responses describe the current catalog even when the URL supplies a query.
+  // Resetting local filters cannot reveal models absent from the server response.
+  it.each([true, false])('shows the empty catalog for authenticated=%s', async (authenticated) => {
+    authState.isAuthenticated = authenticated
+    authState.user = authenticated ? { id: 7 } : null
+    routeState.query = { q: 'unknown-model' }
+    getMarketplaceModels.mockResolvedValue([])
+    getAvailableMarketplaceModels.mockResolvedValue([])
+    const wrapper = await mountMarketplace()
+    expect(wrapper.get('h2').text()).toBe('marketplace.catalogEmptyTitle')
+    expect(wrapper.findAll('button').some((button) => button.text() === 'common.reset')).toBe(false)
+    expect(wrapper.text()).not.toContain('marketplace.emptyDescription')
+  })
+
+  // Two groups offer the same request ID at independently quoted input prices.
+  // Searching by ID or display name preserves both rows and their units. A miss
+  // offers a local reset, which restores the unpriced model without fetching again.
+  it('keeps per-group quotes through search, no matches, and reset', async () => {
+    const publicGroup = marketplaceFixture()[0]
+    const exclusiveGroup = marketplaceGroup(2, 'Members', [
+      marketplaceModel('gpt-5.5', 'GPT 5.5', { ...tokenPricing, input_price_per_token: 0.000003 }),
+    ])
+    getAvailableMarketplaceModels.mockResolvedValue([
+      publicGroup,
+      { ...exclusiveGroup, is_exclusive: true },
+    ])
+    const wrapper = await mountMarketplace()
+    const field = wrapper.get(searchField)
+    for (const query of [' GPT-5.5 ', 'gPt 5.5']) {
+      await field.setValue(query)
+      const sections = wrapper.findAll('[data-testid="marketplace-group-section"]')
+      expect(sections.map((section) => section.get('h2').text())).toEqual(['Members', 'Plus'])
+      expect(sections.map((section) => section.get('h3').text())).toEqual(['GPT 5.5', 'GPT 5.5'])
+      expect(
+        sections.map((section) => section.get('[data-model-id]').attributes('data-model-id')),
+      ).toEqual(['gpt-5.5', 'gpt-5.5'])
+      expect(sections.map((section) => section.get('dl dd').text())).toEqual([
+        '3.00 点 usage.perMillionTokens',
+        '1.00 点 usage.perMillionTokens',
+      ])
+      expect(wrapper.find('[data-model-id="legacy-unpriced"]').exists()).toBe(false)
+    }
+    await field.setValue('no matching model')
+    expect(wrapper.get('h2').text()).toBe('marketplace.emptyTitle')
+    await wrapper
+      .findAll('button')
+      .find((button) => button.text() === 'common.reset')!
+      .trigger('click')
+    expect(wrapper.get('[data-model-id="legacy-unpriced"]').text()).toContain(
+      'marketplace.pricingUnavailable',
+    )
+    expect(getAvailableMarketplaceModels).toHaveBeenCalledOnce()
+  })
+
+  // An exclusive brand may disappear on logout. Its obsolete selection must
+  // release the public catalog when the guest response arrives.
+  it('clears a brand filter that disappears on logout', async () => {
+    const fixture = marketplaceFixture()
+    getAvailableMarketplaceModels.mockResolvedValue([
+      { ...fixture[1], is_exclusive: true, display_brand: 'Anthropic' },
+      fixture[0],
+    ])
+    getMarketplaceModels.mockResolvedValue([fixture[0]])
+    const wrapper = await mountMarketplace()
+    await chooseFilterOption(wrapper, 'marketplace.filterBrand', 'Anthropic')
+    expect(wrapper.get('[data-testid="marketplace-group-section"] h2').text()).toBe('Pro')
+    authState.isAuthenticated = false
+    authState.user = null
+    await flushPromises()
+    expect(wrapper.get('[data-testid="marketplace-group-section"] h2').text()).toBe('Plus')
+    expect(wrapper.find('[data-testid="group-exclusive-tag"]').exists()).toBe(false)
   })
 
   // A manually resolved catalog request keeps the page in its loading phase.
@@ -512,6 +587,27 @@ describe('ModelMarketplaceView', () => {
       expect(section.text()).toContain('GPT 5.5')
     }
     wrapper.unmount()
+  })
+
+  // The API omits zero-valued standard token fields even when a paid Fast tier exists.
+  // The card and its expanded Standard view must agree, and Fast retains its own quote.
+  it('shows free Standard and paid Fast prices on the same model', async () => {
+    const model = marketplaceModel('mixed-rate', 'Mixed rate', {
+      pricing_mode: 'token',
+      price_status: 'priced',
+      fast_input_price_per_token: 0.000004,
+    })
+    getAvailableMarketplaceModels.mockResolvedValue([marketplaceGroup(1, 'Mixed', [model])])
+    const wrapper = await mountMarketplace()
+    const card = wrapper.get('[data-model-id="mixed-rate"]')
+    const free = '0.0000 点 usage.perMillionTokens'
+    expect(card.findAll('dl dd').map((row) => row.text())).toEqual([free, free])
+    await card.get('[data-testid="model-pricing-toggle"]').trigger('click')
+    expect(card.get('[data-testid="pricing-rows"]').text()).toContain(free)
+    await card.get('[data-testid="pricing-fast-switch"]').findAll('button')[1].trigger('click')
+    expect(card.get('[data-testid="pricing-rows"]').text()).toContain(
+      '4.00 点 usage.perMillionTokens',
+    )
   })
 
   // A priced model combines an omitted zero-price default interval with a paid successor.

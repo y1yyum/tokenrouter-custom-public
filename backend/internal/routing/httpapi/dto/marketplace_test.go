@@ -86,6 +86,23 @@ func TestMarketplacePricingJSONIncludesTokenModifiers(t *testing.T) {
 	}`, string(body))
 }
 
+// TestMarketplaceFreeStandardWithPaidFastJSON checks the wire shape consumed by
+// the model card. Zero Standard rates are omitted, while the priced status and
+// group-adjusted priority rate survive serialization.
+func TestMarketplaceFreeStandardWithPaidFastJSON(t *testing.T) {
+	quote := pricing.BuildTokenDisplayPricing(&pricing.ModelPricing{
+		CatalogSource:              "models.dev",
+		InputPricePerTokenPriority: 2e-6,
+	}, 2)
+	body, err := json.Marshal(modelMarketplacePricingFromRouting(quote))
+	require.NoError(t, err)
+	require.JSONEq(t, `{
+		"pricing_mode": "token",
+		"price_status": "priced",
+		"fast_input_price_per_token": 0.000004
+	}`, string(body))
+}
+
 // TestMarketplacePricingJSONOmitsAbsentTokenModifiers serializes a token
 // quote with neither optional modifier set. It checks that both Max effort
 // and time schedule members are absent from the JSON object.
