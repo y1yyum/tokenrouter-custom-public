@@ -23,8 +23,9 @@ import (
 // Multidimensional analytics combines covered UTC buckets and raw edges when
 // supported. Raw recovery keeps each method's filters and grouping SQL, while a
 // legacy global hourly/daily path uses its narrower selector set and dashboard
-// buckets. Date formatting comes from a fixed whitelist, but raw trends use the
-// SQL session timezone and analytics trends bind the resolved Calendar zone.
+// buckets. User trends with an explicit calendar share local bucket labels
+// across raw and analytics reads. Other raw trends follow the SQL session
+// timezone, while other analytics trends use the reporting Calendar.
 // Ranking totals are calculated before limiting entries, and every monetary
 // result keeps base, charged, and provider amounts distinct.
 
@@ -348,8 +349,8 @@ func (r *Store) GetUsageTrendWithUsageFilters(ctx context.Context, startTime, en
 // shouldUsePreaggregatedTrend and a separate zero-team condition. Request ID is
 // applied when raw SQL executes, but is absent from that legacy eligibility
 // check. Raw actor/team branches stay disjoint, RequestType precedes Stream,
-// and dates use the SQL session zone. A request-ID-only query can consequently
-// return global legacy buckets when they are nonempty.
+// and dates use the requested trend location or the SQL session zone. A
+// request-ID-only query can return global legacy buckets when they are nonempty.
 func (r *Store) getUsageTrendWithFilters(ctx context.Context, startTime, endTime time.Time, granularity string, filters UsageLogFilters) (results []TrendDataPoint, err error) {
 	requestID := strings.TrimSpace(filters.RequestID)
 
@@ -380,10 +381,17 @@ func (r *Store) getUsageTrendWithFilters(ctx context.Context, startTime, endTime
 	if scopeErr != nil {
 		return nil, scopeErr
 	}
+	bucketTime := "created_at"
+	if filters.TrendLocation != nil {
+		// Convert each instant before grouping so a local midnight and the
+		// preceding second receive distinct local dates in every SQL session.
+		args = append(args, filters.TrendLocation.String())
+		bucketTime = fmt.Sprintf("created_at AT TIME ZONE $%d", len(args))
+	}
 
 	query := fmt.Sprintf(`
 		SELECT
-			TO_CHAR(created_at, '%s') as date,
+			TO_CHAR(%s, '%s') as date,
 			COUNT(*) as requests,
 			COALESCE(SUM(input_tokens), 0) as input_tokens,
 			COALESCE(SUM(output_tokens), 0) as output_tokens,
@@ -394,7 +402,7 @@ func (r *Store) getUsageTrendWithFilters(ctx context.Context, startTime, endTime
 			COALESCE(SUM(actual_cost), 0) as actual_cost
 		FROM %s
 		WHERE created_at >= $1 AND created_at < $2
-	`, dateFormat, source)
+	`, bucketTime, dateFormat, source)
 
 	if requestID != "" {
 		query += " AND " + usageRequestIDCondition("", len(args)+1)
@@ -467,6 +475,7 @@ func shouldUsePreaggregatedTrend(granularity string, filters UsageLogFilters) bo
 		return false
 	}
 	return !filters.PersonalOnly &&
+		filters.TrendLocation == nil &&
 		!filters.IncludeOwnedTeam &&
 		filters.UserID == 0 &&
 		filters.APIKeyID == 0 &&

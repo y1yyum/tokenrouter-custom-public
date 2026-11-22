@@ -352,6 +352,9 @@ type UsageLogFilters struct {
 	// for retained-history request lookup and list queries.
 	StartTime *time.Time // optional inclusive start instant
 	EndTime   *time.Time // optional exclusive end instant
+	// TrendLocation groups user dashboard observations by the requested calendar.
+	// A nil location retains the report's default bucket labels.
+	TrendLocation *time.Location // validated IANA location for trend labels
 	// ExactTotal requests a complete count for pagination. False permits the
 	// repository's faster total strategy only when its user, key, provider and
 	// team scope conditions allow it.

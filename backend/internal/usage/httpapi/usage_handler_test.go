@@ -355,9 +355,32 @@ func newUserUsageRequestTypeTestRouter(repo *userUsageRepoCapture) *gin.Engine {
 	})
 	router.GET("/usage", handler.List)
 	router.GET("/usage/stats", handler.Stats)
+	router.GET("/usage/dashboard/trend", handler.DashboardTrend)
 	router.GET("/usage/dashboard/models", handler.DashboardModels)
 	router.GET("/usage/dashboard/snapshot-v2", handler.DashboardSnapshotV2)
 	return router
+}
+
+// TestDashboardTrendForwardsBrowserCalendar exercises both user trend entry points.
+// Local picker bounds and offset-stamped bounds select the same instants and the
+// repository receives the browser calendar for labelling its buckets.
+func TestDashboardTrendForwardsBrowserCalendar(t *testing.T) {
+	for _, path := range []string{
+		"/usage/dashboard/trend?start_date=2026-11-20T00:00:00&end_date=2026-11-21T00:00:00",
+		"/usage/dashboard/snapshot-v2?start_date=2026-11-19T22:00:00Z&end_date=2026-11-20T22:00:00Z",
+	} {
+		repo := &userUsageRepoCapture{}
+		router := newUserUsageRequestTypeTestRouter(repo)
+		rec := httptest.NewRecorder()
+		router.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, path+"&timezone=Africa%2FJohannesburg", nil))
+		require.Equal(t, http.StatusOK, rec.Code)
+		require.Equal(t, int64(42), repo.trendFilters.UserID)
+		require.True(t, repo.trendFilters.IncludeOwnedTeam)
+		require.NotNil(t, repo.trendFilters.TrendLocation)
+		require.Equal(t, "Africa/Johannesburg", repo.trendFilters.TrendLocation.String())
+		require.Equal(t, "2026-11-19T22:00:00Z", repo.trendFilters.StartTime.UTC().Format(time.RFC3339))
+		require.Equal(t, "2026-11-20T22:00:00Z", repo.trendFilters.EndTime.UTC().Format(time.RFC3339))
+	}
 }
 
 // TestUserUsageListRequestTypePriority sends WS v2 beside malformed stream

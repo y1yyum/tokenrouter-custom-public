@@ -33,6 +33,7 @@ export default {
       byDay: '按天',
       trendTitle: '用量趋势 · {metric}',
       empty: '所选时间范围内暂无用量',
+      loadFailed: '用量读取失败，请刷新重试。',
     },
     live: {
       rpm: 'RPM',

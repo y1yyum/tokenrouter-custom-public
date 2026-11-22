@@ -413,6 +413,12 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 			endTime = *endPtr
 		}
 	}
+	// Use the same named calendar for trend labels as for unzoned picker
+	// bounds. Clients omitting timezone retain the repository reporting default.
+	var trendLocation *time.Location
+	if userTZ != "" && now.Location().String() != "Local" {
+		trendLocation = now.Location()
+	}
 	return &userUsageFilters{
 		Filters: usage.UsageLogFilters{
 			RequestID:          strings.TrimSpace(c.Query("request_id")),
@@ -429,6 +435,7 @@ func (h *UsageHandler) parseUserUsageFilters(c *gin.Context, requireRange bool) 
 			BillingMode:        billingMode,
 			StartTime:          startPtr,
 			EndTime:            endPtr,
+			TrendLocation:      trendLocation,
 		},
 		StartTime: startTime,
 		EndTime:   endTime,
@@ -778,6 +785,7 @@ func (h *UsageHandler) DashboardStats(c *gin.Context) {
 // owned-team filters. It supplies scalar chart bounds from
 // parseUserUsageFilters, passes granularity to storage, and displays the
 // range's final included date.
+// @project-doc docs/interfaces/http_api.md#user_dashboard_usage
 func (h *UsageHandler) DashboardTrend(c *gin.Context) {
 	parsed, ok := h.parseUserUsageFilters(c, true)
 	if !ok {

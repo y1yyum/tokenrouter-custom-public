@@ -9,6 +9,7 @@ import FilterOptions from '@/components/common/FilterOptions.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import { Line } from 'vue-chartjs'
 import { usageAPI } from '@/api/usage'
+import type { TrendDataPoint } from '@/api/usage.types'
 import { formatDayKey } from '../usageChartData'
 
 // UserDashboardUsageChart.spec.ts mounts the production usage toolbar, chart, and model
@@ -70,15 +71,10 @@ vi.mock('@/api/team', () => ({
   },
 }))
 
-// trendOf expands abbreviated request observations into complete zero-default trend records
-// for chart scenarios. Callers override date, request count, and optional charged cost while
-// the remaining token categories stay deterministic.
+// trendOf expands sparse fixture observations into complete trend records. Each row
+// supplies its own label and request count, with omitted cost and token fields set to zero.
 const trendOf = (
-  points: Array<{
-    date: string // Local bucket date label.
-    requests: number // Recorded bucket request count.
-    actual_cost?: number // Optional charged bucket amount.
-  }>,
+  points: Array<Pick<TrendDataPoint, 'date' | 'requests'> & Partial<TrendDataPoint>>,
 ) => ({
   trend: points.map((item) => ({
     input_tokens: 0,
@@ -155,17 +151,24 @@ describe('UserDashboardUsageChart', () => {
 
   afterEach(() => {
     vi.useRealTimers()
+    vi.restoreAllMocks()
     localStorage.clear()
   })
 
-  // The default dashboard load returns current and prior request totals. The test protects
-  // hourly queries from local midnight, displayed aggregate change, undefined cost
-  // comparison, and the picker's matching endpoints for today.
+  // Today is only half over, and yesterday has requests in a later bucket.
+  // The card compares the same elapsed hours shown by the chart overlay.
   it('loads today and the previous period by default with totals and comparisons', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 20, 12, 30))
     const today = formatDayKey(new Date())
     vi.mocked(usageAPI.getDashboardTrend)
       .mockResolvedValueOnce(trendOf([{ date: `${today} 00:00`, requests: 30 }]) as any)
-      .mockResolvedValueOnce(trendOf([{ date: '2000-01-01', requests: 20 }]) as any)
+      .mockResolvedValueOnce(
+        trendOf([
+          { date: '2026-11-19 12:00', requests: 20 },
+          { date: '2026-11-19 13:00', requests: 40 },
+        ]),
+      )
 
     const wrapper = await mountChart()
 
@@ -188,12 +191,103 @@ describe('UserDashboardUsageChart', () => {
     expect(picker.props('endDate')).toBe(today)
   })
 
+  // Three local buckets span the first and last hours of the selected day.
+  // All four cards and the hourly series must include both boundary records.
+  it('整日汇总包含午夜与最后一小时，按实际扣费和累计输入计算', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    vi.setSystemTime(new Date(2026, 10, 20, 23, 59, 59, 900))
+    vi.mocked(usageAPI.getDashboardTrend)
+      .mockResolvedValueOnce(
+        trendOf([
+          {
+            date: '2026-11-20 00:00',
+            requests: 1,
+            input_tokens: 60,
+            output_tokens: 30,
+            cache_creation_tokens: 10,
+            cache_read_tokens: 25,
+            total_tokens: 125,
+            cost: 0.5,
+            actual_cost: 0.25,
+          },
+          {
+            date: '2026-11-20 12:00',
+            requests: 1,
+            input_tokens: 35,
+            output_tokens: 15,
+            cache_creation_tokens: 5,
+            cache_read_tokens: 10,
+            total_tokens: 65,
+            cost: 1,
+            actual_cost: 0.5,
+          },
+          {
+            date: '2026-11-20 23:00',
+            requests: 1,
+            input_tokens: 5,
+            output_tokens: 5,
+            cache_creation_tokens: 5,
+            cache_read_tokens: 5,
+            total_tokens: 20,
+            cost: 0.5,
+            actual_cost: 0.25,
+          },
+        ]),
+      )
+      .mockResolvedValueOnce(trendOf([]))
+    const wrapper = await mountChart()
+    for (const [key, value] of Object.entries({
+      requests: '3',
+      tokens: '210',
+      cost: '1',
+      cacheHitRate: '25.0%',
+    })) {
+      expect(wrapper.get(`[data-testid="usage-metric-${key}"] .sr-only`).text()).toBe(value)
+    }
+    await wrapper.get('[data-testid="usage-metric-requests"]').trigger('click')
+    const requests = wrapper.findComponent(Line).props('data').datasets[0].data
+    expect(requests).toEqual(
+      Array.from({ length: 24 }, (_, hour) => ([0, 12, 23].includes(hour) ? 1 : 0)),
+    )
+  })
+
   // The selected interval returns no usage in either period. The test protects the chart
   // empty state after loading completes rather than rendering meaningless lines.
   it('所选范围没有用量时显示空状态', async () => {
     vi.mocked(usageAPI.getDashboardTrend).mockResolvedValue(trendOf([]) as any)
     const wrapper = await mountChart()
     expect(wrapper.find('[data-testid="usage-chart-empty"]').exists()).toBe(true)
+    for (const key of ['requests', 'tokens', 'cost']) {
+      expect(wrapper.get(`[data-testid="usage-metric-${key}"] .sr-only`).text()).toBe('0')
+    }
+    expect(wrapper.get('[data-testid="usage-metric-cacheHitRate"] .sr-only').text()).toBe('—')
+  })
+
+  // A failed current trend cannot establish zero usage or a decrease from yesterday.
+  // Retrying the same range restores the values once the API supplies measurements.
+  it('本期读取失败显示不可用，重试成功后恢复数值', async () => {
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+    vi.mocked(usageAPI.getDashboardTrend)
+      .mockRejectedValueOnce(new Error('unavailable'))
+      .mockResolvedValueOnce(trendOf([{ date: '2026-11-19 00:00', requests: 3 }]))
+    const wrapper = await mountChart()
+    expect(wrapper.find('[data-testid="usage-chart-empty"]').exists()).toBe(false)
+    expect(wrapper.get('[role="status"]').text()).toContain('dashboard.usageChart.loadFailed')
+    for (const key of ['requests', 'tokens', 'cost', 'cacheHitRate']) {
+      expect(wrapper.get(`[data-testid="usage-metric-${key}"]`).text()).toContain('—')
+      expect(wrapper.find(`[data-testid="usage-delta-${key}"]`).exists()).toBe(false)
+    }
+    vi.mocked(usageAPI.getDashboardTrend).mockResolvedValue(
+      trendOf([{ date: `${formatDayKey(new Date())} 00:00`, requests: 3 }]),
+    )
+    wrapper.findComponent(DateRangePicker).vm.$emit('change', {
+      startDate: formatDayKey(new Date()),
+      endDate: formatDayKey(new Date()),
+      preset: 'today',
+    })
+    await flushPromises()
+    expect(wrapper.get('[data-testid="usage-metric-requests"] .sr-only').text()).toBe('3')
+    expect(wrapper.find('[role="status"]').exists()).toBe(false)
   })
 
   // The user selects cost and the picker's last-twenty-four-hours shortcut. The test

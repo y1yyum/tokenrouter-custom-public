@@ -229,14 +229,40 @@ func (r *Store) getUsageStatsFromAnalytics(ctx context.Context, filters UsageLog
 
 // getUsageTrendFromAnalytics returns combined usage buckets in the resolved
 // reporting timezone. Unsupported dimensions or unavailable coverage return
-// false; granularity uses safeDateFormat, and the named timezone is appended
-// after the source's current bound arguments.
+// false. An explicit trend location overrides the reporting calendar. When a
+// local bucket boundary splits a UTC hour, the caller must use raw records
+// because hourly rollups have already combined the two sides of that boundary.
 func (r *Store) getUsageTrendFromAnalytics(ctx context.Context, start, end time.Time, granularity string, filters UsageLogFilters) ([]TrendDataPoint, bool, error) {
+	if loc := filters.TrendLocation; loc != nil {
+		// Check every offset period: a fractional offset places a local hour or
+		// midnight inside a stored UTC hour, which only raw timestamps can split.
+		for cursor := start; cursor.Before(end); {
+			local := cursor.In(loc)
+			_, offset := local.Zone()
+			if offset%3600 != 0 {
+				return nil, false, nil
+			}
+			_, next := local.ZoneBounds()
+			if next.IsZero() || !next.Before(end) {
+				break
+			}
+			if !next.After(cursor) {
+				// An incomplete transition range cannot establish alignment for the
+				// remaining timestamps. Let the caller group their raw instants.
+				return nil, false, nil
+			}
+			cursor = next
+		}
+	}
 	query, ok, err := r.buildUsageAnalyticsQuery(ctx, filters, start, end, false)
 	if err != nil || !ok {
 		return nil, false, err
 	}
-	query.args = append(query.args, r.resolveUsageStatsTimezone())
+	reportZone := r.resolveUsageStatsTimezone()
+	if filters.TrendLocation != nil {
+		reportZone = filters.TrendLocation.String()
+	}
+	query.args = append(query.args, reportZone)
 	timezonePosition := len(query.args)
 	dateFormat := safeDateFormat(granularity)
 	rows, err := r.sql.QueryContext(ctx, query.cte+fmt.Sprintf(`

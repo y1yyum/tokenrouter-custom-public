@@ -33,6 +33,7 @@ export default {
       byDay: 'Daily',
       trendTitle: 'Usage trend · {metric}',
       empty: 'No usage in the selected range',
+      loadFailed: 'Could not load usage. Refresh to try again.',
     },
     live: {
       rpm: 'RPM',

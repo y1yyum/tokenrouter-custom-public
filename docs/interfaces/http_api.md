@@ -13,7 +13,7 @@
   - [身份登录与 One Tap](#身份登录与-one-tap)、[API Key 结算策略](#api-key-结算策略)、[API Key 凭据轮换](#api_key_rotation)。
   - [分组协议、价格与路由策略](#分组协议价格与路由策略)、[提供商管理、测试与调度诊断](#提供商管理测试与调度诊断)、[创作台接口与管理设置](#创作台接口与管理设置)。
   - [支付管理恢复](#payment_admin_recovery)、[用户专属充值倍率与下单校验](#personal_recharge_multiplier_api)、[订阅自助撤销](#subscription_self_revoke_api)、[使用记录后台导出与统计筛选](#usage_export_tasks_api)。
-  - [公告接口](#announcement_api)、[社交分享封面](#social_share_image)、[站点页面](#site_pages)、[备份与系统维护](#备份与系统维护)、[SystemOne 与 MCP OAuth 入口](#systemone-与-mcp-oauth-入口)。
+  - [普通用户概览](#user_dashboard_usage)、[公告接口](#announcement_api)、[社交分享封面](#social_share_image)、[站点页面](#site_pages)、[备份与系统维护](#备份与系统维护)、[SystemOne 与 MCP OAuth 入口](#systemone-与-mcp-oauth-入口)。
 - [面板命令幂等](#write_idempotency)：幂等键构成、重放、冲突和存储故障策略。
 - [响应、错误与性能计时](#response_errors)：面板 envelope、协议错误格式与 `usage_logs.timings` 指标口径。
 - [请求关联](#请求关联)：本地请求 ID 透传、资金去重与诊断查询。
@@ -263,6 +263,20 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 - 准入与事务：仅接受当前用户本人、处于 `active` 且最高层有限额度已用完的订阅。成功时在事务内撤销当前记录，让同套餐下一份 pending 订阅提前生效，并自动改绑指向原订阅的 Key。
 - 响应结构：`data` 为 `{ revoked_subscription_id, replacement_subscription_id, rebound_api_key_count }`；无接续订阅时 `replacement_subscription_id` 为 `null`，改绑数为 `0`。
 - 错误与边界：订阅不存在或不属于当前用户返回 `SUBSCRIPTION_NOT_FOUND`；非 `active` 返回 `409 SUBSCRIPTION_NOT_ACTIVE`；最高层额度仍有余或不限额返回 `409 SUBSCRIPTION_QUOTA_NOT_EXHAUSTED`。撤销不退款，用户端无恢复接口。
+
+<a id="user_dashboard_usage"></a>
+### 普通用户概览
+
+| `/dashboard` 读数 | 范围与单位 |
+| --- | --- |
+| 请求数与总 Token | 趋势卡累计所选窗口内的请求数，以及输入、输出、缓存写入和缓存读取四类 Token。 |
+| 消费与缓存命中率 | 消费累计 `actual_cost`，使用站点余额单位。缓存命中率用整窗的缓存读取量除以输入、缓存写入、缓存读取三项之和，以百分比显示。环比使用百分点。 |
+| 小时趋势与热力日 | `GET /api/v1/usage/dashboard/trend` 按 `granularity=hour` 或 `day` 返回有用量的桶。浏览器传 IANA `timezone`，横轴、热力格和服务端桶标签共用该时区。 |
+| 页头实时统计 | `GET /api/v1/usage/dashboard/stats` 独立于日期筛选。RPM、TPM 分别将最近五分钟的请求数、输入与输出 Token 总量除以 5，取整数。平均耗时取保留记录中有耗时的样本，接口单位是毫秒。今日消费从服务端日历的午夜起算。 |
+
+无已保存的偏好时，趋势卡默认选中今天。日期选择器包含结束日，浏览器发送起始日零点和结束日的次日零点，接口按左闭右开区间取数。以 `Africa/Johannesburg` 的 2026-11-20 为例，UTC 窗口从 11 月 19 日 22:00 到 11 月 20 日 22:00，当地 00:00 和 23:59:59 分别落在当天第一个和最后一个小时桶。普通用户查询本人记录，团队所有者另可见其团队范围内的使用记录。
+
+缺记录的小时在图上补零。查询成功且整窗为空时，请求数、Token、消费为零，缓存命中率显示 `—`。本期趋势读取失败时，四张卡显示 `—`，图表提示刷新重试。当前只经过部分时段时，卡片环比和对照线使用上期相同数量的桶，包含与当前进行中时段对应的上期桶。
 
 <a id="usage_export_tasks_api"></a>
 ### 使用记录后台导出与统计筛选

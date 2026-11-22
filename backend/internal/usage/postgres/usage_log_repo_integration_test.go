@@ -1719,6 +1719,72 @@ func (s *UsageLogRepoSuite) TestGetUsageTrendWithFilters() {
 	s.Require().Len(trend, 2)
 }
 
+// TestDashboardTrendLocalBuckets places distinct requests at both ends of a
+// Johannesburg day in a UTC database. Raw and rolled-up reads must agree on
+// local labels and exclude the adjacent instants and another actor's request.
+func (s *UsageLogRepoSuite) TestDashboardTrendLocalBuckets() {
+	loc, err := time.LoadLocation("Africa/Johannesburg")
+	s.Require().NoError(err)
+	start := time.Date(2026, 11, 20, 0, 0, 0, 0, loc)
+	end := start.AddDate(0, 0, 1)
+	user := mustCreateUser(s.T(), s.client, &identity.User{Email: "overview@example.com"})
+	other := mustCreateUser(s.T(), s.client, &identity.User{Email: "other-overview@example.com"})
+	key := mustCreateApiKey(s.T(), s.client, &apikey.APIKey{UserID: user.ID, Key: "overview", Name: "overview"})
+	otherKey := mustCreateApiKey(s.T(), s.client, &apikey.APIKey{UserID: other.ID, Key: "other-overview", Name: "other"})
+	provider := mustCreateProvider(s.T(), s.client, &providercore.Record{Name: "overview"})
+	s.createUsageLog(user, key, provider, 10, 5, 0.25, start)
+	s.createUsageLog(user, key, provider, 40, 20, 0.75, end.Add(-time.Second))
+	s.createUsageLog(user, key, provider, 80, 80, 5, start.Add(-time.Second))
+	s.createUsageLog(user, key, provider, 80, 80, 5, end)
+	s.createUsageLog(other, otherKey, provider, 80, 80, 5, start)
+
+	filters := UsageLogFilters{UserID: user.ID, IncludeOwnedTeam: true, TrendLocation: loc}
+	hours := []TrendDataPoint{
+		{Date: "2026-11-20 00:00", Requests: 1, InputTokens: 10, OutputTokens: 5, TotalTokens: 15, Cost: 0.25, ActualCost: 0.25},
+		{Date: "2026-11-20 23:00", Requests: 1, InputTokens: 40, OutputTokens: 20, TotalTokens: 60, Cost: 0.75, ActualCost: 0.75},
+	}
+	days := []TrendDataPoint{
+		{Date: "2026-11-20", Requests: 2, InputTokens: 50, OutputTokens: 25, TotalTokens: 75, Cost: 1, ActualCost: 1},
+	}
+	expected := map[string][]TrendDataPoint{"hour": hours, "day": days}
+	for precision, want := range expected {
+		points, readErr := s.repo.GetUsageTrendWithUsageFilters(s.ctx, start, end, precision, filters)
+		s.Require().NoError(readErr)
+		s.Equal(want, points, "raw %s", precision)
+	}
+
+	// Publish coverage only after the actual UTC rollups exist. Reading analytics
+	// directly makes an unintended fallback observable even when raw values agree.
+	aggregator := NewAggregationStoreWithSQL(s.tx, timezone.NewCalendar(time.UTC))
+	s.Require().NoError(aggregator.AggregateUsageAnalyticsRange(s.ctx, start.UTC(), end.UTC()))
+	_, err = s.tx.ExecContext(s.ctx, "UPDATE usage_analytics_aggregation_state SET live_watermark = $1, coverage_start = $2 WHERE id = 1", end, start)
+	s.Require().NoError(err)
+	s.repo.preAggregation = preaggregation.NewPreAggregationSettingsService(nil, &preaggregation.Options{
+		Usage: preaggregation.UsageOptions{Enabled: true, IntervalSeconds: 60},
+	})
+	for precision, want := range expected {
+		points, used, readErr := s.repo.getUsageTrendFromAnalytics(s.ctx, start, end, precision, filters)
+		s.Require().NoError(readErr)
+		s.Require().True(used)
+		s.Equal(want, points, "rollup %s", precision)
+	}
+
+	// A fractional offset splits one UTC hour between two local hours. Only raw
+	// instants can place the late event into the following local hour.
+	for _, zone := range []string{"Asia/Kolkata", "Asia/Kathmandu"} {
+		filters.TrendLocation, err = time.LoadLocation(zone)
+		s.Require().NoError(err)
+		_, used, readErr := s.repo.getUsageTrendFromAnalytics(s.ctx, start, end, "hour", filters)
+		s.Require().NoError(readErr)
+		s.False(used, zone)
+		points, readErr := s.repo.GetUsageTrendWithUsageFilters(s.ctx, start, end, "hour", filters)
+		s.Require().NoError(readErr)
+		s.Require().Len(points, 2)
+		s.Equal("2026-11-20 03:00", points[0].Date, zone)
+		s.Equal("2026-11-21 03:00", points[1].Date, zone)
+	}
+}
+
 // TestGetUsageTrendWithFilters_HourlyGranularity records two actor requests in
 // separate fixture hours. It checks the selected hour-granularity query returns
 // two populated trend buckets.

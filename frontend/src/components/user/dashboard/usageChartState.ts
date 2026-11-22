@@ -21,8 +21,8 @@ import { useUsageChartFilters } from './useUsageChartFilters'
 // visual sections, so changing a range or filter updates a common selection. A request
 // sequence chooses which completed batch may publish its values after overlapping loads.
 //
-// Individual failures have distinct display consequences: current usage receives zero
-// buckets, comparison data becomes unavailable, and model rankings become empty. Model
+// Failed current reads display an unavailable state. A successful empty read fills
+// the range with zeros. Comparison cards and lines share the elapsed buckets. Model
 // choices can use unfiltered results even while the chart is filtered. Browser preferences
 // retain the metric and shortcut, while custom dates and filter selections remain tied to
 // the current page instance.
@@ -88,11 +88,14 @@ export function createUsageChartState() {
 
   const loading = ref(false)
   const loaded = ref(false)
+  const trendFailed = ref(false)
   const current = ref<TrendDataPoint[]>([])
-  // previous and previousTotals represent the comparison interval. Failed queries clear
-  // both values so the trend omits its comparison line and metric deltas together.
+  // previous and previousTotals describe the same elapsed portion of the comparison
+  // interval. A failed comparison clears the series and leaves the cards without a delta.
   const previous = ref<TrendDataPoint[]>([])
-  const previousTotals = ref<UsageTotals | null>(null)
+  const previousTotals = computed<UsageTotals | null>(() =>
+    previous.value.length ? summarizeTrend(previous.value) : null,
+  )
   // models supplies ranking records for the active interval and conditions;
   // modelsLoaded distinguishes the initial skeleton from an empty completed result.
   const models = ref<ModelStat[]>([])
@@ -147,7 +150,7 @@ export function createUsageChartState() {
   // loadTrend loads current usage, its preceding comparison interval, and model totals as
   // one display batch. Each invocation advances a sequence so a late batch cannot overwrite
   // a more recent selection. The requests settle independently: failed current usage becomes
-  // zero-filled buckets, failed comparison clears its totals and line, and failed models
+  // unavailable, failed comparison clears its totals and line, and failed models
   // clear the ranking. An unfiltered successful model result also seeds filter choices for
   // that interval.
   const loadTrend = async (range: UsageRange) => {
@@ -164,23 +167,25 @@ export function createUsageChartState() {
     // A newer load owns the shared result refs, so discard this entire settled batch before
     // it can replace data or complete loading for that newer selection.
     if (seq !== requestSeq) return
+    trendFailed.value = currentResult.status === 'rejected'
     if (currentResult.status === 'fulfilled') {
       current.value = fillTrendBuckets(currentResult.value.trend || [], bucketKeys(range))
     } else {
       console.error('Failed to load usage trend:', currentResult.reason)
-      // Failed current usage still needs the selected interval's bucket positions, so supply
-      // zero observations for the chart and totals while ending its initial loading state.
-      current.value = fillTrendBuckets([], bucketKeys(range))
+      // Discard the prior range's samples on failure. The chart shows an error until a
+      // successful read establishes measured usage or confirms an empty interval.
+      current.value = []
     }
     if (previousResult.status === 'fulfilled') {
       const points = previousResult.value.trend || []
-      previous.value = fillTrendBuckets(points, bucketKeys(previousRange(range)))
-      previousTotals.value = summarizeTrend(points)
+      // Limit both the comparison line and its total to the hours or days already
+      // visible in this interval, including the current incomplete bucket.
+      const keys = bucketKeys(previousRange(range)).slice(0, current.value.length)
+      previous.value = fillTrendBuckets(points, keys)
     } else {
       // Failed comparison data cannot support either a comparison line or metric deltas, so
       // clear both representations together while retaining this batch's current usage.
       previous.value = []
-      previousTotals.value = null
     }
     if (modelsResult.status === 'fulfilled') {
       models.value = modelsResult.value.models || []
@@ -290,6 +295,7 @@ export function createUsageChartState() {
     activeRange,
     loading,
     loaded,
+    trendFailed,
     current,
     previous,
     previousTotals,

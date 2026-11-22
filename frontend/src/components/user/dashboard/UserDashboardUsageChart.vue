@@ -35,6 +35,7 @@
         </div>
         <div class="flex min-w-0 items-end justify-between gap-3">
           <Skeleton v-if="!loaded" :width="96" :height="32" />
+          <span v-else-if="trendFailed">—</span>
           <span
             v-else
             class="min-w-0 truncate text-2xl font-semibold tracking-tight tabular-nums text-gray-900 dark:text-dark-50"
@@ -45,7 +46,7 @@
           </span>
           <!-- Use the brand color for the selected metric's small trend. -->
           <UsageSparkline
-            v-if="loaded"
+            v-if="loaded && !trendFailed"
             class="metric-sparkline h-8 w-20 shrink-0"
             :class="
               metric === item.key
@@ -58,7 +59,7 @@
         </div>
         <Skeleton v-if="!loaded" :width="120" :height="20" />
         <span
-          v-else
+          v-else-if="!trendFailed"
           class="flex min-w-0 flex-wrap items-center gap-1 text-xs text-gray-500 dark:text-dark-400 sm:gap-2"
           :data-testid="`usage-delta-${item.key}`"
         >
@@ -144,6 +145,13 @@
 
         <div class="relative h-64 sm:h-80">
           <ChartSkeleton v-if="!loaded" variant="plot" height="100%" />
+          <div
+            v-else-if="trendFailed"
+            role="status"
+            class="flex h-full items-center justify-center text-sm text-gray-500 dark:text-dark-400"
+          >
+            {{ t('dashboard.usageChart.loadFailed') }}
+          </div>
           <div
             v-else-if="!hasUsage"
             data-testid="usage-chart-empty"
@@ -276,6 +284,7 @@ const {
   activeRange,
   loading,
   loaded,
+  trendFailed,
   current,
   previous,
   previousTotals,
@@ -545,13 +554,10 @@ const chartData = computed(() => {
     ),
   ]
   if (showPrevious.value && previous.value.length > 0) {
-    // Align comparison data by bucket position and truncate to available current
-    // buckets; the higher order draws that comparison beneath the current line.
+    // The higher order draws the aligned comparison beneath the current line.
     datasets.push({
       label: t('dashboard.usageChart.previousPeriod'),
-      data: previous.value
-        .slice(0, points.length)
-        .map((point) => metricValueOf(point, metric.value)),
+      data: previous.value.map((point) => metricValueOf(point, metric.value)),
       borderColor: themeColors.value.muted,
       backgroundColor: themeColors.value.muted,
       borderWidth: 1.5,
