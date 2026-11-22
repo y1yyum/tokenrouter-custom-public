@@ -73,9 +73,9 @@ func (r *affiliateLockBarrier) WithLockedInviter(ctx context.Context, id int64, 
 // accruals before their PostgreSQL inviter lock with a cap of ten. Both calls
 // succeed and the final stored invitee accrual equals that cap.
 func TestAffiliateCapConcurrentAccrualUsesLockedLatestTotal(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
 	c := testEntClient(t)
+	ctx, cancel := context.WithTimeout(t.Context(), 15*time.Second)
+	defer cancel()
 	repo := promotionpostgres.NewAffiliateRepository(c, func(tx *dbent.Tx) promotionpostgres.TransferBalance { return billingpostgres.BalanceInTx(tx) })
 	inviter, e := c.User.Create().SetEmail("test-inviter@example.com").SetPasswordHash("hash").Save(ctx)
 	require.NoError(t, e)
