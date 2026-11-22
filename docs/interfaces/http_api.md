@@ -285,10 +285,11 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 | --- | --- |
 | 日期与身份 | 页面默认选浏览器当地今天。列表和摘要共用 `start_date`、`end_date` 与 IANA `timezone`。两个日期相同时，从当地零点读到次日零点，含起点。登录用户可见自己的记录，团队所有者还可见所拥有团队的记录。 |
 | 明细与分页 | `GET /api/v1/usage` 返回当前页的 `items` 和全部匹配记录数 `total`。`page` 从 1 开始，`page_size` 控制每页条数。默认按 `created_at` 倒序，同一时刻按记录 ID 倒序。页面按浏览器当地时间显示每笔请求。 |
+| 模型筛选 | 列表和摘要都用查询参数 `model` 精确匹配记录的内部 `model`。去除首尾空格后，内部值为空的历史记录回退到 `requested_model`。清空模型时，两个请求都省略 `model`。 |
 | 用量与扣费 | 一笔请求的 Token 合计为 `input_tokens + output_tokens + cache_creation_tokens + cache_read_tokens`。该笔实扣取 `actual_cost`。逐笔 Token 与费用明细可通过鼠标或键盘焦点查看，Esc 关闭。 |
 | 整窗摘要 | `GET /api/v1/usage/stats` 返回同一筛选范围内的 `total_requests`、`total_tokens`、标价 `total_cost` 和实扣 `total_actual_cost`。翻页只重读列表，页头消费显示整窗实扣。 |
 
-更改日期或筛选条件后从第 1 页开始。窗口内没有匹配记录时，列表返回 `items: []`、`total: 0`，页面显示空态并隐藏分页，摘要中的请求、Token 和费用均为零。列表读取失败时，页面隐藏上一页的明细及分页，显示错误和重试按钮。重试保留当前日期、筛选条件、排序和页码。
+更改日期或筛选条件后，页面回到第 1 页并立即隐藏旧分页。当前列表返回后，按其 `total` 显示分页。窗口内没有匹配记录时，列表返回 `items: []`、`total: 0`，页面显示空态并隐藏分页，摘要中的请求、Token 和费用均为零。列表读取失败时，页面隐藏上一页的明细及分页，显示错误和重试按钮。重试保留当前日期、筛选条件、排序和页码。
 
 <a id="usage_export_tasks_api"></a>
 ### 使用记录后台导出与统计筛选

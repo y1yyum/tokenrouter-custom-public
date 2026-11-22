@@ -671,8 +671,8 @@ const filters = ref<UsageFilterState>({
   native_compaction_v2: null,
 })
 
-// pagination holds the current one-based page, persisted page size, and most recently
-// returned matching-record total.
+// pagination holds the current one-based page and page size. A positive total
+// enables navigation within the result set that supplied it.
 const pagination = reactive({
   page: 1,
   page_size: getPersistedPageSize(),
@@ -973,7 +973,10 @@ const refreshModelOptions = (models: ModelStat[]) => {
 // owner member charts. It also resets error rows, loading immediately only when the error
 // tab is active and permitted.
 const applyFilters = () => {
+  // Discard the old count before requesting page one so its controls cannot
+  // send a second-page request under the new filters.
   pagination.page = 1
+  pagination.total = 0
   void loadLogs()
   void loadStats()
   void loadModelStats()

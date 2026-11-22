@@ -5,8 +5,8 @@ import UsageView from '../UsageView.vue'
 
 // UsageView.spec.ts tests user usage filters, error visibility, team scope, and background
 // CSV export panel integration. API substitutes expose the parameters sent by real page
-// loaders, while child-control stubs verify column permissions, inherited filter chips, and
-// active background export badge state.
+// loaders. Model options and pagination use the page's real controls. Table and export
+// stubs expose the selected records, column permissions, filter chips, and export state.
 
 enableAutoUnmount(afterEach)
 
@@ -245,12 +245,10 @@ function mountUsageView() {
     global: {
       stubs: {
         AppLayout: simpleStub,
-        Pagination: true,
         Select: true,
-        FilterOptions: true,
         DateRangePicker: true,
         Icon: true,
-        UsageStatsCards: chartStub,
+        UsageStatsCards: true,
         UsageTable: UsageTableStub,
         UsageExportDialog: UsageExportDialogStub,
         ModelDistributionChart: chartStub,
@@ -384,6 +382,87 @@ describe('user UsageView', () => {
     expect(wrapper.get('[data-test="usage-table"]').text()).toBe('page-two')
     expect(getStats).toHaveBeenCalledTimes(1)
   })
+
+  // A user changes the model from page two while the new first page is slow.
+  // Neither a fast summary nor a late refresh of the previous model can reopen
+  // pagination before the new list supplies its count.
+  it.each([
+    { action: 'select', previous: null, next: 'f04-alpha', total: 22 },
+    { action: 'switch', previous: 'f04-alpha', next: 'f04-beta', total: 1 },
+    { action: 'clear', previous: 'f04-alpha', next: null, total: 23 },
+  ])(
+    'hides stale pagination on model $action until page one arrives',
+    async ({ action, previous, next, total }) => {
+      getDashboardModels.mockResolvedValue({
+        models: [{ model: 'f04-alpha' }, { model: 'f04-beta' }],
+      })
+      const alphaLog = { ...usageLog, model: 'f04-alpha', request_id: 'alpha-first' }
+      const betaLog = { ...usageLog, id: 2, model: 'f04-beta', request_id: 'beta-first' }
+      query.mockResolvedValue({ items: [alphaLog, betaLog], total: 23 })
+      const wrapper = mountUsageView()
+      await flushPromises()
+
+      const filterButton = wrapper.get('button[aria-label="common.filter"]')
+      const modelField = wrapper
+        .findAllComponents({ name: 'FilterField' })
+        .find((field) => field.props('label') === 'Model')!
+      if (previous) {
+        await filterButton.trigger('click')
+        await modelField.get('button[aria-controls]').trigger('click')
+        query.mockResolvedValueOnce({ items: [alphaLog], total: 22 })
+        await modelField.get(`[role="option"][data-value="${previous}"]`).trigger('click')
+        await flushPromises()
+        await filterButton.trigger('click')
+      }
+
+      const oldResult = {
+        items: [{ ...alphaLog, request_id: 'old-page-two' }],
+        total: previous ? 22 : 23,
+      }
+      query.mockResolvedValueOnce(oldResult)
+      await wrapper.get('[aria-label="pagination.next"]').trigger('click')
+      await flushPromises()
+      expect(query.mock.lastCall?.[0]).toMatchObject({ page: 2, model: previous ?? undefined })
+      expect(wrapper.get('[data-test="usage-table"]').text()).toBe('old-page-two')
+      const oldPage = Promise.withResolvers<unknown>()
+      if (action === 'switch') {
+        query.mockReturnValueOnce(oldPage.promise)
+        await wrapper.get('button[title="Refresh"]').trigger('click')
+      }
+
+      await filterButton.trigger('click')
+      if (!previous) await modelField.get('button[aria-controls]').trigger('click')
+      const firstPage = Promise.withResolvers<unknown>()
+      query.mockReturnValueOnce(firstPage.promise)
+      getStats.mockResolvedValueOnce({ total_requests: total })
+      await modelField.get(`[role="option"][data-value="${next ?? previous}"]`).trigger('click')
+      await flushPromises()
+
+      expect(query.mock.lastCall?.[0]).toMatchObject({ page: 1, model: next ?? undefined })
+      expect(getStats.mock.lastCall?.[0].model).toBe(next ?? undefined)
+      expect(wrapper.getComponent({ name: 'UsageStatsCards' }).props('stats').total_requests).toBe(
+        total,
+      )
+      expect(wrapper.findComponent({ name: 'Pagination' }).exists()).toBe(false)
+
+      if (action === 'switch') {
+        oldPage.resolve(oldResult)
+        await flushPromises()
+        expect(wrapper.findComponent({ name: 'Pagination' }).exists()).toBe(false)
+      }
+
+      const items = [alphaLog, betaLog].filter((row) => !next || row.model === next)
+      firstPage.resolve({ items, total })
+      await flushPromises()
+      expect(wrapper.findAll('[data-test="usage-table"] span').map((row) => row.text())).toEqual(
+        items.map((row) => row.request_id),
+      )
+      expect(wrapper.getComponent({ name: 'Pagination' }).props()).toMatchObject({ page: 1, total })
+      expect(
+        wrapper.get<HTMLButtonElement>('[aria-label="pagination.next"]').element.disabled,
+      ).toBe(total === 1)
+    },
+  )
 
   // A new date range has no matching records while an older request is still
   // pending. Its late failure must leave the successful empty result visible.
