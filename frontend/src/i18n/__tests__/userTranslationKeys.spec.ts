@@ -102,11 +102,9 @@ function filesUnder(path: string): string[] {
   })
 }
 
-// userSources finds user-facing entry pages and the local modules reachable
-// through their parsed module references. It skips catalog and router files,
-// resolves known source extensions, deduplicates paths, and returns sorted filenames for
-// deterministic diagnostics.
-function userSources(): string[] {
+// userTranslationKeys follows local imports from user-facing pages. Each reachable
+// file is parsed once for both its dependencies and its translation keys.
+function userTranslationKeys(): Map<string, string[]> {
   const queue = [
     ...['views/user', 'views/public', 'views/auth'].flatMap((path) => filesUnder(join(root, path))),
     ...[
@@ -118,13 +116,14 @@ function userSources(): string[] {
       'components/common/LocalizedFieldsEditor.vue',
     ].map((path) => join(root, path)),
   ]
-  const visited = new Set<string>()
+  const keysByFile = new Map<string, string[]>()
   while (queue.length) {
     const file = queue.pop()!
-    if (visited.has(file) || file.includes('/i18n/locales/') || file.includes('/router/')) continue
-    visited.add(file)
-    const source = readFileSync(file, 'utf8')
-    for (const reference of sourceReferences(source, file).imports) {
+    if (keysByFile.has(file) || file.includes('/i18n/locales/') || file.includes('/router/'))
+      continue
+    const { imports, keys } = sourceReferences(readFileSync(file, 'utf8'), file)
+    keysByFile.set(file, keys)
+    for (const reference of imports) {
       if (!reference.startsWith('@/') && !reference.startsWith('.')) continue
       const base = reference.startsWith('@/')
         ? join(root, reference.slice(2))
@@ -138,7 +137,7 @@ function userSources(): string[] {
       if (target && target.startsWith(root)) queue.push(target)
     }
   }
-  return [...visited].sort()
+  return keysByFile
 }
 
 // hasKey reports whether a dotted catalog path resolves to a string value.
@@ -246,9 +245,8 @@ describe('user translation resources', () => {
   // reporting missing paths with their source file.
   it('resolves literal keys referenced by user pages and their dependencies', () => {
     const missing = new Set<string>()
-    for (const file of userSources()) {
-      const source = readFileSync(file, 'utf8')
-      for (const key of sourceReferences(source, file).keys) {
+    for (const [file, keys] of userTranslationKeys()) {
+      for (const key of keys) {
         for (const [code, messages] of [
           ['en', en],
           ['zh-Hans', zh],
@@ -257,7 +255,7 @@ describe('user translation resources', () => {
         }
       }
     }
-    expect([...missing]).toEqual([])
+    expect([...missing].sort()).toEqual([])
   })
 
   // English and Chinese catalogs describe the same interface with matching
