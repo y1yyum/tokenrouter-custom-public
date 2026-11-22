@@ -266,7 +266,7 @@ make -C backend generate
 | `go-integration` | 安装 PostgreSQL 18 客户端，再执行 `make test-integration` |
 | `frontend` | `make lint-frontend`、`make test-frontend` |
 | `build` | `make build`、`make test-embed` |
-| `scripts` | 在 macOS 上执行 `make test-scripts`，覆盖系统自带的 Bash 3.2 |
+| `scripts` | 在 Ubuntu 上执行 `make test-scripts`，覆盖部署脚本、Compose 配置和发布适配器 |
 | `installer` | `make test-installer`，Linux 安装器依赖 Bash 4+ 和 `sha256sum` |
 
 - CI 缓存：`.github/actions/setup-go` 分 `lint`、`test`、`build` 三组缓存（键含组名、`go.sum` 与 `.golangci-version` 哈希、SHA），`main` push 成功保存，`go-integration` 复用 `test` 组；pnpm 缓存由 `actions/setup-node` 管理。
