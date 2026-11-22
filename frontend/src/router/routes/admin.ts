@@ -163,6 +163,17 @@ export const adminRoutes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/admin/model-exclusions',
+    name: 'AdminModelExclusions',
+    component: () => import('@/views/admin/ModelExclusionsView.vue'),
+    meta: {
+      requiresAuth: true,
+      requiresAdmin: true,
+      title: 'Model Exclusion Reasons',
+      titleKey: 'nav.modelExclusions',
+    },
+  },
+  {
     path: '/admin/pricing',
     name: 'AdminPricing',
     component: () => import('@/views/admin/PricingView.vue'),

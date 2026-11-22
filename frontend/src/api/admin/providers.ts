@@ -54,6 +54,14 @@ import type { ClaudeModel } from '@/api/models.types'
 
 export type * from '@/api/admin/providers.types'
 
+/** HTTP entries accepted by the scheduler's model-specific preview. */
+export const schedulerPreviewEntries = [
+  { value: 'openai_responses', label: 'Responses' },
+  { value: 'openai_responses_compact', label: 'Responses /compact' },
+  { value: 'openai_chat_completions', label: 'Chat Completions' },
+  { value: 'anthropic_messages', label: 'Messages' },
+]
+
 /**
  * list lists all providers with pagination. Page defaults to 1, pageSize
  * defaults to 20; the caller may cancel through the supplied AbortSignal.

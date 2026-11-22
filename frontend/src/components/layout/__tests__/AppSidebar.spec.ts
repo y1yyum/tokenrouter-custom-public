@@ -237,6 +237,21 @@ describe('AppSidebar styling', () => {
 })
 
 describe('AppSidebar navigation', () => {
+  // An administrator expands Model Setup to reach the exclusion reasons page.
+  // The same destination must stay out of the ordinary user's navigation.
+  it('shows model exclusions inside the administrator model menu', async () => {
+    const link = '[to="/admin/model-exclusions"]'
+    expect(mountSidebar().find(link).exists()).toBe(false)
+
+    state.isAdmin = true
+    const sidebar = mountSidebar()
+    const group = sidebar.get('button[aria-controls="sidebar-group-/admin/model-management"]')
+    await group.trigger('click')
+    expect(group.attributes('aria-expanded')).toBe('true')
+    const panel = sidebar.get('[id="sidebar-group-/admin/model-management"]')
+    expect(panel.get(link).text()).toBe('nav.modelExclusions')
+  })
+
   // Admin personal navigation keeps the dashboard before model browsing. Its
   // ordering is checked on rendered links after the separate administrator section.
   it('places the personal dashboard before models for administrators', () => {

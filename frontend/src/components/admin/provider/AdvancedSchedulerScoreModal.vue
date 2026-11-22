@@ -190,9 +190,12 @@
                     <option value="">{{
                       t('admin.providers.advancedSchedulerScore.notSpecified')
                     }}</option>
-                    <option v-for="(label, entry) in httpEntries" :key="entry" :value="entry">{{
-                      label
-                    }}</option>
+                    <option
+                      v-for="{ value, label } in schedulerPreviewEntries"
+                      :key="value"
+                      :value="value"
+                      >{{ label }}</option
+                    >
                   </select>
                 </label>
                 <label v-if="scenario.client_protocol">
@@ -653,6 +656,7 @@ import Select, { type SelectOption } from '@/components/common/Select.vue'
 import { Icon } from '@/components/icons'
 import { useClipboard } from '@/composables/useClipboard'
 import { adminAPI } from '@/api/admin'
+import { schedulerPreviewEntries } from '@/api/admin/providers'
 import { formatDateTime } from '@/utils/format'
 import type {
   AdvancedSchedulerScoreDiagnosticDetail,
@@ -709,12 +713,6 @@ const detailCache = new Map<number, AdvancedSchedulerScoreDiagnosticResponse>()
  * scenario holds optional model and provider-affinity inputs used by preview requests; reset
  * operations restore their absent values before baseline loading.
  */
-const httpEntries = {
-  openai_responses: 'Responses',
-  openai_responses_compact: 'Responses /compact',
-  openai_chat_completions: 'Chat Completions',
-  anthropic_messages: 'Messages',
-}
 const scenario = reactive<{
   client_protocol: string // inbound HTTP entry
   source_group_id: number | string // optional non-Claude-Code source group

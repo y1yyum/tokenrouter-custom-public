@@ -19,14 +19,16 @@ describe('application authentication guard', () => {
   // A visitor requests a protected destination with query and fragment state.
   // The login redirect retains that complete destination for the subsequent
   // authenticated visit.
-  it.each(['/dashboard?range=week#usage', '/admin/users?page=2', '/missing-route'])(
-    'preserves the intended destination for %s',
-    async (path) => {
-      const { navigation, next } = runGuard(path)
-      await navigation
-      expect(next).toHaveBeenCalledExactlyOnceWith({ path: '/login', query: { redirect: path } })
-    },
-  )
+  it.each([
+    '/dashboard?range=week#usage',
+    '/admin/users?page=2',
+    '/admin/model-exclusions',
+    '/missing-route',
+  ])('preserves the intended destination for %s', async (path) => {
+    const { navigation, next } = runGuard(path)
+    await navigation
+    expect(next).toHaveBeenCalledExactlyOnceWith({ path: '/login', query: { redirect: path } })
+  })
 
   // Public destinations remain reachable before a browser session has been
   // restored. Their registered metadata grants access without redirecting
@@ -65,6 +67,8 @@ describe('application authentication guard', () => {
     ['/dashboard', true, undefined],
     ['/admin/dashboard', false, '/dashboard'],
     ['/admin/users', false, '/dashboard'],
+    ['/admin/model-exclusions', false, '/dashboard'],
+    ['/admin/model-exclusions', true, undefined],
     ['/admin/dashboard', true, undefined],
   ])('enforces %s for administrator=%s', async (path, isAdmin, target) => {
     authStore.isAuthenticated = true

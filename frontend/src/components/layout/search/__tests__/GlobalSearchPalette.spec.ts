@@ -288,6 +288,22 @@ describe('GlobalSearchPalette keyboard', () => {
 })
 
 describe('GlobalSearchPalette scopes by role', () => {
+  // Both roles search for the same management page. Only the administrator gets
+  // a matching destination and can open it with Enter.
+  it.each([false, true])(
+    'scopes model exclusion search to administrators (admin=%s)',
+    async (isAdmin) => {
+      auth.isAdmin = isAdmin
+      await mountPalette()
+      await type('model-exclusions')
+      expect(optionKeys().includes('page:/admin/model-exclusions')).toBe(isAdmin)
+      if (isAdmin) {
+        await press('Enter')
+        expect(state.push).toHaveBeenCalledWith('/admin/model-exclusions')
+      }
+    },
+  )
+
   // Guests search public pages only and read the public catalog; account pages and the
   // create-key and logout actions are absent.
   it('limits guests to public pages', async () => {

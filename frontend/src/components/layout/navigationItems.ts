@@ -190,6 +190,11 @@ export function useNavigationItems(): NavigationItems {
             label: t('nav.modelAttributes'),
             icon: 'cog' as const,
           },
+          {
+            path: '/admin/model-exclusions',
+            label: t('nav.modelExclusions'),
+            icon: 'filter' as const,
+          },
         ],
       },
       {

@@ -194,6 +194,7 @@ export default {
     groups: 'Groups',
     modelManagement: 'Model Setup',
     modelAttributes: 'Attributes',
+    modelExclusions: 'Model Exclusion Reasons',
     pricing: 'Pricing',
     subscriptions: 'Subscriptions',
     userSubscriptions: 'Users',

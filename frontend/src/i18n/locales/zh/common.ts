@@ -194,6 +194,7 @@ export default {
     groups: '分组管理',
     modelManagement: '模型管理',
     modelAttributes: '属性管理',
+    modelExclusions: '模型排除原因',
     pricing: '价格管理',
     subscriptions: '订阅管理',
     userSubscriptions: '用户订阅',
