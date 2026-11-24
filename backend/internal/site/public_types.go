@@ -105,6 +105,7 @@ type (
 		WeChatOAuthMobileEnabled bool // WeChat mobile-login availability
 		BackendModeEnabled       bool // backend mode switch
 		PaymentEnabled           bool // payment entry switch
+		CryptoEnabled            bool // customer deposit entry availability
 		TeamEnabled              bool // team feature availability
 		TeamSelfServiceEnabled   bool // team self-service availability
 		// CreativeEnabled controls the frontend studio entry and route guard;
