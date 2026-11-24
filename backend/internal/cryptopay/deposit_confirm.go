@@ -93,6 +93,11 @@ func NormalizeDepositConfirmIDs(ids []int64) ([]int64, error) {
 	return out, nil
 }
 
+// manualDepositProcessor adapts the ledger's operator entry to the confirmer.
+type manualDepositProcessor struct {
+	ledger *ledger.Ledger // receipt-verified deposit ledger
+}
+
 type depositProcessor interface {
 	Process(ctx context.Context, t scanner.Transfer, decimals int) (bool, error)
 }
@@ -468,6 +473,11 @@ func (s *Service) depositPool(chain string) (*rpc.Pool, error) {
 	return selectDepositRPCPool(shared, configured)
 }
 
+// Process classifies a manually verified transfer as provisional until finality.
+func (p manualDepositProcessor) Process(ctx context.Context, t scanner.Transfer, decimals int) (bool, error) {
+	return p.ledger.ProcessManuallyVerified(ctx, t, decimals)
+}
+
 func (s *Service) newDepositConfirmer(adminID int64, cfg CryptoConfig) *depositConfirmer {
 	processor := ledger.New(s.db, s.creditor, newAddressResolver(s.addresses),
 		cfg.CreditMinAmount, cfg.CreditMaxAmount, cfg.CreditMultiplier)
@@ -476,7 +486,7 @@ func (s *Service) newDepositConfirmer(adminID int64, cfg CryptoConfig) *depositC
 	processor.SetNativePricer(s.liveNativePricer())
 	return &depositConfirmer{
 		db:        s.db,
-		processor: processor,
+		processor: manualDepositProcessor{processor},
 		locker:    pgDepositLocker{db: s.db},
 		pool:      s.depositPool,
 		adminID:   adminID,

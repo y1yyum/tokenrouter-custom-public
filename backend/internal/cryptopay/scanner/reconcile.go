@@ -33,12 +33,29 @@ const (
 	deadLetterTokenRemoved = "dead_letter:token_no_longer_watched"
 )
 
+// DepositReorg carries the exact observation invalidated by a scanner pass.
+type DepositReorg struct {
+	Chain       string // original network key
+	TxHash      string // original transaction hash
+	LogIndex    int    // original event position
+	BlockHash   string // invalidated inclusion hash
+	BlockNumber uint64 // invalidated inclusion height
+	Reason      string // chain verification outcome
+}
+
+// DepositReorgOutcome describes the database decision for an invalidated event.
+type DepositReorgOutcome struct {
+	Handled      bool // terminal state is already stored
+	Revoked      bool // this call recorded a reversal
+	ManualReview bool // this call queued operator review
+}
+
 type depositObservation struct {
 	chain, txHash, from, to, token, amount, blockHash string
 	logIndex                                          int
 	blockNumber                                       uint64
 	reason, status                                    string
-	// provisional marks a credited row that is still inside the 0-confirmation
+	// provisional marks a granted row that is still inside the 0-confirmation
 	// risk window: it is finalized once finality is reached and clawed back if
 	// the chain invalidates it.
 	provisional bool
@@ -183,36 +200,35 @@ func findReincludedTransfer(receipt *ReceiptCheck, observation depositObservatio
 	return *match, nil
 }
 
+// updateReincludedObservation moves a pending event only while it still has
+// neither a grant nor an order. The compare-and-set also protects the equal-log
+// case, where only the block changes but the merchant number stays the same.
 func (w *Worker) updateReincludedObservation(ctx context.Context, old depositObservation, transfer Transfer) (bool, error) {
-	if old.logIndex == transfer.LogIndex {
-		result, err := w.db.ExecContext(ctx, `UPDATE deposit_transactions SET block_number = $1, block_hash = $2, last_attempt_at = NOW() WHERE chain = $3 AND tx_hash = $4 AND log_index = $5 AND status = 'pending' AND reason = $6 AND order_id IS NULL`,
-			transfer.BlockNumber, transfer.BlockHash, old.chain, old.txHash, old.logIndex, old.reason)
-		if err != nil {
-			return false, fmt.Errorf("refresh pending observation at reincluded log: %w", err)
-		}
-		affected, err := result.RowsAffected()
-		return affected == 1, err
-	}
-	// Refuse to relocate an unlinked pending deposit when a PAID order for
-	// its old deterministic identity already exists. Retrying that order via
-	// the generic payment endpoint could otherwise mint the amount twice.
-	oldTradeNo := depositOrderNo(old.chain, old.txHash, old.logIndex)
-	var oldOrderExists bool
-	if err := w.db.QueryRowContext(ctx, `SELECT EXISTS (SELECT 1 FROM payment_orders WHERE out_trade_no = $1)`, oldTradeNo).Scan(&oldOrderExists); err != nil {
-		return false, fmt.Errorf("check prior order before moving pending log identity: %w", err)
-	}
-	if oldOrderExists {
-		return false, fmt.Errorf("pending reinclusion has a prior deterministic order; manual reconciliation required")
-	}
-	result, err := w.db.ExecContext(ctx, `UPDATE deposit_transactions SET log_index = $1, block_number = $2, block_hash = $3, last_attempt_at = NOW() WHERE chain = $4 AND tx_hash = $5 AND log_index = $6 AND status = 'pending' AND reason = $7 AND order_id IS NULL`, transfer.LogIndex, transfer.BlockNumber, transfer.BlockHash, old.chain, old.txHash, old.logIndex, old.reason)
+	result, err := w.db.ExecContext(ctx, `UPDATE deposit_transactions
+		SET log_index = $1, block_number = $2, block_hash = $3, last_attempt_at = NOW()
+		WHERE chain = $4 AND tx_hash = $5 AND log_index = $6 AND status = 'pending' AND reason = $7
+		  AND order_id IS NULL AND credited_at IS NULL AND revoked_at IS NULL AND NOT provisional
+		  AND NOT EXISTS (SELECT 1 FROM payment_orders WHERE out_trade_no = $8)`,
+		transfer.LogIndex, transfer.BlockNumber, transfer.BlockHash, old.chain, old.txHash, old.logIndex,
+		old.reason, depositOrderNo(old.chain, old.txHash, old.logIndex))
 	if err != nil {
 		return false, fmt.Errorf("move pending observation to reincluded log: %w", err)
 	}
 	affected, err := result.RowsAffected()
-	if err != nil {
-		return false, err
-	}
-	return affected == 1, nil
+	return affected == 1, err
+}
+
+// hasPendingOrder includes a lost link so receipt absence or relocation never
+// discards a partially settled deposit as an ordinary unpaid observation.
+func (w *Worker) hasPendingOrder(ctx context.Context, p depositObservation) (bool, error) {
+	var exists bool
+	err := w.db.QueryRowContext(ctx, `SELECT EXISTS (
+		SELECT 1 FROM deposit_transactions
+		WHERE chain = $1 AND tx_hash = $2 AND log_index = $3
+		  AND (order_id IS NOT NULL OR credited_at IS NOT NULL OR provisional))
+		OR EXISTS (SELECT 1 FROM payment_orders WHERE out_trade_no = $4)`,
+		p.chain, p.txHash, p.logIndex, depositOrderNo(p.chain, p.txHash, p.logIndex)).Scan(&exists)
+	return exists, err
 }
 
 func depositOrderNo(chain, txHash string, logIndex int) string {
@@ -265,6 +281,9 @@ func (p depositObservation) transfer(decimals int) (Transfer, error) {
 }
 
 func (w *Worker) reconcile(ctx context.Context, observations []depositObservation) error {
+	if err := mode.CheckWritable(); err != nil {
+		return err
+	}
 	// A backlog of slow receipt/reorg checks must not monopolize the shared
 	// scanner lock and keep newly mined deposits waiting. Completed attempts
 	// rotate durably; the remaining rows get the next bounded pass.
@@ -353,10 +372,18 @@ func (w *Worker) reconcile(ctx context.Context, observations []depositObservatio
 			switch {
 			case errors.Is(receiptErr, ErrReceiptNotFound):
 				if p.status == "pending" {
-					// A pending transfer is not evidence of a reorg. RPC nodes may
-					// lag receipt indexing after exposing a log; keep it retryable.
-					status, reason = "pending", ""
-					break
+					// Keep ordinary unseen deposits pending. An order or grant
+					// already exists for interrupted settlement, so require the
+					// same repeated absence evidence as for a credited deposit.
+					hasOrder, err := w.hasPendingOrder(ctx, p)
+					if err != nil {
+						verifyErr = err
+						break
+					}
+					if !hasOrder {
+						status, reason = "pending", ""
+						break
+					}
 				}
 				count := 0
 				if strings.HasPrefix(p.reason, missingReceiptPrefix) {
@@ -390,18 +417,23 @@ func (w *Worker) reconcile(ctx context.Context, observations []depositObservatio
 						}
 					}
 					if errors.Is(verifyErr, ErrTransferMismatch) {
+						status, reason, verifyErr = "reverted", "reorg_transfer_changed", nil
 						if p.status == "pending" && !transfer.Native {
-							transfer, verifyErr = findReincludedTransfer(receipt, p, decimals)
-							if errors.Is(verifyErr, ErrTransferMismatch) {
-								status, reason, verifyErr = "reverted", "reorg_transfer_changed", nil
-							} else if verifyErr == nil {
-								reincluded = true
+							hasOrder, err := w.hasPendingOrder(ctx, p)
+							if err != nil {
+								verifyErr = err
+							} else if !hasOrder {
+								transfer, err = findReincludedTransfer(receipt, p, decimals)
+								switch {
+								case err == nil:
+									status, reason, reincluded = "pending", "", true
+								case !errors.Is(err, ErrTransferMismatch):
+									verifyErr = err
+								}
 							}
-						} else {
-							status, reason, verifyErr = "reverted", "reorg_transfer_changed", nil
 						}
 					}
-					if verifyErr == nil && p.status == "credited" && p.provisional {
+					if verifyErr == nil && status == "credited" && p.provisional {
 						// A provisional credit becomes final once the chain
 						// reaches final depth. No balance moves here: the amount
 						// already landed at detection time and finalization only
@@ -410,7 +442,7 @@ func (w *Worker) reconcile(ctx context.Context, observations []depositObservatio
 							w.finalizeProvisional(ctx, chain, p)
 						}
 					}
-					if verifyErr == nil && p.status == "pending" {
+					if verifyErr == nil && status == "pending" && p.status == "pending" {
 						final, err := transactionIsFinalForChain(rpcCtx, pool, chain.Chain, receipt.BlockNumber, chain.Confirmations)
 						verifyErr = err
 						if err == nil && final && !w.securityCovered(chain.Chain, transfer.BlockNumber) {
@@ -435,9 +467,6 @@ func (w *Worker) reconcile(ctx context.Context, observations []depositObservatio
 								continue
 							}
 							if !changed {
-								continue
-							}
-							if !reincluded && status != "pending" {
 								continue
 							}
 							credited, err := w.handler.Process(ctx, transfer, decimals)
@@ -474,24 +503,29 @@ func (w *Worker) reconcile(ctx context.Context, observations []depositObservatio
 				}
 			}
 		}
-		// A provisional credit that the chain invalidated is clawed back
-		// automatically (exactly once). Only a non-provisional credit, or a
-		// provisional one the revoker declined, still needs the manual-
-		// reconciliation alert. A successful claw-back wrote its own terminal
-		// status, so updateObservation below must not run for it.
-		if verifyErr == nil && p.status == "credited" && p.provisional && status == "reverted" && w.onProvisionalRevoke != nil {
+		// A pending row can already have a wallet receipt. Resolve the chain
+		// loss under the same row lock as wallet delivery before publishing
+		// any terminal status or notifying the operator.
+		if verifyErr == nil && status == "reverted" && w.resolveDepositReorg != nil {
 			cancelObservation()
-			revoked, revokeErr := w.onProvisionalRevoke(ctx, p.chain, p.txHash, p.logIndex, reason)
-			if revokeErr != nil {
-				errs = append(errs, fmt.Errorf("revoke provisional %s/%s/%d: %w", p.chain, p.txHash, p.logIndex, revokeErr))
+			outcome, err := w.resolveDepositReorg(ctx, DepositReorg{
+				Chain: p.chain, TxHash: p.txHash, LogIndex: p.logIndex,
+				BlockHash: p.blockHash, BlockNumber: p.blockNumber, Reason: reason,
+			})
+			if err != nil {
+				errs = append(errs, fmt.Errorf("resolve reorg %s/%s/%d: %w", p.chain, p.txHash, p.logIndex, err))
 				continue
 			}
-			if revoked {
+			if outcome.Handled {
+				if outcome.ManualReview && w.onReorg != nil {
+					w.onReorg(p.chain, p.txHash)
+				}
 				continue
 			}
 		}
 		cancelObservation()
 		if verifyErr != nil {
+			status, reason = p.status, p.reason
 			if strings.HasPrefix(p.reason, missingReceiptPrefix) {
 				reason = missingReceiptPrefix + "0"
 			}

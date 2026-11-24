@@ -29,9 +29,9 @@ func ReorgedTransferAlreadyCredited(
 	rows, err := db.QueryContext(ctx, `SELECT log_index, status, order_id
 		FROM deposit_transactions
 		WHERE chain = $1 AND tx_hash IN ($2, UPPER($2)) AND log_index <> $3
-		  AND COALESCE(block_hash, '') <> ''
-		  AND LOWER(block_hash) <> LOWER($4)
-		  AND (status IN ('credited', 'pending', 'reverted') OR order_id IS NOT NULL)`,
+		  AND LOWER(COALESCE(block_hash, '')) <> LOWER($4)
+		  AND (status IN ('credited', 'pending', 'reverted') OR order_id IS NOT NULL
+		       OR (status = 'dead_letter' AND reason LIKE 'dead_letter:credit_evidence%'))`,
 		chain, txHash, logIndex, blockHash)
 	if err != nil {
 		return false, fmt.Errorf("check prior credited transfer: %w", err)
@@ -58,7 +58,7 @@ func ReorgedTransferAlreadyCredited(
 		return false, fmt.Errorf("close prior credited transfer rows: %w", err)
 	}
 	for _, prior := range previous {
-		if prior.status == "credited" || prior.orderID.Valid {
+		if prior.status == "credited" || prior.status == "dead_letter" || prior.orderID.Valid {
 			return true, nil
 		}
 		// A crash can leave the completed payment order durable while its

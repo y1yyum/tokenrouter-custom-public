@@ -700,14 +700,15 @@ func (s *Service) applyConfigLocked(ctx context.Context, cfg CryptoConfig, finge
 	// Resolve invalidated deposits against the persistent wallet grant before
 	// the scanner closes the row. The callback reports review separately from
 	// an automatic reversal, so operator and user notices match the outcome.
-	s.worker.SetDepositReorgResolver(func(ctx context.Context, chain, txHash string, logIndex int, reason string) (scanner.DepositReorgOutcome, error) {
+	s.worker.SetDepositReorgResolver(func(ctx context.Context, target scanner.DepositReorg) (scanner.DepositReorgOutcome, error) {
+		chain, txHash, logIndex, reason := target.Chain, target.TxHash, target.LogIndex, target.Reason
 		revoker, ok := s.creditor.(interface {
-			ReconcileDepositReorg(ctx context.Context, chain, txHash string, logIndex int, reason string) (scanner.DepositReorgOutcome, error)
+			ReconcileDepositReorg(context.Context, scanner.DepositReorg) (scanner.DepositReorgOutcome, error)
 		})
 		if !ok {
 			return scanner.DepositReorgOutcome{}, nil
 		}
-		outcome, err := revoker.ReconcileDepositReorg(ctx, chain, txHash, logIndex, reason)
+		outcome, err := revoker.ReconcileDepositReorg(ctx, target)
 		if err != nil {
 			slog.Error("[cryptopay] provisional credit revoke failed; will retry",
 				"chain", chain, "tx", txHash, "log_index", logIndex, "reason", reason, "cause", err)

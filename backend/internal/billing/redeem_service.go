@@ -166,12 +166,51 @@ type RedeemService struct {
 	runtime          RedeemRuntime   // payment clock observation and dispatch
 }
 
+// orderBalanceRedeemKey binds a private grant guard to one order credential.
+type orderBalanceRedeemKey struct{}
+
+// orderBalanceRedeemGuard verifies the recipient inside the redemption transaction.
+type orderBalanceRedeemGuard struct {
+	code      string                                      // order-owned credential
+	authorize func(context.Context, int64, float64) error // transaction participant
+}
+
 // ContextSkipRedeemAffiliate returns a derived context marking rebate
 // ownership by the payment workflow. The caller passes a usable parent
 // context; any non-nil marker value causes the redemption rebate helper to
 // skip accrual.
 func ContextSkipRedeemAffiliate(ctx context.Context) context.Context {
 	return context.WithValue(ctx, ctxKeySkipRedeemAffiliate{}, true)
+}
+
+// ContextAuthorizeOrderBalanceRedeem supplies the grant guard for a reserved
+// balance credential. Billing calls authorize with the Ent transaction context,
+// original recipient and locked value before changing the wallet or usage.
+func ContextAuthorizeOrderBalanceRedeem(ctx context.Context, code string, authorize func(context.Context, int64, float64) error) context.Context {
+	return context.WithValue(ctx, orderBalanceRedeemKey{}, orderBalanceRedeemGuard{code: code, authorize: authorize})
+}
+
+// IsOrderBalanceCredential recognizes the current and historical chain
+// credentials. Their recipient and event must be checked even if the text is
+// known to an ordinary redemption caller.
+func IsOrderBalanceCredential(code string) bool {
+	if suffix, ok := strings.CutPrefix(code, "crypto-"); ok && len(suffix) == 24 {
+		for _, ch := range suffix {
+			if !(ch >= '0' && ch <= '9') && !(ch >= 'a' && ch <= 'f') {
+				return false
+			}
+		}
+		return true
+	}
+	if suffix, ok := strings.CutPrefix(code, "cd-"); ok && len(suffix) == 26 {
+		for _, ch := range suffix {
+			if !(ch >= 'A' && ch <= 'Z') && !(ch >= '2' && ch <= '7') {
+				return false
+			}
+		}
+		return true
+	}
+	return false
 }
 
 // NewRedeemService binds redemption dependencies and defaults a nil Now
@@ -401,6 +440,10 @@ func (s *RedeemService) Redeem(ctx context.Context, userID int64, code string) (
 	if code == "" {
 		return nil, ErrRedeemCodeNotFound
 	}
+	guard, _ := ctx.Value(orderBalanceRedeemKey{}).(orderBalanceRedeemGuard)
+	if IsOrderBalanceCredential(code) && (guard.code != code || guard.authorize == nil) {
+		return nil, ErrRedeemCodeNotFound
+	}
 
 	// Check the saved failure ceiling before attempting code exclusion, so
 	// blocked users do not occupy that advisory key during database grant
@@ -506,6 +549,18 @@ func (s *RedeemService) redeemInTx(ctx, txCtx context.Context, userID int64, cod
 	_, err = s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
+	}
+
+	// A reserved checkout credential can mint value only through its order
+	// participant. The participant locks the linked deposit before the wallet
+	// changes, so a concurrent chain reversal can close it safely.
+	if guard, ok := ctx.Value(orderBalanceRedeemKey{}).(orderBalanceRedeemGuard); ok {
+		if guard.code != redeemCode.Code || redeemCode.Type != RedeemTypeBalance || guard.authorize == nil {
+			return nil, ErrRedeemCodeNotFound
+		}
+		if err := guard.authorize(txCtx, userID, redeemCode.Value); err != nil {
+			return nil, err
+		}
 	}
 
 	// Keep grant, individual usage and latest credential count/recipient/time

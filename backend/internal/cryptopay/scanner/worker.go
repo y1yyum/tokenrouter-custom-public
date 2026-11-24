@@ -106,10 +106,9 @@ type Worker struct {
 	// onReorg reports a credited deposit whose block was reorged away. The
 	// money already moved in our ledger, so a human must reconcile it.
 	onReorg func(chain, txHash string)
-	// onProvisionalRevoke is tried before onReorg for a credited->reverted
-	// transition: an instant credit is clawed back automatically (once), while
-	// a confirmation-gated credit still needs manual reconciliation.
-	onProvisionalRevoke func(ctx context.Context, chain, txHash string, logIndex int, reason string) (bool, error)
+	// resolveDepositReorg inspects the wallet grant under the deposit lock
+	// before a reorg can discard a pending or credited observation.
+	resolveDepositReorg func(context.Context, DepositReorg) (DepositReorgOutcome, error)
 	beforePass          func(context.Context) error
 	securityRange       func(context.Context, *EVMScanner, *rpc.Pool, ChainConfig, uint64, uint64) error
 	// Live workers replay a bounded recent range to recover late RPC log
@@ -463,14 +462,12 @@ func (w *Worker) SetReorgNotifier(fn func(chain, txHash string)) {
 	}
 }
 
-// SetProvisionalRevokeNotifier wires the automatic claw-back performed when an
-// instant (0-confirmation) credit is invalidated by a reorg or a failed /
-// replaced transaction. The callback is idempotent and owns the only balance
-// movement: returning true means the credit was revoked (or already had been)
-// and the legacy admin-only alert must not fire again.
-func (w *Worker) SetProvisionalRevokeNotifier(fn func(ctx context.Context, chain, txHash string, logIndex int, reason string) (bool, error)) {
+// SetDepositReorgResolver wires the wallet-aware reorg transaction. A
+// handled result already owns the terminal state; the scanner only sends
+// the manual reconciliation alert when that call newly requested review.
+func (w *Worker) SetDepositReorgResolver(fn func(context.Context, DepositReorg) (DepositReorgOutcome, error)) {
 	if w != nil {
-		w.onProvisionalRevoke = fn
+		w.resolveDepositReorg = fn
 	}
 }
 
@@ -1509,7 +1506,7 @@ func (w *Worker) finalizeProvisional(ctx context.Context, chain ChainConfig, p d
 	if _, err := w.db.ExecContext(ctx, `UPDATE deposit_transactions
 		SET provisional = FALSE, confirmations = $4
 		WHERE chain = $1 AND tx_hash = $2 AND log_index = $3
-		  AND status = 'credited' AND provisional`,
+		  AND status = 'credited' AND provisional AND revoked_at IS NULL`,
 		p.chain, p.txHash, p.logIndex, int64(chain.Confirmations)); err != nil {
 		slog.Warn("[cryptopay] provisional credit not finalized", "chain", p.chain, "tx", p.txHash, "log_index", p.logIndex, "cause", rpc.SafeError(err))
 	}
