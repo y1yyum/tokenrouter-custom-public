@@ -144,26 +144,26 @@ export interface MarketplaceGroupCapacity {
   rpm_max: number // Aggregate per-minute request ceiling.
 }
 
-// MarketplaceGroupAvailabilityDay summarizes probe outcomes within one daily availability
-// bucket.
+// MarketplaceGroupAvailabilityDay summarizes observations within one configured time bucket.
 export interface MarketplaceGroupAvailabilityDay {
-  date: string // Reporting calendar date.
-  success_count: number // Successful probe count.
+  date: string // Reporting bucket date.
+  success_count: number // Successful observation count.
   total_count: number // Total observation count.
-  availability_rate?: number | null // Observed probe success rate.
+  availability_rate?: number | null // Observed success rate.
 }
 
-// MarketplaceGroupAvailability summarizes recent group probe outcomes and daily
-// availability history.
+// MarketplaceGroupAvailability summarizes group observations across the reporting window and its buckets.
 export interface MarketplaceGroupAvailability {
+  // Active probes omit source. Imported summaries count calls throughout the window and its buckets.
+  source?: 'imported_calls'
   window_days: number // Availability reporting window days.
   bucket_minutes?: number // Availability bucket duration minutes.
-  success_count: number // Successful probe count.
+  success_count: number // Successful observation count.
   total_count: number // Total observation count.
-  availability_rate?: number | null // Observed probe success rate.
+  availability_rate?: number | null // Observed success rate.
   last_status?: string // Latest probe status.
   last_checked_at?: string | null // Last checked timestamp.
-  days: MarketplaceGroupAvailabilityDay[] // Daily probe outcome buckets.
+  days: MarketplaceGroupAvailabilityDay[] // Observations by time bucket.
 }
 
 // MarketplaceGroup describes a visible routing group and its requestable model catalog.
