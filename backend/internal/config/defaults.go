@@ -79,6 +79,8 @@ func defaultConfig() Config {
 	cfg.Auth.WebAuthn.RPOrigins = []string{}
 
 	// Security
+	cfg.Security.KeyRotationRiskAckEnabled = true
+	cfg.Security.KeyRotationRiskAckHours = defaultKeyRotationRiskAckHours
 	cfg.Security.URLAllowlist.Enabled = false
 	cfg.Security.URLAllowlist.UpstreamHosts = []string{
 		"api.openai.com",
