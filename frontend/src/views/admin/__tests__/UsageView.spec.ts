@@ -88,7 +88,10 @@ vi.mock('@/api/admin', () => ({
   },
 }))
 
+// Minute history reads are recorded independently from native list and export requests.
+const { getImportedCalls } = vi.hoisted(() => ({ getImportedCalls: vi.fn() }))
 vi.mock('@/api/admin/usage', () => ({
+  getImportedCalls,
   adminUsageAPI: {
     listExportTasks,
   },
@@ -227,8 +230,9 @@ const EndpointDistributionChartStub = {
 // mountRouteFilteredUsageView renders the administrator page with controlled child
 // components and the route-label search stub. Tests retain the real page loaders while
 // recording query parameters and observing filter-label changes.
-const mountRouteFilteredUsageView = () =>
+const mountRouteFilteredUsageView = (attachTo?: HTMLElement) =>
   mount(UsageView, {
+    attachTo,
     global: {
       stubs: {
         AppLayout: AppLayoutStub,
@@ -283,6 +287,56 @@ describe('admin UsageView 路由筛选', () => {
   afterEach(() => {
     Object.keys(routeQuery).forEach((key) => delete routeQuery[key])
     vi.useRealTimers()
+  })
+
+  // A route-scoped local report remains mounted while the operator inspects an archive.
+  // Editing the history dates and model must leave local queries and action filters intact.
+  it('切换 raks 历史保留本站日期、筛选及导出和清理的范围', async () => {
+    Object.assign(routeQuery, { user_id: '7', start_date: '2026-11-25', end_date: '2026-11-26' })
+    getById.mockResolvedValue({ id: 7, email: 'seven@example.test' })
+    getImportedCalls
+      .mockReset()
+      .mockResolvedValue({ source: 'raks', groups: [], items: [], total: 0 })
+    const wrapper = mountRouteFilteredUsageView(document.body)
+    await flushPromises()
+    const localReads = list.mock.calls.length
+    const nativeFilters = wrapper.getComponent(UsageFiltersStub)
+    expect(getImportedCalls).not.toHaveBeenCalled()
+    const [local, history] = wrapper.findAll('button[aria-pressed]')
+    await history.trigger('click')
+    await flushPromises()
+    expect(nativeFilters.isVisible()).toBe(false)
+    expect(getImportedCalls.mock.lastCall?.[0]).not.toHaveProperty('start_date')
+    const panel = wrapper.getComponent({ name: 'ImportedCallsPanel' })
+    await panel.get('button[aria-pressed="false"]').trigger('click')
+    await flushPromises()
+    expect(getImportedCalls.mock.lastCall?.[0]).toMatchObject({
+      view: 'minutes',
+      start_date: '2026-11-25',
+      end_date: '2026-11-26',
+    })
+    panel.getComponent({ name: 'DateRangePicker' }).vm.$emit('update:endDate', '2026-11-27')
+    await panel.get('input[type="search"]').setValue('history-model')
+    await panel.get('form').trigger('submit')
+    await flushPromises()
+    expect(getImportedCalls.mock.lastCall?.[0]).toMatchObject({
+      model: 'history-model',
+      end_date: '2026-11-27',
+    })
+    await local.trigger('click')
+    expect(nativeFilters.isVisible()).toBe(true)
+    expect(nativeFilters.text()).toContain('seven@example.test')
+    for (const name of ['UsageExportDialog', 'UsageCleanupDialog']) {
+      const dialog = wrapper.getComponent({ name })
+      expect(dialog.props('filters')).toMatchObject({
+        user_id: 7,
+        start_date: '2026-11-25',
+        end_date: '2026-11-26',
+      })
+      expect(dialog.props('filters').model).toBeUndefined()
+    }
+    expect(list).toHaveBeenCalledTimes(localReads)
+    wrapper.unmount()
   })
 
   // Endpoint selection changes while an earlier raw-source request is pending. The test

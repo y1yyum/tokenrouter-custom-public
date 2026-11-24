@@ -9,7 +9,7 @@ import (
 // routes_admin.go registers administrator dashboard, usage-query, cleanup-task,
 // and export-task HTTP routes.
 // Administrator dashboard and usage routes expose statistics, searches,
-// persisted cleanup tasks, and background CSV export tasks through separate
+// imported history, persisted cleanup tasks, and CSV export tasks through separate
 // path groups. The application supplies their authentication, rate limiting,
 // and audit middleware on the parent group before these handlers are registered.
 
@@ -43,6 +43,7 @@ func RegisterUsageRoutes(admin *gin.RouterGroup, endpoint *UsageHandler) {
 	usage := admin.Group("/usage")
 	{
 		adminapi.Register(usage, ManagementOperations["usage.list"], endpoint.List)
+		adminapi.Register(usage, ManagementOperations["usage.imported_calls.list"], endpoint.ListImportedCalls)
 		adminapi.Register(usage, ManagementOperations["usage.stats.list"], endpoint.Stats)
 		adminapi.Register(usage, ManagementOperations["usage.search_users.list"], endpoint.SearchUsers)
 		adminapi.Register(usage, ManagementOperations["usage.search_api_keys.list"], endpoint.SearchAPIKeys)

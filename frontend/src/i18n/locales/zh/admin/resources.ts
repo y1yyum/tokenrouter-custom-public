@@ -534,6 +534,24 @@ export default {
   },
   // Usage Records
   usage: {
+    imported: {
+      local: '本站记录',
+      tab: 'raks 历史',
+      allHistory: '全部历史',
+      selectedDates: '所选日期',
+      groups: 'raks 历史流量 · 分组汇总',
+      minutes: 'raks 历史流量 · 分钟明细',
+      billing: '数据来自 raks 调用记录，仅供统计，与本站账单独立。',
+      minute: '分钟（当地时间）',
+      exactModel: '模型（精确匹配）',
+      platform: '源平台',
+      success: '成功请求',
+      errors: '失败请求',
+      duration: '平均总耗时（ms）',
+      ttft: '平均首 Token 耗时（ms）',
+      empty: '所选范围内没有匹配的 raks 历史记录',
+      failedToLoad: '无法加载 raks 历史流量',
+    },
     requestSource: '请求来源',
     sourcesAll: '全部请求',
     requestSources: {

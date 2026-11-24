@@ -308,6 +308,18 @@ var ManagementOperations = map[string]*adminapi.Operation{
 		BrowserPath: "/admin/usage",
 		Input:       adminapi.Arguments("/api/v1/admin/usage/export-tasks", []string{"page", "page_size", "watch_ids"}, nil),
 	}),
+	"usage.imported_calls.list": adminapi.Define(adminapi.Operation{
+		ID:          "usage.imported_calls.list",
+		Module:      "usage",
+		Title:       "List Imported Calls",
+		Description: "Read raks historical call counters by group or page through minute aggregates for an optional group and exact model.",
+		Method:      "GET",
+		Path:        "/api/v1/admin/usage/imported-calls",
+		ReadOnly:    true,
+		Response:    "json",
+		BrowserPath: "/admin/usage",
+		Input:       adminapi.Arguments("/api/v1/admin/usage/imported-calls", []string{"start_date", "end_date", "timezone", "view", "group_id", "model", "page", "page_size"}, nil),
+	}),
 	"usage.list": adminapi.Define(adminapi.Operation{
 		ID:     "usage.list",
 		Module: "usage",

@@ -1,6 +1,8 @@
 package app
 
 import (
+	"context"
+	"crypto/rand"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -10,15 +12,20 @@ import (
 	"github.com/stretchr/testify/require"
 
 	backuphttp "github.com/TokenFlux/TokenRouter/internal/backup/httpapi"
+	"github.com/TokenFlux/TokenRouter/internal/billing"
 	egresshttp "github.com/TokenFlux/TokenRouter/internal/egress/httpapi"
+	"github.com/TokenFlux/TokenRouter/internal/identity"
 	identityhttp "github.com/TokenFlux/TokenRouter/internal/identity/httpapi"
 	opshttp "github.com/TokenFlux/TokenRouter/internal/ops/httpapi"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/protocol"
 	providerhttp "github.com/TokenFlux/TokenRouter/internal/provider/httpapi"
 	routinghttpapi "github.com/TokenFlux/TokenRouter/internal/routing/httpapi"
 	schedulerhttp "github.com/TokenFlux/TokenRouter/internal/scheduler/httpapi"
 	"github.com/TokenFlux/TokenRouter/internal/server/httpx"
 	servermiddleware "github.com/TokenFlux/TokenRouter/internal/server/middleware"
+	"github.com/TokenFlux/TokenRouter/internal/usage"
+	routeusageadmin "github.com/TokenFlux/TokenRouter/internal/usage/httpapi/admin"
 )
 
 // Administrator registration exposes protocol capabilities and sensitive module
@@ -30,6 +37,17 @@ import (
 // requireCanonicalBackupID aliases production backup ID validation for route
 // compatibility scenarios using canonical and removed path values.
 var requireCanonicalBackupID = backuphttp.RequireCanonicalBackupID
+
+// importedCallReaderStub supplies an empty archive and records each accepted query.
+type importedCallReaderStub struct {
+	queries []usage.ImportedCallQuery // queries accepted by the handler
+}
+
+// ListImportedCalls records the requested filters and returns a synthetic report.
+func (s *importedCallReaderStub) ListImportedCalls(_ context.Context, query usage.ImportedCallQuery) (*usage.ImportedCallReport, error) {
+	s.queries = append(s.queries, query)
+	return &usage.ImportedCallReport{Source: "raks", Page: query.Page}, nil
+}
 
 // TestProtocolCatalogHTTPContract mutates injected endpoint data after
 // constructing the protocol handler. It checks unauthorized/forbidden requests
@@ -89,6 +107,54 @@ func TestProtocolCatalogHTTPContract(t *testing.T) {
 		require.Zero(t, response.Code)
 		require.JSONEq(t, string(expected), string(response.Data))
 	}
+}
+
+// TestImportedCallHistoryRequiresAdmin exercises the mounted history endpoint
+// through the real JWT guard. It verifies that anonymous and ordinary requests
+// stop before storage and an administrator receives the requested JSON report.
+func TestImportedCallHistoryRequiresAdmin(t *testing.T) {
+	session := identity.NewSessionService(identity.SessionOptions{
+		Secret: rand.Text(), AccessTokenExpireMinutes: 5,
+	}, nil, nil, nil, nil)
+	account := &identity.User{ID: 1, Status: billing.StatusActive}
+	users := identity.NewUserService(&userHandlerRepoStub{user: account}, nil, nil, nil, nil)
+	auth := identityhttp.AdminAuth(session, users, nil, nil)
+	reader := &importedCallReaderStub{}
+	service := usage.NewUsageService(nil, usage.QueryReaders{ImportedCallReader: reader})
+	handler := routeusageadmin.NewUsageHandler(service, nil, nil, nil, timezone.Calendar{})
+	router := gin.New()
+	admin := router.Group("/api/v1/admin", auth)
+	routeusageadmin.RegisterUsageRoutes(admin, handler)
+
+	for _, tc := range []struct {
+		role   string // role loaded for the synthetic account
+		status int    // expected history response status
+	}{
+		{"", http.StatusUnauthorized},
+		{identity.RoleUser, http.StatusForbidden},
+		{identity.RoleAdmin, http.StatusOK},
+	} {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/admin/usage/imported-calls?view=minutes&page=2", nil)
+		if tc.role != "" {
+			account.Role = tc.role
+			token, err := session.GenerateToken(t.Context(), account)
+			require.NoError(t, err)
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		recorder := httptest.NewRecorder()
+		router.ServeHTTP(recorder, req)
+		require.Equal(t, tc.status, recorder.Code, "role=%q", tc.role)
+		require.Contains(t, recorder.Header().Get("Content-Type"), "application/json")
+		if tc.status == http.StatusOK {
+			require.Contains(t, recorder.Body.String(), `"source":"raks"`)
+			require.Contains(t, recorder.Body.String(), `"page":2`)
+		} else {
+			require.Empty(t, reader.queries)
+		}
+	}
+	require.Len(t, reader.queries, 1)
+	require.True(t, reader.queries[0].WithMinutes)
+	require.Equal(t, 2, reader.queries[0].Page)
 }
 
 // TestAdminImageStorageRoutesAreRemoved registers backup routes and requests

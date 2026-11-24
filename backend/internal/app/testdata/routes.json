@@ -237,6 +237,7 @@
   "GET /api/v1/admin/usage/cleanup-tasks",
   "GET /api/v1/admin/usage/export-tasks",
   "GET /api/v1/admin/usage/export-tasks/:id/download",
+  "GET /api/v1/admin/usage/imported-calls",
   "GET /api/v1/admin/usage/search-api-keys",
   "GET /api/v1/admin/usage/search-users",
   "GET /api/v1/admin/usage/stats",
