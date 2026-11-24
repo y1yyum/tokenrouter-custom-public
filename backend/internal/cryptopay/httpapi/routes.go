@@ -9,10 +9,12 @@ import "github.com/gin-gonic/gin"
 
 // RegisterCryptoRoutes mounts the four customer deposit endpoints.
 // Pass the /api/v1 group after the host JWT, backend-mode, panel, and audit
-// middleware. CryptoUserAccess checks local readiness before the handlers run.
-func RegisterCryptoRoutes(authenticated *gin.RouterGroup, cryptoHandler *CryptoHandler, depositHandler *CryptoDepositHandler) {
+// middleware. CryptoUserAccess checks local readiness before the site's
+// credential rotation policy runs. The self-service status and acknowledgment
+// routes are mounted separately so a blocked user can inspect the decision.
+func RegisterCryptoRoutes(authenticated *gin.RouterGroup, cryptoHandler *CryptoHandler, depositHandler *CryptoDepositHandler, rotationGuard gin.HandlerFunc) {
 	crypto := authenticated.Group("/crypto")
-	crypto.Use(cryptoHandler.CryptoUserAccess)
+	crypto.Use(cryptoHandler.CryptoUserAccess, rotationGuard)
 	crypto.GET("/deposit-addresses", cryptoHandler.GetDepositAddresses)
 	crypto.GET("/deposit-info", depositHandler.GetDepositInfo)
 	crypto.GET("/deposit-network-status", depositHandler.GetDepositNetworkStatus)

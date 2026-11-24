@@ -18,6 +18,7 @@ import (
 	rediscache2 "github.com/TokenFlux/TokenRouter/internal/billing/rediscache"
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	postgres6 "github.com/TokenFlux/TokenRouter/internal/creative/postgres"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay"
 	httpapi5 "github.com/TokenFlux/TokenRouter/internal/egress/httpapi"
 	postgres8 "github.com/TokenFlux/TokenRouter/internal/egress/postgres"
 	provider2 "github.com/TokenFlux/TokenRouter/internal/egress/provider"
@@ -557,7 +558,15 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	paymentWebhookHandler := providePaymentWebhookHTTP(runtime)
 	httpapiAdminHandler := providePaymentAdminHTTP(runtime, configService, plans, calendar)
 	planHandler := httpapi.NewPlanHandler(plans)
-	appPaymentRouteMount := providePaymentRouteMount(paymentHandler, paymentWebhookHandler, httpapiAdminHandler, planHandler)
+	serviceSettingStore := cryptopay.NewServiceSettingStore(store, db)
+	userBarkService := provideWalletBark(db, secretEncryptor)
+	depositCreditor := provideDepositCreditor(client, runtime, db, eligibility, apiKeyService, userBarkService)
+	addressesService := cryptopay.NewAddressService(db)
+	cryptopayService := provideChainPayments(db, serviceSettingStore, depositCreditor, addressesService, cfg, redisClient, userBarkService, mailer, manager)
+	cryptoSecurityService := identity.NewCryptoSecurityService(totpService, cfg)
+	keyRotationGateHandler := provideDepositRotationGate(db, cfg)
+	appCryptoRouteMount := provideCryptoRouteMount(cryptopayService, addressesService, serviceSettingStore, cryptoSecurityService, cfg, userBarkService, keyRotationGateHandler)
+	appPaymentRouteMount := providePaymentRouteMount(paymentHandler, paymentWebhookHandler, httpapiAdminHandler, planHandler, appCryptoRouteMount)
 	httpapiPublicHandler := providePluginPublicHandler(pluginManager, packageFiles, grants, userService)
 	appPluginRouteMount := providePluginRouteMount(httpapiPublicHandler)
 	idempotencyRepository := provideIdempotencyRepository(db)

@@ -3,6 +3,8 @@
 package app
 
 import (
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay"
+	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/google/wire"
 
 	"github.com/TokenFlux/TokenRouter/internal/payment"
@@ -20,7 +22,17 @@ import (
 var (
 	// paymentAssemblyProviders supplies payment runtime, expiry handling, and
 	// public, administrator, and webhook HTTP constructors for application routes.
+	// Deposit handlers share the host payment runtime and receive their scoped
+	// authority, credential policy and notification delivery at construction.
 	paymentAssemblyProviders = wire.NewSet(
+		cryptopay.NewAddressService,
+		cryptopay.NewServiceSettingStore,
+		identity.NewCryptoSecurityService,
+		provideWalletBark,
+		provideDepositRotationGate,
+		provideDepositCreditor,
+		provideChainPayments,
+		provideCryptoRouteMount,
 		providePaymentExpiry,
 		providePaymentHTTP,
 		providePaymentAdminHTTP,
