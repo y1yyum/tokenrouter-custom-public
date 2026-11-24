@@ -171,6 +171,20 @@ func (_c *RedeemCodeCreate) SetNillableNotes(v *string) *RedeemCodeCreate {
 	return _c
 }
 
+// SetSourceRef sets the "source_ref" field.
+func (_c *RedeemCodeCreate) SetSourceRef(v string) *RedeemCodeCreate {
+	_c.mutation.SetSourceRef(v)
+	return _c
+}
+
+// SetNillableSourceRef sets the "source_ref" field if the given value is not nil.
+func (_c *RedeemCodeCreate) SetNillableSourceRef(v *string) *RedeemCodeCreate {
+	if v != nil {
+		_c.SetSourceRef(*v)
+	}
+	return _c
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (_c *RedeemCodeCreate) SetCreatedAt(v time.Time) *RedeemCodeCreate {
 	_c.mutation.SetCreatedAt(v)
@@ -355,6 +369,11 @@ func (_c *RedeemCodeCreate) check() error {
 	if _, ok := _c.mutation.UsedCount(); !ok {
 		return &ValidationError{Name: "used_count", err: errors.New(`ent: missing required field "RedeemCode.used_count"`)}
 	}
+	if v, ok := _c.mutation.SourceRef(); ok {
+		if err := redeemcode.SourceRefValidator(v); err != nil {
+			return &ValidationError{Name: "source_ref", err: fmt.Errorf(`ent: validator failed for field "RedeemCode.source_ref": %w`, err)}
+		}
+	}
 	if _, ok := _c.mutation.CreatedAt(); !ok {
 		return &ValidationError{Name: "created_at", err: errors.New(`ent: missing required field "RedeemCode.created_at"`)}
 	}
@@ -429,6 +448,10 @@ func (_c *RedeemCodeCreate) createSpec() (*RedeemCode, *sqlgraph.CreateSpec) {
 	if value, ok := _c.mutation.Notes(); ok {
 		_spec.SetField(redeemcode.FieldNotes, field.TypeString, value)
 		_node.Notes = &value
+	}
+	if value, ok := _c.mutation.SourceRef(); ok {
+		_spec.SetField(redeemcode.FieldSourceRef, field.TypeString, value)
+		_node.SourceRef = value
 	}
 	if value, ok := _c.mutation.CreatedAt(); ok {
 		_spec.SetField(redeemcode.FieldCreatedAt, field.TypeTime, value)
@@ -711,6 +734,24 @@ func (u *RedeemCodeUpsert) UpdateNotes() *RedeemCodeUpsert {
 // ClearNotes clears the value of the "notes" field.
 func (u *RedeemCodeUpsert) ClearNotes() *RedeemCodeUpsert {
 	u.SetNull(redeemcode.FieldNotes)
+	return u
+}
+
+// SetSourceRef sets the "source_ref" field.
+func (u *RedeemCodeUpsert) SetSourceRef(v string) *RedeemCodeUpsert {
+	u.Set(redeemcode.FieldSourceRef, v)
+	return u
+}
+
+// UpdateSourceRef sets the "source_ref" field to the value that was provided on create.
+func (u *RedeemCodeUpsert) UpdateSourceRef() *RedeemCodeUpsert {
+	u.SetExcluded(redeemcode.FieldSourceRef)
+	return u
+}
+
+// ClearSourceRef clears the value of the "source_ref" field.
+func (u *RedeemCodeUpsert) ClearSourceRef() *RedeemCodeUpsert {
+	u.SetNull(redeemcode.FieldSourceRef)
 	return u
 }
 
@@ -1001,6 +1042,27 @@ func (u *RedeemCodeUpsertOne) UpdateNotes() *RedeemCodeUpsertOne {
 func (u *RedeemCodeUpsertOne) ClearNotes() *RedeemCodeUpsertOne {
 	return u.Update(func(s *RedeemCodeUpsert) {
 		s.ClearNotes()
+	})
+}
+
+// SetSourceRef sets the "source_ref" field.
+func (u *RedeemCodeUpsertOne) SetSourceRef(v string) *RedeemCodeUpsertOne {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.SetSourceRef(v)
+	})
+}
+
+// UpdateSourceRef sets the "source_ref" field to the value that was provided on create.
+func (u *RedeemCodeUpsertOne) UpdateSourceRef() *RedeemCodeUpsertOne {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.UpdateSourceRef()
+	})
+}
+
+// ClearSourceRef clears the value of the "source_ref" field.
+func (u *RedeemCodeUpsertOne) ClearSourceRef() *RedeemCodeUpsertOne {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.ClearSourceRef()
 	})
 }
 
@@ -1464,6 +1526,27 @@ func (u *RedeemCodeUpsertBulk) UpdateNotes() *RedeemCodeUpsertBulk {
 func (u *RedeemCodeUpsertBulk) ClearNotes() *RedeemCodeUpsertBulk {
 	return u.Update(func(s *RedeemCodeUpsert) {
 		s.ClearNotes()
+	})
+}
+
+// SetSourceRef sets the "source_ref" field.
+func (u *RedeemCodeUpsertBulk) SetSourceRef(v string) *RedeemCodeUpsertBulk {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.SetSourceRef(v)
+	})
+}
+
+// UpdateSourceRef sets the "source_ref" field to the value that was provided on create.
+func (u *RedeemCodeUpsertBulk) UpdateSourceRef() *RedeemCodeUpsertBulk {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.UpdateSourceRef()
+	})
+}
+
+// ClearSourceRef clears the value of the "source_ref" field.
+func (u *RedeemCodeUpsertBulk) ClearSourceRef() *RedeemCodeUpsertBulk {
+	return u.Update(func(s *RedeemCodeUpsert) {
+		s.ClearSourceRef()
 	})
 }
 

@@ -1453,6 +1453,7 @@ var (
 		{Name: "expires_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "used_at", Type: field.TypeTime, Nullable: true, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "notes", Type: field.TypeString, Nullable: true, SchemaType: map[string]string{"postgres": "text"}},
+		{Name: "source_ref", Type: field.TypeString, Nullable: true, Size: 160},
 		{Name: "created_at", Type: field.TypeTime, SchemaType: map[string]string{"postgres": "timestamptz"}},
 		{Name: "validity_days", Type: field.TypeInt, Nullable: true, SchemaType: map[string]string{"postgres": "integer"}},
 		{Name: "plan_id", Type: field.TypeInt64, Nullable: true},
@@ -1466,13 +1467,13 @@ var (
 		ForeignKeys: []*schema.ForeignKey{
 			{
 				Symbol:     "redeem_codes_subscription_plans_redeem_codes",
-				Columns:    []*schema.Column{RedeemCodesColumns[13]},
+				Columns:    []*schema.Column{RedeemCodesColumns[14]},
 				RefColumns: []*schema.Column{SubscriptionPlansColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
 			{
 				Symbol:     "redeem_codes_users_redeem_codes",
-				Columns:    []*schema.Column{RedeemCodesColumns[14]},
+				Columns:    []*schema.Column{RedeemCodesColumns[15]},
 				RefColumns: []*schema.Column{UsersColumns[0]},
 				OnDelete:   schema.SetNull,
 			},
@@ -1491,12 +1492,31 @@ var (
 			{
 				Name:    "redeemcode_used_by",
 				Unique:  false,
-				Columns: []*schema.Column{RedeemCodesColumns[14]},
+				Columns: []*schema.Column{RedeemCodesColumns[15]},
 			},
 			{
 				Name:    "redeemcode_plan_id",
 				Unique:  false,
-				Columns: []*schema.Column{RedeemCodesColumns[13]},
+				Columns: []*schema.Column{RedeemCodesColumns[14]},
+			},
+			{
+				Name:    "uq_redeem_codes_crypto_revoke_source",
+				Unique:  true,
+				Columns: []*schema.Column{RedeemCodesColumns[11]},
+				Annotation: &entsql.IndexAnnotation{
+					Where: "type = 'crypto_revoke' AND source_ref IS NOT NULL",
+				},
+			},
+			{
+				Name:    "idx_redeem_codes_crypto_revoke_user",
+				Unique:  false,
+				Columns: []*schema.Column{RedeemCodesColumns[15], RedeemCodesColumns[9]},
+				Annotation: &entsql.IndexAnnotation{
+					DescColumns: map[string]bool{
+						RedeemCodesColumns[9].Name: true,
+					},
+					Where: "type = 'crypto_revoke'",
+				},
 			},
 		},
 	}

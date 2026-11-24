@@ -36,6 +36,8 @@ const (
 	FieldUsedAt = "used_at"
 	// FieldNotes holds the string denoting the notes field in the database.
 	FieldNotes = "notes"
+	// FieldSourceRef holds the string denoting the source_ref field in the database.
+	FieldSourceRef = "source_ref"
 	// FieldCreatedAt holds the string denoting the created_at field in the database.
 	FieldCreatedAt = "created_at"
 	// FieldPlanID holds the string denoting the plan_id field in the database.
@@ -87,6 +89,7 @@ var Columns = []string{
 	FieldUsedBy,
 	FieldUsedAt,
 	FieldNotes,
+	FieldSourceRef,
 	FieldCreatedAt,
 	FieldPlanID,
 	FieldValidityDays,
@@ -121,6 +124,8 @@ var (
 	DefaultMaxUses int
 	// DefaultUsedCount holds the default value on creation for the "used_count" field.
 	DefaultUsedCount int
+	// SourceRefValidator is a validator for the "source_ref" field. It is called by the builders before save.
+	SourceRefValidator func(string) error
 	// DefaultCreatedAt holds the default value on creation for the "created_at" field.
 	DefaultCreatedAt func() time.Time
 	// ValidityDaysValidator is a validator for the "validity_days" field. It is called by the builders before save.
@@ -188,6 +193,11 @@ func ByUsedAt(opts ...sql.OrderTermOption) OrderOption {
 // ByNotes orders the results by the notes field.
 func ByNotes(opts ...sql.OrderTermOption) OrderOption {
 	return sql.OrderByField(FieldNotes, opts...).ToFunc()
+}
+
+// BySourceRef orders the results by the source_ref field.
+func BySourceRef(opts ...sql.OrderTermOption) OrderOption {
+	return sql.OrderByField(FieldSourceRef, opts...).ToFunc()
 }
 
 // ByCreatedAt orders the results by the created_at field.
