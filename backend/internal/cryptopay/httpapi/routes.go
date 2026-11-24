@@ -6,6 +6,21 @@ import "github.com/gin-gonic/gin"
 // application supplies groups with its common authentication, rate limits, and
 // audit policy. The crypto groups enforce their additional local instance and
 // wallet access rules before dispatching to the imported handlers.
+// The administrator table supplies both the direct-only declarations and the
+// mounted routes, keeping the wallet console outside delegated management.
+
+const (
+	// cryptoAdminGroup locates the shared operator guard and defines the suffix
+	// used to declare each full management path.
+	cryptoAdminGroup = "/crypto"
+)
+
+// cryptoAdminRoute binds one direct administrator route to its wallet handler.
+type cryptoAdminRoute struct {
+	method  string          // registered HTTP method
+	path    string          // crypto-relative Gin pattern
+	handler gin.HandlerFunc // bound payment handler
+}
 
 // RegisterCryptoRoutes mounts the four customer deposit endpoints.
 // Pass the /api/v1 group after the host JWT, backend-mode, panel, and audit
@@ -21,70 +36,88 @@ func RegisterCryptoRoutes(authenticated *gin.RouterGroup, cryptoHandler *CryptoH
 	crypto.GET("/deposit-history", depositHandler.GetDepositHistory)
 }
 
-// RegisterCryptoAdminRoutes registers the admin crypto management endpoints,
-// including channel configuration, wallets, and settlement. Pass the /api/v1/admin
-// group after the host Admin, Panel, and Audit middleware. The crypto gate then
-// checks the actual JWT principal and the operation-specific authorization.
+// RegisterCryptoAdminRoutes mounts wallet and deposit operations for direct HTTP
+// access. Pass the /api/v1/admin group with the host Admin, Panel, and Audit
+// middleware. CryptoAdminSecurity then checks the JWT principal and payment
+// operator permissions before any registered handler runs.
 func RegisterCryptoAdminRoutes(admin *gin.RouterGroup, cryptoHandler *CryptoHandler) {
-	crypto := admin.Group("/crypto")
-	crypto.Use(cryptoHandler.CryptoAdminSecurity)
-	{
-		crypto.GET("/security/status", cryptoHandler.AdminCryptoSecurityStatus)
-		crypto.POST("/security/verify", cryptoHandler.AdminCryptoSecurityVerify)
-		crypto.POST("/security/operation-intent", cryptoHandler.AdminWalletOperationIntent)
-		crypto.POST("/security/setup", cryptoHandler.AdminCryptoSecuritySetup)
-		crypto.POST("/security/enable", cryptoHandler.AdminCryptoSecurityEnable)
-		crypto.GET("/config", cryptoHandler.AdminGetConfig)
-		crypto.GET("/config/private", cryptoHandler.AdminGetPrivateConfig)
-		crypto.PUT("/config", cryptoHandler.AdminUpdateConfig)
-		crypto.GET("/addresses", cryptoHandler.AdminListAddresses)
-		crypto.GET("/address-owners", cryptoHandler.AdminAddressOwners)
-		crypto.POST("/addresses/:id/status", cryptoHandler.AdminSetAddressStatus)
-		crypto.POST("/addresses/:id/rotate", cryptoHandler.AdminRotateAddress)
-		crypto.POST("/addresses/:id/export-private-key", cryptoHandler.AdminExportAddressPrivateKey)
-		crypto.GET("/sweep/plan", cryptoHandler.AdminSweepPlan)
-		crypto.GET("/sweep/readiness", cryptoHandler.AdminSweepReadiness)
-		crypto.POST("/sweep/run", cryptoHandler.AdminRunSweep)
-		crypto.GET("/sweep/runs", cryptoHandler.AdminSweepRuns)
-		crypto.GET("/sweep/runs/:id", cryptoHandler.AdminSweepRunStatus)
-		crypto.GET("/sweep/records", cryptoHandler.AdminSweepRecords)
-		crypto.GET("/sweep/blocked", cryptoHandler.AdminListBlockedSweeps)
-		crypto.POST("/sweep/records/:id/reconcile", cryptoHandler.AdminReconcileSweep)
-		crypto.GET("/deposits", cryptoHandler.AdminListDeposits)
-		crypto.POST("/deposits/confirm", cryptoHandler.AdminConfirmDeposits)
-		crypto.POST("/scan/run", cryptoHandler.AdminRunScan)
-		crypto.GET("/scan/runs", cryptoHandler.AdminScanRuns)
-		crypto.GET("/scan/runs/:id", cryptoHandler.AdminScanRunStatus)
-		crypto.POST("/scan/runs/:id/cancel", cryptoHandler.AdminCancelScanRun)
-		crypto.GET("/wallet/status", cryptoHandler.AdminWalletStatus)
-		crypto.GET("/wallet/security", cryptoHandler.AdminWalletSecurity)
-		crypto.POST("/wallet/security/recover", cryptoHandler.AdminRecoverWalletSecurity)
-		crypto.POST("/wallet/initialize", cryptoHandler.AdminInitializeWallet)
-		crypto.POST("/wallet/export-mnemonics", cryptoHandler.AdminExportMnemonics)
-		crypto.POST("/wallet/hot-mnemonic", cryptoHandler.AdminImportHotMnemonic)
-		crypto.GET("/pool", cryptoHandler.AdminPoolStatus)
-		crypto.GET("/chains/status", cryptoHandler.AdminChainStatus)
-		crypto.GET("/hot-wallet", cryptoHandler.AdminHotWalletStatus)
-		crypto.GET("/hot-wallet/address", cryptoHandler.AdminHotWalletAddress)
-		crypto.GET("/deposits.csv", cryptoHandler.AdminExportDeposits)
+	crypto := admin.Group(cryptoAdminGroup, cryptoHandler.CryptoAdminSecurity)
+	for _, route := range cryptoAdminRoutes(cryptoHandler) {
+		crypto.Handle(route.method, route.path, route.handler)
+	}
+}
+
+// DeclareDirectOnlyAdminRoutes marks the wallet routes in the host catalogue.
+// Call during application initialization with the host's direct-only declaration
+// function. Binding the methods to an empty handler supplies the route patterns
+// without consulting runtime dependencies.
+func DeclareDirectOnlyAdminRoutes(declare func(method, absolutePath string)) {
+	for _, route := range cryptoAdminRoutes(&CryptoHandler{}) {
+		declare(route.method, "/api/v1/admin"+cryptoAdminGroup+route.path)
+	}
+}
+
+// cryptoAdminRoutes supplies the method, pattern, and handler for each wallet
+// endpoint. Both the direct-only declarations and Gin registration use this
+// table so that adding a route here also declares its delegation policy.
+func cryptoAdminRoutes(cryptoHandler *CryptoHandler) []cryptoAdminRoute {
+	return []cryptoAdminRoute{
+		{"GET", "/security/status", cryptoHandler.AdminCryptoSecurityStatus},
+		{"POST", "/security/verify", cryptoHandler.AdminCryptoSecurityVerify},
+		{"POST", "/security/operation-intent", cryptoHandler.AdminWalletOperationIntent},
+		{"POST", "/security/setup", cryptoHandler.AdminCryptoSecuritySetup},
+		{"POST", "/security/enable", cryptoHandler.AdminCryptoSecurityEnable},
+		{"GET", "/config", cryptoHandler.AdminGetConfig},
+		{"GET", "/config/private", cryptoHandler.AdminGetPrivateConfig},
+		{"PUT", "/config", cryptoHandler.AdminUpdateConfig},
+		{"GET", "/addresses", cryptoHandler.AdminListAddresses},
+		{"GET", "/address-owners", cryptoHandler.AdminAddressOwners},
+		{"POST", "/addresses/:id/status", cryptoHandler.AdminSetAddressStatus},
+		{"POST", "/addresses/:id/rotate", cryptoHandler.AdminRotateAddress},
+		{"POST", "/addresses/:id/export-private-key", cryptoHandler.AdminExportAddressPrivateKey},
+		{"GET", "/sweep/plan", cryptoHandler.AdminSweepPlan},
+		{"GET", "/sweep/readiness", cryptoHandler.AdminSweepReadiness},
+		{"POST", "/sweep/run", cryptoHandler.AdminRunSweep},
+		{"GET", "/sweep/runs", cryptoHandler.AdminSweepRuns},
+		{"GET", "/sweep/runs/:id", cryptoHandler.AdminSweepRunStatus},
+		{"GET", "/sweep/records", cryptoHandler.AdminSweepRecords},
+		{"GET", "/sweep/blocked", cryptoHandler.AdminListBlockedSweeps},
+		{"POST", "/sweep/records/:id/reconcile", cryptoHandler.AdminReconcileSweep},
+		{"GET", "/deposits", cryptoHandler.AdminListDeposits},
+		{"POST", "/deposits/confirm", cryptoHandler.AdminConfirmDeposits},
+		{"POST", "/scan/run", cryptoHandler.AdminRunScan},
+		{"GET", "/scan/runs", cryptoHandler.AdminScanRuns},
+		{"GET", "/scan/runs/:id", cryptoHandler.AdminScanRunStatus},
+		{"POST", "/scan/runs/:id/cancel", cryptoHandler.AdminCancelScanRun},
+		{"GET", "/wallet/status", cryptoHandler.AdminWalletStatus},
+		{"GET", "/wallet/security", cryptoHandler.AdminWalletSecurity},
+		{"POST", "/wallet/security/recover", cryptoHandler.AdminRecoverWalletSecurity},
+		{"POST", "/wallet/initialize", cryptoHandler.AdminInitializeWallet},
+		{"POST", "/wallet/export-mnemonics", cryptoHandler.AdminExportMnemonics},
+		{"POST", "/wallet/hot-mnemonic", cryptoHandler.AdminImportHotMnemonic},
+		{"GET", "/pool", cryptoHandler.AdminPoolStatus},
+		{"GET", "/chains/status", cryptoHandler.AdminChainStatus},
+		{"GET", "/hot-wallet", cryptoHandler.AdminHotWalletStatus},
+		{"GET", "/hot-wallet/address", cryptoHandler.AdminHotWalletAddress},
+		{"GET", "/deposits.csv", cryptoHandler.AdminExportDeposits},
 		// The Shamir 2-of-3 setup stores sealed share A. Verification and
 		// unlock receive an operator share for use during the request.
-		crypto.GET("/signer/status", cryptoHandler.AdminSignerStatus)
-		crypto.GET("/signer/risk-notice", cryptoHandler.AdminSignerRiskNotice)
-		crypto.POST("/signer/setup", cryptoHandler.AdminSignerSetup)
-		crypto.POST("/signer/resplit", cryptoHandler.AdminSignerResplit)
-		crypto.POST("/signer/verify-share", cryptoHandler.AdminSignerVerifyShare)
+		{"GET", "/signer/status", cryptoHandler.AdminSignerStatus},
+		{"GET", "/signer/risk-notice", cryptoHandler.AdminSignerRiskNotice},
+		{"POST", "/signer/setup", cryptoHandler.AdminSignerSetup},
+		{"POST", "/signer/resplit", cryptoHandler.AdminSignerResplit},
+		{"POST", "/signer/verify-share", cryptoHandler.AdminSignerVerifyShare},
 		// Unlocking keeps the data key resident only for the bounded 15-minute
 		// lease; it still requires a recovery share plus a freshly typed code.
-		crypto.POST("/signer/unlock", cryptoHandler.AdminSignerUnlock)
-		crypto.POST("/signer/auto-sweep", cryptoHandler.AdminSignerAutoSweep)
+		{"POST", "/signer/unlock", cryptoHandler.AdminSignerUnlock},
+		{"POST", "/signer/auto-sweep", cryptoHandler.AdminSignerAutoSweep},
 		// Moving a pinned sweep destination is deliberately not part of the
 		// generic config save: it needs a fresh code, the risk phrase and an
 		// explicit acknowledgement, and it is the only audited destination path.
-		crypto.POST("/signer/sweep-destination", cryptoHandler.AdminUpdateSweepDestination)
-		crypto.POST("/rpc/test", cryptoHandler.AdminTestRPC)
-		crypto.GET("/rpc/candidates", cryptoHandler.AdminChainlistCandidates)
-		crypto.POST("/rpc/auto-pick", cryptoHandler.AdminAutoPickRPC)
+		{"POST", "/signer/sweep-destination", cryptoHandler.AdminUpdateSweepDestination},
+		{"POST", "/rpc/test", cryptoHandler.AdminTestRPC},
+		{"GET", "/rpc/candidates", cryptoHandler.AdminChainlistCandidates},
+		{"POST", "/rpc/auto-pick", cryptoHandler.AdminAutoPickRPC},
 	}
 }
 

@@ -20,6 +20,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/TokenFlux/TokenRouter/internal/notification"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
+	"github.com/TokenFlux/TokenRouter/internal/server/adminapi"
 )
 
 // crypto_payments.go connects chain observations to the same payment, identity
@@ -37,6 +38,13 @@ import (
 // cryptoRouteMount registers deposit and wallet-management routes under the
 // panel API using the application's already assembled authentication guards.
 type cryptoRouteMount func(*gin.RouterGroup, httpRouteSecurity)
+
+// init declares the payment console's direct-only routes in the host catalogue.
+// This runs before router assembly, when no payment runtime is needed to
+// read the route table that the payment console uses.
+func init() {
+	cryptohttp.DeclareDirectOnlyAdminRoutes(adminapi.DefineDirectOnly)
+}
 
 // provideDepositRotationGate binds the user's current credential state to the
 // site's configured cutoff and acknowledgment policy. The status, acknowledgment
