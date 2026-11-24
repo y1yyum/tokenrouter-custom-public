@@ -48,7 +48,9 @@ func PersistentKey(raw string, configured bool) string {
 	}
 	raw = strings.TrimSpace(raw)
 	key, err := hex.DecodeString(raw)
-	if err != nil || len(key) != 32 {
+	valid := err == nil && len(key) == 32
+	clear(key)
+	if !valid {
 		return ""
 	}
 	return raw

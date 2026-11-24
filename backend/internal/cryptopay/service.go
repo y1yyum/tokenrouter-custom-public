@@ -315,6 +315,12 @@ type Service struct {
 	settings *ServiceSettingStore // persisted crypto configuration access
 	creditor ledger.Creditor
 
+	// startOnce and monitorWallet keep worker startup under the host lifecycle.
+	// The key itself belongs to the wallet. Only its availability at construction
+	// is needed to decide whether to launch the security monitor.
+	startOnce     sync.Once // worker startup ownership
+	monitorWallet bool      // persistent key availability
+
 	mu                sync.RWMutex
 	config            CryptoConfig
 	configFingerprint string // Stored config, before the local wallet guard.
@@ -377,17 +383,34 @@ func NewService(
 	appConfig *config.Config,
 	statusRedis ...*redis.Client,
 ) *Service {
+	s := NewManagedService(db, settings, creditor, addressSvc, appConfig, statusRedis...)
+	s.Start(context.Background())
+	return s
+}
+
+// NewManagedService prepares the wallet, storage bindings and guards without
+// starting chain work. The application attaches its notification sinks, then
+// calls Start from the registered lifecycle hook before accepting traffic.
+func NewManagedService(
+	db *sql.DB,
+	settings *ServiceSettingStore,
+	creditor ledger.Creditor,
+	addressSvc *addresses.Service,
+	appConfig *config.Config,
+	statusRedis ...*redis.Client,
+) *Service {
 	var masterKey string
 	if appConfig != nil {
 		masterKey = mode.PersistentKey(appConfig.Security.SecretEncryptionKey, appConfig.Security.SecretEncryptionKeyConfigured)
 	}
 	s := &Service{
-		db:        db,
-		settings:  settings,
-		creditor:  creditor,
-		pools:     map[string]*rpc.Pool{},
-		wallet:    wallet.New(db, masterKey),
-		addresses: addressSvc,
+		db:            db,
+		settings:      settings,
+		creditor:      creditor,
+		pools:         map[string]*rpc.Pool{},
+		wallet:        wallet.New(db, masterKey),
+		addresses:     addressSvc,
+		monitorWallet: masterKey != "",
 	}
 	if len(statusRedis) > 0 && statusRedis[0] != nil {
 		s.depositNetworkStatus = newDepositNetworkMonitor(redisNetworkStatusStore{rdb: statusRedis[0].WithTimeout(depositNetworkIOTimeout)}, time.Now)
@@ -397,14 +420,30 @@ func NewService(
 	if addressSvc != nil {
 		addressSvc.SetSecurityGuards(s.checkWalletActivity, s.validateWalletAssignment)
 	}
-	s.reload(context.Background())
-	s.startConfigPoller(context.Background(), time.Minute)
-	if masterKey != "" && cryptoWorkersAllowed() && mode.InstanceEnabled() {
+	return s
+}
+
+// Start loads the persisted channel settings and starts the eligible workers
+// once. Initial loading uses the host startup context. Ongoing work has its
+// own cancellation path in Close so the end of startup does not stop it.
+func (s *Service) Start(ctx context.Context) {
+	s.startOnce.Do(func() {
+		s.reload(ctx)
+		s.startConfigPoller(context.Background(), time.Minute)
+		if !s.monitorWallet || !cryptoWorkersAllowed() || !mode.InstanceEnabled() {
+			return
+		}
+		// Publish cancellation under the same lock used by Close so a shutdown
+		// racing with startup cannot leave an untracked wallet monitor running.
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if s.closed {
+			return
+		}
 		securityCtx, cancel := context.WithCancel(context.Background())
 		s.securityCancel = cancel
 		go s.securityMonitor(securityCtx)
-	}
-	return s
+	})
 }
 
 // Reload re-reads config and (re)builds pools and the worker. Called at
@@ -658,32 +697,30 @@ func (s *Service) applyConfigLocked(ctx context.Context, cfg CryptoConfig, finge
 			slog.Warn("[cryptopay] reorg push failed", "error", err)
 		}
 	})
-	// Instant credits are clawed back automatically when the chain invalidates
-	// them (reorg, revert, replacement, missing receipt). A confirmation-gated
-	// credit keeps the manual-reconciliation alert above. Errors are returned to
-	// the scanner so the row stays credited and the claw-back is retried on the
-	// next pass instead of being silently skipped.
-	s.worker.SetProvisionalRevokeNotifier(func(ctx context.Context, chain, txHash string, logIndex int, reason string) (bool, error) {
+	// Resolve invalidated deposits against the persistent wallet grant before
+	// the scanner closes the row. The callback reports review separately from
+	// an automatic reversal, so operator and user notices match the outcome.
+	s.worker.SetDepositReorgResolver(func(ctx context.Context, chain, txHash string, logIndex int, reason string) (scanner.DepositReorgOutcome, error) {
 		revoker, ok := s.creditor.(interface {
-			RevokeProvisionalDeposit(ctx context.Context, chain, txHash string, logIndex int, reason string) (bool, error)
+			ReconcileDepositReorg(ctx context.Context, chain, txHash string, logIndex int, reason string) (scanner.DepositReorgOutcome, error)
 		})
 		if !ok {
-			return false, nil
+			return scanner.DepositReorgOutcome{}, nil
 		}
-		revoked, err := revoker.RevokeProvisionalDeposit(ctx, chain, txHash, logIndex, reason)
+		outcome, err := revoker.ReconcileDepositReorg(ctx, chain, txHash, logIndex, reason)
 		if err != nil {
 			slog.Error("[cryptopay] provisional credit revoke failed; will retry",
 				"chain", chain, "tx", txHash, "log_index", logIndex, "reason", reason, "cause", err)
-			return false, err
+			return scanner.DepositReorgOutcome{}, err
 		}
-		if !revoked {
-			return false, nil
+		if !outcome.Revoked {
+			return outcome, nil
 		}
 		slog.Warn("[cryptopay] instant deposit credit revoked",
 			"chain", chain, "tx", txHash, "log_index", logIndex, "reason", reason)
 		push := s.getPushNotifier()
 		if push == nil {
-			return true, nil
+			return outcome, nil
 		}
 		if err := push.PushToAdmins(ctx, "链上回滚：即时入账已扣回",
 			fmt.Sprintf("%s 的交易 %s 未最终确认（%s），已自动扣回临时入账，请核对",
@@ -691,7 +728,7 @@ func (s *Service) applyConfigLocked(ctx context.Context, cfg CryptoConfig, finge
 			"deposit"); err != nil {
 			slog.Warn("[cryptopay] provisional revoke push failed", "error", err)
 		}
-		return true, nil
+		return outcome, nil
 	})
 	if cryptoWorkersAllowed() {
 		s.worker.Start()
@@ -2071,7 +2108,15 @@ func (s *Service) reloadIfConfigChanged(ctx context.Context) (bool, error) {
 	if !s.sweepMu.TryLock() {
 		return false, nil
 	}
-	defer s.sweepMu.Unlock()
+	var refreshPublic bool
+	defer func() {
+		s.sweepMu.Unlock()
+		// Remote administrative writes and wallet pauses bypass this instance's
+		// settings writer. Refresh its published HTML after releasing the sweep lock.
+		if refreshPublic {
+			s.settings.notifyPublicSettings()
+		}
+	}()
 	if err := ctx.Err(); err != nil {
 		return false, err
 	}
@@ -2095,6 +2140,7 @@ func (s *Service) reloadIfConfigChanged(ctx context.Context) (bool, error) {
 	if fingerprint == last && !retry {
 		return false, nil
 	}
+	refreshPublic = fingerprint != last
 	if err := s.applyConfigLocked(ctx, stored, fingerprint); err != nil {
 		return false, err
 	}

@@ -64,7 +64,22 @@ func (s *ServiceSettingStore) SetCryptoSetting(ctx context.Context, key, value s
 	if s == nil || s.store == nil {
 		return errAtomicSettingUnavailable
 	}
-	return s.store.Set(ctx, key, value)
+	if err := s.store.Set(ctx, key, value); err != nil {
+		return err
+	}
+	if key == SettingKeyCryptoConfig {
+		s.notifyPublicSettings()
+	}
+	return nil
+}
+
+// notifyPublicSettings invalidates the host's cached bootstrap HTML after a
+// persisted channel change. The public settings reader projects the enabled
+// flag itself, so subscribers never receive the private configuration document.
+func (s *ServiceSettingStore) notifyPublicSettings() {
+	if s != nil && s.store != nil {
+		s.store.NotifyUpdated()
+	}
 }
 
 // GetCryptoSettingUncached reads a fresh snapshot from the host settings store.
@@ -113,5 +128,10 @@ func (s *ServiceSettingStore) CompareAndSwapCryptoSetting(ctx context.Context, k
 		return false, err
 	}
 	count, err := result.RowsAffected()
+	// Publish only a committed configuration change. A stale compare-and-swap
+	// leaves both the persisted configuration and the cached browser settings intact.
+	if err == nil && count == 1 && key == SettingKeyCryptoConfig {
+		s.notifyPublicSettings()
+	}
 	return count == 1, err
 }
