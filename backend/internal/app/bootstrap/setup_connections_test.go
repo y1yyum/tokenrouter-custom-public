@@ -1,8 +1,9 @@
 package bootstrap
 
 import (
-	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 // Database creation requires a maintenance connection before the target
@@ -10,29 +11,44 @@ import (
 // DSNs, keeping maintenance access on postgres and the later verification
 // connection on the requested database.
 
-// TestBuildDatabaseConnectionDSNsUsesPostgresForBootstrap supplies a target
-// database name with shared credentials. The maintenance DSN must name
-// postgres, exclude the target name, and leave the target DSN pointing at the
-// configured database.
-func TestBuildDatabaseConnectionDSNsUsesPostgresForBootstrap(t *testing.T) {
-	cfg := &SetupDatabaseConfig{
-		Host:     "db",
-		Port:     5432,
-		User:     "tokenrouter",
-		Password: "secret",
-		DBName:   "tokenrouter",
-		SSLMode:  "disable",
+// TestBuildDatabaseConnectionDSNs checks setup with and without a database
+// password. The maintenance and target DSNs must name their respective
+// databases even when the password keyword is omitted.
+func TestBuildDatabaseConnectionDSNs(t *testing.T) {
+	tests := []struct {
+		name            string
+		password        string
+		wantMaintenance string
+		wantTarget      string
+	}{
+		{
+			name:            "empty password",
+			wantMaintenance: "host=db port=5433 user=crypto_review dbname=postgres sslmode=disable",
+			wantTarget:      "host=db port=5433 user=crypto_review dbname=crypto_http sslmode=disable",
+		},
+		{
+			name:            "configured password",
+			password:        "example-pass",
+			wantMaintenance: "host=db port=5433 user=crypto_review password=example-pass dbname=postgres sslmode=disable",
+			wantTarget:      "host=db port=5433 user=crypto_review password=example-pass dbname=crypto_http sslmode=disable",
+		},
 	}
 
-	bootstrapDSN, targetDSN := BuildDatabaseConnectionDSNs(cfg)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &SetupDatabaseConfig{
+				Host:     "db",
+				Port:     5433,
+				User:     "crypto_review",
+				Password: tt.password,
+				DBName:   "crypto_http",
+				SSLMode:  "disable",
+			}
 
-	if !strings.Contains(bootstrapDSN, "dbname=postgres") {
-		t.Fatalf("bootstrap DSN = %q, want default postgres database", bootstrapDSN)
-	}
-	if strings.Contains(bootstrapDSN, "dbname=tokenrouter") {
-		t.Fatalf("bootstrap DSN = %q, should not connect to target database before checking/creating it", bootstrapDSN)
-	}
-	if !strings.Contains(targetDSN, "dbname=tokenrouter") {
-		t.Fatalf("target DSN = %q, want configured database", targetDSN)
+			maintenanceDSN, targetDSN := BuildDatabaseConnectionDSNs(cfg)
+
+			require.Equal(t, tt.wantMaintenance, maintenanceDSN, "maintenance DSN")
+			require.Equal(t, tt.wantTarget, targetDSN, "target DSN")
+		})
 	}
 }

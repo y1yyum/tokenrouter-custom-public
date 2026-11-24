@@ -10,6 +10,7 @@ import (
 	_ "github.com/lib/pq"
 	"github.com/redis/go-redis/v9"
 
+	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	ip "github.com/TokenFlux/TokenRouter/internal/identity/postgres"
 	postgresinfra "github.com/TokenFlux/TokenRouter/internal/infra/postgres"
@@ -55,15 +56,19 @@ type SetupDatabaseConfig struct {
 	SSLMode  string `json:"sslmode" yaml:"sslmode"`   // libpq TLS mode
 }
 
-// BuildPostgresDSN interpolates setup connection fields into a libpq keyword
-// DSN using the supplied dbName. Values are inserted as supplied, so callers
-// provide text valid for that format; this helper performs no quoting or
-// validation.
+// BuildPostgresDSN formats a libpq keyword DSN for the supplied database name.
+// It uses the runtime formatter, which omits an empty password and expects
+// values valid in the unquoted keyword format.
 func BuildPostgresDSN(cfg *SetupDatabaseConfig, dbName string) string {
-	return fmt.Sprintf(
-		"host=%s port=%d user=%s password=%s dbname=%s sslmode=%s",
-		cfg.Host, cfg.Port, cfg.User, cfg.Password, dbName, cfg.SSLMode,
-	)
+	database := config.DatabaseConfig{
+		Host:     cfg.Host,
+		Port:     cfg.Port,
+		User:     cfg.User,
+		Password: cfg.Password,
+		DBName:   dbName,
+		SSLMode:  cfg.SSLMode,
+	}
+	return database.DSN()
 }
 
 // BuildDatabaseConnectionDSNs returns maintenance and target DSNs using the
