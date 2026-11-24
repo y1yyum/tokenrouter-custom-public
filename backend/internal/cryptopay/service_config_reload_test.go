@@ -16,20 +16,28 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/ledger"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/TokenFlux/TokenRouter/internal/service"
-	"github.com/stretchr/testify/require"
+	"github.com/TokenFlux/TokenRouter/internal/settings"
 )
 
+// reloadConfigRepository supplies shared, mutable configuration for reload tests.
 type reloadConfigRepository struct {
-	service.SettingRepository // Other repository operations must fail.
-	mu                        sync.RWMutex
-	raw                       string
-	reads                     atomic.Int32
+	// The nil embedded repository makes unsupported operations fail immediately,
+	// keeping read-count tests sensitive to changes in how the host loads settings.
+	settings.Repository
+	mu    sync.RWMutex // protects raw configuration
+	raw   string       // stored configuration JSON
+	reads atomic.Int32 // observed read count
+}
+
+type reloadCreditor struct {
+	requests []ledger.CreditRequest
 }
 
 func (r *reloadConfigRepository) GetValue(context.Context, string) (string, error) {
@@ -55,6 +63,8 @@ func (r *reloadConfigRepository) Set(_ context.Context, _ string, raw string) er
 	return nil
 }
 
+// TestConfigPollLoadsChangedSnapshotOnce counts repository reads across a manual
+// reload and a poll. The poll applies the snapshot it already read in one access.
 func TestConfigPollLoadsChangedSnapshotOnce(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -62,7 +72,7 @@ func TestConfigPollLoadsChangedSnapshotOnce(t *testing.T) {
 	repo := &reloadConfigRepository{}
 	cfg := DefaultCryptoConfig()
 	repo.set(t, cfg)
-	s := &Service{settings: service.NewSettingService(repo, nil), wallet: wallet.New(nil)}
+	s := &Service{settings: newConfigTestStore(repo), wallet: wallet.New(nil)}
 	t.Cleanup(s.Close)
 	s.Reload(t.Context())
 	require.EqualValues(t, 1, repo.reads.Load(), "manual reload reads settings once")
@@ -76,6 +86,9 @@ func TestConfigPollLoadsChangedSnapshotOnce(t *testing.T) {
 	require.Equal(t, 100, s.Config().ScanRange[ChainBSC])
 }
 
+// TestDelegatedConfigPollRecoversAfterStartupLoadFailure starts with invalid
+// saved settings. A later poll applies the corrected config and enables the
+// channel while the delegated scanner and maintenance remain inactive.
 func TestDelegatedConfigPollRecoversAfterStartupLoadFailure(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -84,7 +97,7 @@ func TestDelegatedConfigPollRecoversAfterStartupLoadFailure(t *testing.T) {
 	cfg := DefaultCryptoConfig()
 	cfg.Enabled, cfg.NativePollSeconds = true, 86400
 	repo.set(t, cfg)
-	settings := service.NewSettingService(repo, nil)
+	settings := newConfigTestStore(repo)
 	s := NewService(nil, settings, nil, nil, nil)
 	t.Cleanup(s.Close)
 	require.False(t, s.Config().Enabled)
@@ -100,6 +113,9 @@ func TestDelegatedConfigPollRecoversAfterStartupLoadFailure(t *testing.T) {
 	require.Nil(t, s.maintCancel)
 }
 
+// TestConfigPollRetriesTransientGuardFailureWithoutConfigChange simulates a
+// database failure during the wallet check. Polls keep retrying the same
+// snapshot until the guard succeeds, then leave the applied config in place.
 func TestConfigPollRetriesTransientGuardFailureWithoutConfigChange(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -107,7 +123,7 @@ func TestConfigPollRetriesTransientGuardFailureWithoutConfigChange(t *testing.T)
 	s, mock := newChannelGateService(t)
 	t.Cleanup(s.Close)
 	s.wallet.EnableSecurityMonitoring()
-	_, err := LoadConfig(t.Context(), NewServiceSettingStore(s.settings))
+	_, err := LoadConfig(t.Context(), s.settings)
 	require.NoError(t, err)
 	mock.ExpectBegin().WillReturnError(errors.New("temporary database failure"))
 	s.Reload(t.Context())
@@ -127,6 +143,9 @@ func TestConfigPollRetriesTransientGuardFailureWithoutConfigChange(t *testing.T)
 	require.False(t, reloaded, "a successful reload must clear the retry marker")
 }
 
+// TestConfigPollRetriesAfterStoredConfigReturnsToAppliedValue restores a
+// previously applied settings snapshot after a failed load. The prior error
+// must trigger a reload even though the restored fingerprint matches.
 func TestConfigPollRetriesAfterStoredConfigReturnsToAppliedValue(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -134,7 +153,7 @@ func TestConfigPollRetriesAfterStoredConfigReturnsToAppliedValue(t *testing.T) {
 	repo := &reloadConfigRepository{}
 	cfg := DefaultCryptoConfig()
 	repo.set(t, cfg)
-	s := NewService(nil, service.NewSettingService(repo, nil), nil, nil, nil)
+	s := NewService(nil, newConfigTestStore(repo), nil, nil, nil)
 	t.Cleanup(s.Close)
 	cfg.NativePollSeconds = 86400
 	repo.set(t, cfg)
@@ -166,6 +185,9 @@ func TestConfigPollerDoesNotReopenSecurityPausedChannel(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
+// TestDelegatedConfigPollerRecoversAndCloses fixes a persisted config after
+// delegated startup failed. A single watcher must apply the correction and
+// finish before Close returns.
 func TestDelegatedConfigPollerRecoversAndCloses(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -174,7 +196,7 @@ func TestDelegatedConfigPollerRecoversAndCloses(t *testing.T) {
 	cfg := DefaultCryptoConfig()
 	cfg.Enabled, cfg.NativePollSeconds = true, 86400
 	repo.set(t, cfg)
-	s := NewService(nil, service.NewSettingService(repo, nil), nil, nil, nil)
+	s := NewService(nil, newConfigTestStore(repo), nil, nil, nil)
 	t.Cleanup(s.Close)
 	require.False(t, s.Config().Enabled)
 	require.Nil(t, s.configCancel, "disabled background jobs must not start a config watcher")
@@ -261,15 +283,14 @@ func TestConfigPollerCloseDoesNotWaitForSweep(t *testing.T) {
 	}
 }
 
-type reloadCreditor struct {
-	requests []ledger.CreditRequest
-}
-
 func (c *reloadCreditor) CreditDeposit(_ context.Context, req ledger.CreditRequest) error {
 	c.requests = append(c.requests, req)
 	return nil
 }
 
+// TestConfigPollAppliesMultiplierAcrossInstances saves a multiplier through the
+// admin instance and polls from the scanner instance. The replacement worker
+// must credit the updated amount and stay active across unchanged polls.
 func TestConfigPollAppliesMultiplierAcrossInstances(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "true")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -280,9 +301,11 @@ func TestConfigPollAppliesMultiplierAcrossInstances(t *testing.T) {
 		mock.ExpectClose()
 		require.NoError(t, db.Close())
 	})
-	tr := scanner.Transfer{Chain: ChainBSC, TxHash: "0x" + strings.Repeat("ab", 32), LogIndex: 1,
+	tr := scanner.Transfer{
+		Chain: ChainBSC, TxHash: "0x" + strings.Repeat("ab", 32), LogIndex: 1,
 		From: confirmFrom, To: confirmTo, Token: confirmUSDT, Amount: new(big.Int).Set(tenUSDT),
-		BlockNumber: 100, BlockHash: "0x" + strings.Repeat("cd", 32)}
+		BlockNumber: 100, BlockHash: "0x" + strings.Repeat("cd", 32),
+	}
 	node := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var req struct{ Method string }
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -292,8 +315,10 @@ func TestConfigPollAppliesMultiplierAcrossInstances(t *testing.T) {
 		var result any
 		switch req.Method {
 		case "eth_getTransactionReceipt":
-			result = map[string]any{"status": "0x1", "blockNumber": "0x64", "blockHash": tr.BlockHash,
-				"transactionHash": tr.TxHash, "logs": []any{chainTransferLog(tr.Token, tr.From, tr.To, tr.Amount, tr.BlockNumber, tr.BlockHash, tr.TxHash, tr.LogIndex)}}
+			result = map[string]any{
+				"status": "0x1", "blockNumber": "0x64", "blockHash": tr.BlockHash,
+				"transactionHash": tr.TxHash, "logs": []any{chainTransferLog(tr.Token, tr.From, tr.To, tr.Amount, tr.BlockNumber, tr.BlockHash, tr.TxHash, tr.LogIndex)},
+			}
 		case "eth_getBlockByNumber":
 			result = map[string]any{"number": "0x64", "hash": tr.BlockHash}
 		case "eth_blockNumber":
@@ -311,20 +336,22 @@ func TestConfigPollAppliesMultiplierAcrossInstances(t *testing.T) {
 	cfg.Enabled = true
 	cfg.RPC[ChainBSC] = node.URL
 	repo.set(t, cfg)
-	admin := &Service{settings: service.NewSettingService(repo, nil), wallet: wallet.New(nil)}
+	admin := &Service{settings: newConfigTestStore(repo), wallet: wallet.New(nil)}
 	t.Cleanup(admin.Close)
 	creditor := &reloadCreditor{}
-	scanSettings := service.NewSettingService(repo, nil)
-	s := &Service{db: db, settings: scanSettings, wallet: wallet.New(nil), creditor: creditor,
-		addresses: NewAddressService(db, scanSettings), pools: map[string]*rpc.Pool{
+	scanSettings := newConfigTestStore(repo)
+	s := &Service{
+		db: db, settings: scanSettings, wallet: wallet.New(nil), creditor: creditor,
+		addresses: NewAddressService(db), pools: map[string]*rpc.Pool{
 			ChainBSC: rpc.NewPoolWithHTTPClient(node.URL, node.Client()),
-		}}
+		},
+	}
 	t.Cleanup(s.Close)
 	admin.Reload(t.Context())
 	s.Reload(t.Context())
 	oldWorker := s.worker
 	cfg.CreditMultiplier = 7.5
-	require.NoError(t, SaveConfig(t.Context(), NewServiceSettingStore(admin.settings), cfg))
+	require.NoError(t, SaveConfig(t.Context(), admin.settings, cfg))
 	admin.Reload(t.Context())
 	reloaded, err := s.reloadIfConfigChanged(t.Context())
 	require.NoError(t, err)
@@ -355,6 +382,8 @@ func TestConfigPollAppliesMultiplierAcrossInstances(t *testing.T) {
 	}
 }
 
+// TestConfigPollAppliesScanConcurrency changes only the saved concurrency.
+// Polling must replace the worker once so its chain config uses the new limit.
 func TestConfigPollAppliesScanConcurrency(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "true")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -363,7 +392,7 @@ func TestConfigPollAppliesScanConcurrency(t *testing.T) {
 	cfg := DefaultCryptoConfig()
 	cfg.Enabled = true
 	repo.set(t, cfg)
-	s := &Service{settings: service.NewSettingService(repo, nil), wallet: wallet.New(nil)}
+	s := &Service{settings: newConfigTestStore(repo), wallet: wallet.New(nil)}
 	t.Cleanup(s.Close)
 	s.Reload(t.Context())
 	old := s.worker
@@ -382,6 +411,9 @@ func TestConfigPollAppliesScanConcurrency(t *testing.T) {
 	require.False(t, reloaded, "unchanged concurrency must not churn the worker")
 }
 
+// TestConfigReloadFailuresAreVisibleAtErrorLevel reproduces invalid saved config
+// and an unavailable wallet guard. Each reload must log the failure and its
+// cause when the logger accepts only error-level messages.
 func TestConfigReloadFailuresAreVisibleAtErrorLevel(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -408,7 +440,7 @@ func TestConfigReloadFailuresAreVisibleAtErrorLevel(t *testing.T) {
 			}
 			repo := &reloadConfigRepository{}
 			repo.set(t, cfg)
-			s := &Service{settings: service.NewSettingService(repo, nil), wallet: w}
+			s := &Service{settings: newConfigTestStore(repo), wallet: w}
 			t.Cleanup(s.Close)
 			s.Reload(t.Context())
 			require.Contains(t, logs.String(), message)

@@ -5,9 +5,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
-	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
+	"github.com/TokenFlux/TokenRouter/internal/settings"
 )
 
 type configCASStore struct {
@@ -15,6 +16,8 @@ type configCASStore struct {
 	expected *string
 	writes   int
 }
+
+type nonAtomicConfigStore struct{}
 
 func (s *configCASStore) GetCryptoSetting(context.Context, string) (string, error) {
 	return "", errors.New("updates must not use the cached read")
@@ -24,9 +27,10 @@ func (s *configCASStore) SetCryptoSetting(context.Context, string, string) error
 	return errors.New("updates must not use an unconditional write")
 }
 
+// GetCryptoSettingUncached returns the exact stored snapshot or the host's missing-key error.
 func (s *configCASStore) GetCryptoSettingUncached(context.Context, string) (string, error) {
 	if s.value == nil {
-		return "", service.ErrSettingNotFound
+		return "", settings.ErrSettingNotFound
 	}
 	return *s.value, nil
 }
@@ -73,8 +77,6 @@ func TestConfigCASFirstSaveRejectsAnotherReplicaInitialization(t *testing.T) {
 	require.Equal(t, stored, *store.value)
 }
 
-type nonAtomicConfigStore struct{}
-
 func (nonAtomicConfigStore) GetCryptoSetting(context.Context, string) (string, error) {
 	panic("must not downgrade to a cached read")
 }
@@ -83,16 +85,19 @@ func (nonAtomicConfigStore) SetCryptoSetting(context.Context, string, string) er
 	panic("must not downgrade to an unconditional write")
 }
 
+// TestConfigCASDoesNotDowngradeUnsupportedOrReadOnlyStores exercises unsupported
+// atomic operations and the review write gate. Each attempt must return its
+// specific error before it can reach storage.
 func TestConfigCASDoesNotDowngradeUnsupportedOrReadOnlyStores(t *testing.T) {
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "false")
 	store := nonAtomicConfigStore{}
 	_, _, err := LoadConfigForUpdate(t.Context(), store)
-	require.ErrorIs(t, err, service.ErrAtomicSettingUnavailable)
-	require.ErrorIs(t, SaveConfigIfUnchanged(t.Context(), store, DefaultCryptoConfig(), nil), service.ErrAtomicSettingUnavailable)
+	require.ErrorIs(t, err, errAtomicSettingUnavailable)
+	require.ErrorIs(t, SaveConfigIfUnchanged(t.Context(), store, DefaultCryptoConfig(), nil), errAtomicSettingUnavailable)
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "true")
 	t.Setenv("CRYPTO_ADMIN_TEST_WRITE_ENABLED", "false")
 	require.ErrorIs(t, SaveConfigIfUnchanged(t.Context(), store, DefaultCryptoConfig(), nil), mode.ErrReadOnly)
-	_, err = NewServiceSettingStore(nil).CompareAndSwapCryptoSetting(t.Context(), SettingKeyCryptoConfig, nil, "{}")
+	_, err = NewServiceSettingStore(nil, nil).CompareAndSwapCryptoSetting(t.Context(), SettingKeyCryptoConfig, nil, "{}")
 	require.ErrorIs(t, err, mode.ErrReadOnly)
 }
 

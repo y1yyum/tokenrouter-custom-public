@@ -7,17 +7,27 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/ledger"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/TokenFlux/TokenRouter/internal/settings"
 )
 
-// Nil dependencies make any accidental shared-database access observable.
-// This includes replay of already-signed sweeps, which needs no unlocked key.
+// readOnlyConfigRepository supplies stored JSON for read-only configuration tests.
+type readOnlyConfigRepository struct {
+	// The nil embedded repository makes unsupported operations fail immediately,
+	// including an unexpected write during a read-only startup or status check.
+	settings.Repository
+	raw string // stored configuration JSON
+}
+
+// TestAdminTestModeRejectsWritesBeforeAccessingSharedDatabase exercises writes
+// with nil dependencies to expose accidental storage access. The gate also
+// rejects replay of already-signed sweeps, which needs no unlocked key.
 func TestAdminTestModeRejectsWritesBeforeAccessingSharedDatabase(t *testing.T) {
 	for _, value := range []string{"true", "1", "malformed"} {
 		t.Run(value, func(t *testing.T) {
@@ -38,10 +48,12 @@ func TestAdminTestModeRejectsWritesBeforeAccessingSharedDatabase(t *testing.T) {
 				"pool maintenance":    func() error { return a.EnsurePool(t.Context()) },
 				"address status":      func() error { return a.SetStatus(t.Context(), 1, "disabled") },
 				"config save":         func() error { return SaveConfig(t.Context(), nil, CryptoConfig{}) },
-				"setting write":       func() error { return NewServiceSettingStore(nil).SetCryptoSetting(t.Context(), "crypto.config", "{}") },
-				"ledger credit":       func() error { _, err := l.Process(t.Context(), scanner.Transfer{}, 6); return err },
-				"ledger pending":      func() error { return l.ProcessPending(t.Context(), scanner.Transfer{}, 6) },
-				"fulfillment":         func() error { return c.CreditDeposit(t.Context(), ledger.CreditRequest{}) },
+				"setting write": func() error {
+					return NewServiceSettingStore(nil, nil).SetCryptoSetting(t.Context(), "crypto.config", "{}")
+				},
+				"ledger credit":  func() error { _, err := l.Process(t.Context(), scanner.Transfer{}, 6); return err },
+				"ledger pending": func() error { return l.ProcessPending(t.Context(), scanner.Transfer{}, 6) },
+				"fulfillment":    func() error { return c.CreditDeposit(t.Context(), ledger.CreditRequest{}) },
 			}
 			for name, call := range checks {
 				t.Run(name, func(t *testing.T) {
@@ -54,15 +66,21 @@ func TestAdminTestModeRejectsWritesBeforeAccessingSharedDatabase(t *testing.T) {
 	}
 }
 
-type readOnlyConfigRepository struct {
-	service.SettingRepository // every unexpected call, including writes, fails
-	raw                       string
+// newConfigTestStore binds the production crypto settings adapter to a fixture
+// repository. Reads and ordinary writes exercise the host store. Tests of
+// conditional SQL writes need a database passed to NewServiceSettingStore.
+func newConfigTestStore(repo settings.Repository) *ServiceSettingStore {
+	return NewServiceSettingStore(settings.New(repo), nil)
 }
 
+// GetValue returns the raw settings snapshot shared by read-only fixtures.
 func (r readOnlyConfigRepository) GetValue(context.Context, string) (string, error) {
 	return r.raw, nil
 }
 
+// TestAdminTestModeStartupWithSharedEnabledConfigDoesNotStartWorkers loads an
+// enabled shared configuration into a read-only instance. Maintenance and wallet
+// signing must stay inactive, and manual sweeps must return the read-only error.
 func TestAdminTestModeStartupWithSharedEnabledConfigDoesNotStartWorkers(t *testing.T) {
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "true")
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "true")
@@ -79,8 +97,8 @@ func TestAdminTestModeStartupWithSharedEnabledConfigDoesNotStartWorkers(t *testi
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := service.NewSettingService(readOnlyConfigRepository{raw: string(raw)}, nil)
-	s := NewService(db, settings, nil, NewAddressService(db, settings), nil)
+	settings := newConfigTestStore(readOnlyConfigRepository{raw: string(raw)})
+	s := NewService(db, settings, nil, NewAddressService(db), nil)
 	s.Reload(t.Context())
 	if s.maintCancel != nil || cryptoWorkersAllowed() {
 		t.Fatal("shared enabled config started maintenance")
@@ -98,6 +116,9 @@ func TestAdminTestModeStartupWithSharedEnabledConfigDoesNotStartWorkers(t *testi
 	}
 }
 
+// TestWritableReviewWithoutPersistentKeyFailsClosedAndNeverStartsSharedWorkers
+// starts a write-enabled review instance without an installation key. Shared
+// workers and signing must remain inactive despite the stored channel config.
 func TestWritableReviewWithoutPersistentKeyFailsClosedAndNeverStartsSharedWorkers(t *testing.T) {
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "true")
 	t.Setenv("CRYPTO_ADMIN_TEST_WRITE_ENABLED", "true")
@@ -115,8 +136,8 @@ func TestWritableReviewWithoutPersistentKeyFailsClosedAndNeverStartsSharedWorker
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := service.NewSettingService(readOnlyConfigRepository{raw: string(raw)}, nil)
-	s := NewService(db, settings, nil, NewAddressService(db, settings), nil)
+	settings := newConfigTestStore(readOnlyConfigRepository{raw: string(raw)})
+	s := NewService(db, settings, nil, NewAddressService(db), nil)
 	s.Reload(t.Context())
 	if s.maintCancel != nil || cryptoWorkersAllowed() || mode.ReadOnly() || s.executor != nil {
 		t.Fatal("review without a persistent encryption key must suspend signing without automatic workers")

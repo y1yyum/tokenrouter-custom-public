@@ -4,13 +4,22 @@ import (
 	"context"
 	"testing"
 
-	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/TokenFlux/TokenRouter/internal/settings"
 )
 
-// The setting repository interface is defined in the service package with a
-// concrete *Setting return type, so the fake above cannot satisfy it directly.
-// Config persistence is therefore covered at the service layer; here we only
-// test the pure normalization logic.
+var _ SettingStore = (*recordingSettingStore)(nil)
+
+// recordingSettingStore serves one stored raw config and records writes, so a
+// read path that silently normalizes/backfills the row can be detected.
+type recordingSettingStore struct {
+	raw     string
+	missing bool
+	writes  int
+	lastSet string
+}
+
+// TestNormalizeConfigDefaults passes an empty configuration through normalization.
+// The result must contain the default values needed by a newly configured channel.
 func TestNormalizeConfigDefaults(t *testing.T) {
 	cfg, err := NormalizeConfig(CryptoConfig{})
 	if err != nil {
@@ -137,8 +146,10 @@ func TestIsEVMChain(t *testing.T) {
 
 func TestNormalizeConfigSupportsAllRequestedNetworks(t *testing.T) {
 	chains := []string{ChainEthereum, ChainPolygon, ChainPlasma, ChainBase, ChainXLayer, ChainEthereum}
-	cfg, err := NormalizeConfig(CryptoConfig{Enabled: true, Chains: chains,
-		Confirmations: map[string]int{}, ScanRange: map[string]int{}, GasTopUp: map[string]float64{}, SweepMinPerAddress: map[string]float64{}})
+	cfg, err := NormalizeConfig(CryptoConfig{
+		Enabled: true, Chains: chains,
+		Confirmations: map[string]int{}, ScanRange: map[string]int{}, GasTopUp: map[string]float64{}, SweepMinPerAddress: map[string]float64{},
+	})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -273,18 +284,10 @@ func TestConfigPatchAppliesNativePriceURL(t *testing.T) {
 	}
 }
 
-// recordingSettingStore serves one stored raw config and records writes, so a
-// read path that silently normalizes/backfills the row can be detected.
-type recordingSettingStore struct {
-	raw     string
-	missing bool
-	writes  int
-	lastSet string
-}
-
+// GetCryptoSetting returns the fixture text or the host's missing-key error.
 func (s *recordingSettingStore) GetCryptoSetting(context.Context, string) (string, error) {
 	if s.missing {
-		return "", service.ErrSettingNotFound
+		return "", settings.ErrSettingNotFound
 	}
 	return s.raw, nil
 }
@@ -355,5 +358,3 @@ func TestLoadConfigMissingKeyYieldsDefaultsWithoutWrite(t *testing.T) {
 		t.Fatalf("first-run load persisted defaults (%d writes)", store.writes)
 	}
 }
-
-var _ SettingStore = (*recordingSettingStore)(nil)

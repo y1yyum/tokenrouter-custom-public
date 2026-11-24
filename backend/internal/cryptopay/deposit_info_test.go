@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/nativeprice"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/TokenFlux/TokenRouter/internal/service"
-	"github.com/stretchr/testify/require"
 )
 
 func depositInfoConfig() CryptoConfig {
@@ -147,6 +147,8 @@ func TestDepositInfoJSONHasNoRateForNativeCoin(t *testing.T) {
 	require.True(t, seenNative && seenStable)
 }
 
+// TestNativePriceReferenceUsesOneSnapshotDuringReload changes feeds while a quote
+// is in flight. Every native asset in the same response must use the original feed.
 func TestNativePriceReferenceUsesOneSnapshotDuringReload(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -171,7 +173,7 @@ func TestNativePriceReferenceUsesOneSnapshotDuringReload(t *testing.T) {
 	cfg := depositInfoConfig()
 	cfg.NativePriceURL = oldFeed.URL
 	repo.set(t, cfg)
-	s := &Service{settings: service.NewSettingService(repo, nil), wallet: wallet.New(nil)}
+	s := &Service{settings: newConfigTestStore(repo), wallet: wallet.New(nil)}
 	t.Cleanup(s.Close)
 	s.Reload(t.Context())
 	info := buildDepositInfo(cfg, depositInfoAssigned())
@@ -205,6 +207,9 @@ func TestNativePriceReferenceUsesOneSnapshotDuringReload(t *testing.T) {
 	}
 }
 
+// TestNativePriceReferenceConcurrentReload overlaps repeated quote reads with
+// configuration reloads. The concurrent callers exercise the shared provider
+// snapshot so race detection can catch unsynchronized access.
 func TestNativePriceReferenceConcurrentReload(t *testing.T) {
 	t.Setenv("CRYPTO_INSTANCE_ENABLED", "false")
 	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "")
@@ -219,7 +224,7 @@ func TestNativePriceReferenceConcurrentReload(t *testing.T) {
 	cfg := depositInfoConfig()
 	cfg.NativePriceURL = feed.URL
 	repo.set(t, cfg)
-	s := &Service{settings: service.NewSettingService(repo, nil), wallet: wallet.New(nil)}
+	s := &Service{settings: newConfigTestStore(repo), wallet: wallet.New(nil)}
 	t.Cleanup(s.Close)
 	s.Reload(t.Context())
 	var wg sync.WaitGroup

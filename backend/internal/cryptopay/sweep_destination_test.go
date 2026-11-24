@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/settings"
 )
 
 const (
@@ -28,9 +29,10 @@ type sweepDestinationStore struct {
 	failNext bool
 }
 
+// GetCryptoSetting returns the saved text or the host's missing-key error.
 func (s *sweepDestinationStore) GetCryptoSetting(context.Context, string) (string, error) {
 	if s.value == nil {
-		return "", service.ErrSettingNotFound
+		return "", settings.ErrSettingNotFound
 	}
 	return *s.value, nil
 }
@@ -41,9 +43,12 @@ func (s *sweepDestinationStore) SetCryptoSetting(_ context.Context, _ string, va
 	return nil
 }
 
+// GetCryptoSettingUncached returns the raw text used as the conditional write's
+// expectation. An absent fixture row returns the host's missing-key error so
+// the caller can prepare an insert.
 func (s *sweepDestinationStore) GetCryptoSettingUncached(context.Context, string) (string, error) {
 	if s.value == nil {
-		return "", service.ErrSettingNotFound
+		return "", settings.ErrSettingNotFound
 	}
 	return *s.value, nil
 }

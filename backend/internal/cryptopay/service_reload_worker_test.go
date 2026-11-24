@@ -10,14 +10,17 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+	"github.com/stretchr/testify/require"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/ledger"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/TokenFlux/TokenRouter/internal/service"
-	"github.com/stretchr/testify/require"
 )
 
+// TestReloadStopsWorkerOutsideConfigLock makes the old worker read configuration
+// during cancellation. Reload must allow that read to finish before publishing
+// the new config, and any replacement worker must be able to scan.
 func TestReloadStopsWorkerOutsideConfigLock(t *testing.T) {
 	for _, tc := range []struct {
 		name, instance string
@@ -64,14 +67,16 @@ func TestReloadStopsWorkerOutsideConfigLock(t *testing.T) {
 			cfg.HotWalletEVM = "0x2222222222222222222222222222222222222222"
 			repo := &reloadConfigRepository{}
 			repo.set(t, cfg)
-			settings := service.NewSettingService(repo, nil)
+			settings := newConfigTestStore(repo)
 			oldConfig := cfg
 			oldConfig.Enabled = true
 			oldConfig.HotWalletEVM = "0x1111111111111111111111111111111111111111"
-			s := &Service{db: db, settings: settings, config: oldConfig, wallet: wallet.New(nil),
-				addresses: NewAddressService(db, settings), pools: map[string]*rpc.Pool{
+			s := &Service{
+				db: db, settings: settings, config: oldConfig, wallet: wallet.New(nil),
+				addresses: NewAddressService(db), pools: map[string]*rpc.Pool{
 					ChainBSC: rpc.NewPoolWithHTTPClient(node.URL, node.Client()),
-				}}
+				},
+			}
 			chain, ok := chainScanConfig(ChainBSC, 3, 2000, 0)
 			require.True(t, ok)
 			chain.NativeSource = NativeScanTxList

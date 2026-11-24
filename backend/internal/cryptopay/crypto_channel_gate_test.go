@@ -6,10 +6,13 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
+// newChannelGateService supplies an enabled configuration and a wallet backed by
+// sqlmock. The caller selects the instance role before reloading and can check
+// whether any database operations occurred.
 func newChannelGateService(t *testing.T) (*Service, sqlmock.Sqlmock) {
 	t.Helper()
 	db, mock, err := sqlmock.New()
@@ -24,12 +27,12 @@ func newChannelGateService(t *testing.T) (*Service, sqlmock.Sqlmock) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	settings := service.NewSettingService(readOnlyConfigRepository{raw: string(raw)}, nil)
+	settings := newConfigTestStore(readOnlyConfigRepository{raw: string(raw)})
 	return &Service{
 		db:        db,
 		settings:  settings,
 		wallet:    wallet.New(db, strings.Repeat("ab", 32)),
-		addresses: NewAddressService(db, settings),
+		addresses: NewAddressService(db),
 	}, mock
 }
 

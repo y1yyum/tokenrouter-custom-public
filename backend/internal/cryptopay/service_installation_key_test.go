@@ -5,10 +5,13 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/config"
-	"github.com/TokenFlux/TokenRouter/internal/service"
 )
 
+// TestWalletUsesPersistentInstallationKeyWithoutDedicatedPaymentKey gives the
+// service identical key material under both host configuration states. Wallet
+// encryption must be available only when the host marks the key as persistent.
 func TestWalletUsesPersistentInstallationKeyWithoutDedicatedPaymentKey(t *testing.T) {
 	t.Setenv("SUB2API_DISABLE_BACKGROUND_JOBS", "true")
 	for _, persistent := range []bool{false, true} {
@@ -18,9 +21,9 @@ func TestWalletUsesPersistentInstallationKeyWithoutDedicatedPaymentKey(t *testin
 				t.Fatal(err)
 			}
 			defer func() { _ = db.Close() }()
-			settings := service.NewSettingService(readOnlyConfigRepository{raw: "{}"}, nil)
-			appConfig := &config.Config{Totp: config.TotpConfig{
-				EncryptionKey: strings.Repeat("ab", 32), EncryptionKeyPersistent: persistent,
+			settings := newConfigTestStore(readOnlyConfigRepository{raw: "{}"})
+			appConfig := &config.Config{Security: config.SecurityConfig{
+				SecretEncryptionKey: strings.Repeat("ab", 32), SecretEncryptionKeyConfigured: persistent,
 			}}
 			s := NewService(db, settings, nil, nil, appConfig)
 			mock.ExpectQuery("SELECT value FROM settings").WithArgs("crypto.signer.vault").
