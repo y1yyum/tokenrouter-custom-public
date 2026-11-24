@@ -502,6 +502,9 @@ func TestUpgradeV2WeChatLegacyModes(t *testing.T) {
 func TestUpgradeV2CurrentKeysHaveSources(t *testing.T) {
 	sources := map[string]bool{
 		"config_version":                             true,
+		"security.key_rotation_cutoff":               true,
+		"security.key_rotation_risk_ack_enabled":     true,
+		"security.key_rotation_risk_ack_hours":       true,
 		"usage.export_tasks.enabled":                 true,
 		"gateway.openai.plan_model_restrictions":     true,
 		"usage.export_tasks.dir":                     true,
