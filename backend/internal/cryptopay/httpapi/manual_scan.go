@@ -1,0 +1,71 @@
+package httpapi
+
+import (
+	"context"
+	"errors"
+	"log/slog"
+	"net/http"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
+	"github.com/TokenFlux/TokenRouter/internal/server/httpx"
+)
+
+// manual_scan.go starts routine catch-up scans and explicitly authorized
+// historical scans. A historical start changes the blocks considered by the
+// payment service and therefore requires payment verification. The handler
+// preserves the blocking response and the console's opt-in asynchronous response.
+
+// AdminRunScan starts a cursor-forward scan or a historical backfill. A
+// cursor-forward retry uses the authenticated operator session. A requested
+// historical start additionally requires payment verification.
+func (h *CryptoHandler) AdminRunScan(c *gin.Context) {
+	cryptoVaultHeaders(c)
+	var request struct {
+		FromBlock uint64 `json:"from_block"`
+	}
+	if !decodeCryptoRequest(c, &request, 4<<10, "Invalid scan request") {
+		return
+	}
+	// Cursor-forward catch-up is the routine idempotent path. Rewinding to an
+	// operator-selected historical block has a wider credit surface, so keep a
+	// fresh second factor for that exceptional backfill.
+	if request.FromBlock != 0 && !h.requireCryptoRisk(c) {
+		return
+	}
+	if h.service == nil {
+		httpx.Error(c, http.StatusServiceUnavailable, "Payment scanner unavailable")
+		return
+	}
+	chains := parseChainScope(c.QueryArray("chain"))
+	if _, specified := c.Request.URL.Query()["chain"]; specified && len(chains) == 0 {
+		httpx.BadRequest(c, cryptopay.ErrInvalidScanChain.Error())
+		return
+	}
+	// ?async=1 runs repeated passes in the background and returns 202 with a
+	// run to poll. Without it the request stays synchronous: one pass, bound to
+	// this request, exactly as older pages expect.
+	if c.Query("async") == "1" {
+		h.startAsyncScan(c, request.FromBlock, chains)
+		return
+	}
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 15*time.Minute)
+	defer cancel()
+	if err := h.service.RunScan(ctx, request.FromBlock, chains...); err != nil {
+		if errors.Is(err, cryptopay.ErrInvalidScanChain) {
+			httpx.BadRequest(c, cryptopay.ErrInvalidScanChain.Error())
+			return
+		}
+		if errors.Is(err, cryptopay.ErrScanBusy) {
+			httpx.Error(c, http.StatusConflict, "Another payment operation is running; retry later")
+			return
+		}
+		slog.WarnContext(ctx, "[cryptopay] manual scan failed", "error", rpc.SanitizeNodeMessage(err.Error()))
+		httpx.Error(c, http.StatusServiceUnavailable, "Payment scan did not complete; check deposit records before retrying")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"completed": true}})
+}
