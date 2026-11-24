@@ -551,6 +551,7 @@ export default {
       creationUnconfirmed: '订单创建结果正在核实，请勿重复下单。可稍后在订单记录中查看进度。',
     },
     methods: {
+      crypto: '链上充值',
       epusdt: '加密货币',
       easypay: '易支付',
       alipay: '支付宝',

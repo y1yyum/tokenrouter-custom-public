@@ -3,6 +3,8 @@
 // phrases support summary cards, while the other namespaces provide account
 // actions, validation messages, and list controls used throughout user pages.
 
+import cryptoAccount from './cryptoAccount'
+
 export default {
   dashboard: {
     title: '仪表盘',
@@ -782,6 +784,7 @@ export default {
   },
   // Profile
   profile: {
+    bark: cryptoAccount.bark,
     title: '个人设置',
     description: '管理您的账户信息和设置',
     accountBalance: '账户余额',
@@ -843,6 +846,7 @@ export default {
       disableWarning: '禁用后，登录时将不再需要验证码。这可能会降低您的账户安全性。',
       enterPassword: '请输入当前密码确认',
       confirmDisable: '确认禁用',
+      disablePaymentCodeHint: '请输入验证器刚生成的六位验证码，以关闭这项支付验证。',
       disableSuccess: '双因素认证已禁用',
       disableFailed: '禁用失败，请检查密码是否正确',
       loginTitle: '双因素认证',

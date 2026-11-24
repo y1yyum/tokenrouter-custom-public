@@ -68,9 +68,14 @@ export async function enable(request: TotpEnableRequest): Promise<TotpEnableResp
 export async function disable(request: TotpDisableRequest): Promise<{
   success: boolean // Operation success flag.
 }> {
+  // The server consumes an operator's code during this request. Do not replay
+  // it across a session refresh. The ordinary identity-proof flow is unchanged.
+  const options = request.totp_code
+    ? { headers: { 'Cache-Control': 'no-store' }, _retry: true }
+    : undefined
   const { data } = await apiClient.post<{
     success: boolean // Operation success flag.
-  }>('/user/totp/disable', request)
+  }>('/user/totp/disable', request, options)
   return data
 }
 

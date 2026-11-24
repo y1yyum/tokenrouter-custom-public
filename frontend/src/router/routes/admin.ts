@@ -4,6 +4,9 @@ import type { RouteRecordRaw } from 'vue-router'
 // Route metadata supplies titles and access flags to the shared guards and
 // layouts; records retain their declaration order when assembled by the router.
 
+// All crypto console panels share the same view and route-driven section state.
+const cryptoView = () => import('@/views/admin/CryptoView.vue')
+
 // adminRoutes supplies the ordered records for this navigation area to the application router.
 export const adminRoutes: RouteRecordRaw[] = [
   {
@@ -255,6 +258,87 @@ export const adminRoutes: RouteRecordRaw[] = [
       title: 'Promo Code Management',
       titleKey: 'admin.promo.title',
       descriptionKey: 'admin.promo.description',
+    },
+  },
+  {
+    path: '/admin/crypto',
+    name: 'AdminCrypto',
+    component: cryptoView,
+    beforeEnter(to) {
+      // Older links select the console panel by query parameter.
+      const names = new Map([
+        ['addresses', 'AdminCryptoAddresses'],
+        ['sweep', 'AdminCryptoSweeps'],
+        ['sweeps', 'AdminCryptoSweeps'],
+        ['deposits', 'AdminCryptoDeposits'],
+        ['chains', 'AdminCryptoChains'],
+        ['config', 'AdminCryptoSettings'],
+        ['settings', 'AdminCryptoSettings'],
+      ])
+      const { tab, ...query } = to.query
+      const name = typeof tab === 'string' ? names.get(tab) : undefined
+      if (name) return { name, query, hash: to.hash }
+    },
+    meta: {
+      requiresAdmin: true,
+      titleKey: 'admin.crypto.title',
+      descriptionKey: 'admin.crypto.description',
+      section: 'overview',
+    },
+  },
+  {
+    path: '/admin/crypto/addresses',
+    name: 'AdminCryptoAddresses',
+    component: cryptoView,
+    meta: {
+      requiresAdmin: true,
+      titleKey: 'admin.crypto.title',
+      descriptionKey: 'admin.crypto.description',
+      section: 'addresses',
+    },
+  },
+  {
+    path: '/admin/crypto/sweeps',
+    name: 'AdminCryptoSweeps',
+    component: cryptoView,
+    meta: {
+      requiresAdmin: true,
+      titleKey: 'admin.crypto.title',
+      descriptionKey: 'admin.crypto.description',
+      section: 'sweep',
+    },
+  },
+  {
+    path: '/admin/crypto/deposits',
+    name: 'AdminCryptoDeposits',
+    component: cryptoView,
+    meta: {
+      requiresAdmin: true,
+      titleKey: 'admin.crypto.title',
+      descriptionKey: 'admin.crypto.description',
+      section: 'deposits',
+    },
+  },
+  {
+    path: '/admin/crypto/chains',
+    name: 'AdminCryptoChains',
+    component: cryptoView,
+    meta: {
+      requiresAdmin: true,
+      titleKey: 'admin.crypto.title',
+      descriptionKey: 'admin.crypto.description',
+      section: 'chains',
+    },
+  },
+  {
+    path: '/admin/crypto/settings',
+    name: 'AdminCryptoSettings',
+    component: cryptoView,
+    meta: {
+      requiresAdmin: true,
+      titleKey: 'admin.crypto.title',
+      descriptionKey: 'admin.crypto.description',
+      section: 'config',
     },
   },
   {

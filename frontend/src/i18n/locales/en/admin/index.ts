@@ -8,6 +8,7 @@ import ops from './ops'
 import settings from './settings'
 import audit from './audit'
 import plugins from './plugins'
+import crypto from './crypto'
 
 // index.ts assembles the English administrator catalog and defines protocol-
 // control messages. Imported domain dictionaries contribute their top-level
@@ -78,4 +79,5 @@ export default {
   ...settings,
   ...audit,
   ...mcp,
+  ...crypto,
 }

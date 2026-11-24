@@ -278,19 +278,25 @@ export async function getCurrentUser() {
 }
 
 /**
- * logout attempts to revoke the stored refresh token before clearing local
- * authentication values. Revocation errors are ignored so local logout can still
- * complete; localStorage access errors continue to propagate.
+ * logout sends the bearer session and optional refresh token to the server
+ * before clearing browser credentials. Local logout still completes when
+ * server-side revocation fails.
  */
 export async function logout(): Promise<void> {
   const refreshToken = getRefreshToken()
 
-  // Try to revoke the refresh token on the server
-  if (refreshToken) {
+  if (getAuthToken() || refreshToken) {
+    // The client attaches the access token while it remains in storage.
+    // Logout must never refresh a session as part of the revocation request.
+    const request = { headers: { 'Cache-Control': 'no-store' }, _retry: true }
     try {
-      await apiClient.post('/auth/logout', { refresh_token: refreshToken })
+      await apiClient.post(
+        '/auth/logout',
+        refreshToken ? { refresh_token: refreshToken } : {},
+        request,
+      )
     } catch {
-      // A failed server revocation should still allow this browser to log out, so continue to clear local session values.
+      // Local cleanup still signs the browser out after a server failure.
     }
   }
 

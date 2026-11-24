@@ -174,6 +174,8 @@ export default {
   },
   // Navigation
   nav: {
+    cryptoDeposit: 'Crypto deposit',
+    cryptoDeposits: 'Crypto deposit management',
     dashboard: 'Dashboard',
     modelMarketplace: 'Models',
     usageRanking: 'Usage Ranking',

@@ -19,8 +19,27 @@
     <ContentSkeleton v-if="methodLoading" variant="form" :rows="2" class="py-4" />
 
     <form v-else @submit.prevent="handleDisable" class="space-y-4">
+      <div v-if="requiresPaymentCode">
+        <label for="disable-totp-code" class="input-label">{{ t('profile.totp.enterCode') }}</label>
+        <input
+          id="disable-totp-code"
+          :value="paymentCode"
+          type="text"
+          inputmode="numeric"
+          autocomplete="one-time-code"
+          maxlength="6"
+          class="input"
+          :disabled="loading"
+          aria-describedby="disable-totp-code-hint"
+          @input="updatePaymentCode"
+        />
+        <p id="disable-totp-code-hint" class="mt-1 text-xs text-gray-500 dark:text-dark-300">
+          {{ t('profile.totp.disablePaymentCodeHint') }}
+        </p>
+      </div>
+
       <!-- Email verification -->
-      <div v-if="verificationMethod === 'email'">
+      <div v-else-if="verificationMethod === 'email'">
         <label class="input-label">{{ t('profile.totp.emailCode') }}</label>
         <div class="flex gap-2">
           <input
@@ -84,6 +103,11 @@ import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { totpAPI } from '@/api'
+import { getCryptoSecurityStatus } from '@/api/admin/crypto'
+import { clearCryptoGrant } from '@/composables/cryptoGrant'
+import { useAuthStore } from '@/stores/auth'
+import { extractApiErrorCode, extractApiErrorMessage } from '@/utils/apiError'
+import { normalizeOtpDigits } from '@/utils/otp'
 
 // TotpDisableDialog.vue disables account TOTP after the server-selected identity
 // verification step. It submits either an email code or a password, reports completion to
@@ -106,6 +130,18 @@ const emit = defineEmits<{
 // results for this dialog instance.
 const { t } = useI18n()
 const appStore = useAppStore()
+const authStore = useAuthStore()
+
+// A successful operator-status read is available only to the payment allowlist.
+const requiresPaymentCode = ref(false)
+const paymentCode = ref('')
+
+// Normalize full-width and pasted digits before sending the current TOTP value.
+function updatePaymentCode(event: Event) {
+  const input = event.currentTarget as HTMLInputElement
+  paymentCode.value = normalizeOtpDigits(input.value).slice(0, 6)
+  input.value = paymentCode.value
+}
 
 // Verification-method state gates the initial form; loading and sendingCode track requests,
 // while codeCooldown and cooldownTimer retain resend feedback and the currently registered
@@ -126,6 +162,7 @@ const form = ref({
 // canSubmit requires six email-code characters or a nonempty password according to the
 // server-selected verification method.
 const canSubmit = computed(() => {
+  if (requiresPaymentCode.value) return /^[0-9]{6}$/.test(paymentCode.value)
   if (verificationMethod.value === 'email') {
     return form.value.emailCode.length === 6
   }
@@ -138,8 +175,16 @@ const canSubmit = computed(() => {
 const loadVerificationMethod = async () => {
   methodLoading.value = true
   try {
-    const method = await totpAPI.getVerificationMethod()
+    const [method, paymentOperator] = await Promise.all([
+      totpAPI.getVerificationMethod(),
+      authStore.isAdmin
+        ? getCryptoSecurityStatus()
+            .then((status) => typeof status?.enabled === 'boolean')
+            .catch(() => false)
+        : false,
+    ])
     verificationMethod.value = method.method
+    requiresPaymentCode.value = paymentOperator
   } catch (err: any) {
     appStore.showError(err.response?.data?.message || t('common.error'))
     emit('close')
@@ -180,26 +225,38 @@ const handleSendCode = async () => {
   }
 }
 
-// handleDisable submits the identity proof selected by the server and disables TOTP. Invalid
-// local input is ignored, success notifies the parent, and API failure leaves the dialog
-// open for correction.
+// handleDisable sends the selected proof directly to the disable operation.
+// A payment-code challenge can arrive after the initial operator-status read.
 const handleDisable = async () => {
-  if (!canSubmit.value) return
+  if (loading.value || !canSubmit.value) return
 
   loading.value = true
 
   try {
-    const request =
-      verificationMethod.value === 'email'
+    const request = requiresPaymentCode.value
+      ? { totp_code: paymentCode.value }
+      : verificationMethod.value === 'email'
         ? { email_code: form.value.emailCode }
         : { password: form.value.password }
 
     await totpAPI.disable(request)
+    if (requiresPaymentCode.value) clearCryptoGrant()
     appStore.showSuccess(t('profile.totp.disableSuccess'))
     emit('success')
-  } catch (err: any) {
-    appStore.showError(err.response?.data?.message || t('profile.totp.disableFailed'))
+  } catch (error: unknown) {
+    if (
+      !requiresPaymentCode.value &&
+      (error as { status?: number } | null)?.status === 403 &&
+      extractApiErrorCode(error) === 'CRYPTO_TOTP_REQUIRED'
+    ) {
+      requiresPaymentCode.value = true
+      form.value.emailCode = ''
+      form.value.password = ''
+      return
+    }
+    appStore.showError(extractApiErrorMessage(error, t('profile.totp.disableFailed')))
   } finally {
+    paymentCode.value = ''
     loading.value = false
   }
 }

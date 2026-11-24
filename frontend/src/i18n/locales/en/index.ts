@@ -7,6 +7,8 @@ import misc from './misc'
 import team from './team'
 import requests from './requests'
 import plugins from './plugins'
+import deposit from './deposit'
+import cryptoAccount from './cryptoAccount'
 
 // index.ts assembles the English interface catalog from domain dictionaries and
 // shared legal and localization messages. Named request and administrator
@@ -96,4 +98,6 @@ export default {
   admin,
   ...misc,
   ...team,
+  ...deposit,
+  keyRotationGate: cryptoAccount.keyRotationGate,
 }

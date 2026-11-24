@@ -76,7 +76,7 @@
                 {{ t('payment.orders.invoice') }}
               </button>
               <button
-                v-if="row.status === 'PENDING'"
+                v-if="!isCryptoOrder(row) && row.status === 'PENDING'"
                 @click="handleCancelOrder(row)"
                 class="inline-flex items-center gap-1 rounded-compact px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20"
               >
@@ -84,7 +84,7 @@
                 {{ t('payment.orders.cancel') }}
               </button>
               <button
-                v-if="row.status === 'PENDING'"
+                v-if="!isCryptoOrder(row) && row.status === 'PENDING'"
                 @click="openForceExpireDialog(row)"
                 class="inline-flex items-center gap-1 rounded-compact px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
               >
@@ -92,14 +92,14 @@
                 {{ t('payment.admin.forceExpire') }}
               </button>
               <button
-                v-if="row.status === 'FAILED'"
+                v-if="!isCryptoOrder(row) && row.status === 'FAILED'"
                 @click="handleRetryOrder(row)"
                 class="inline-flex items-center gap-1 rounded-compact px-2 py-1 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-500 dark:hover:bg-primary-500/8"
               >
                 <Icon name="refresh" size="sm" />
                 {{ t('payment.admin.retry') }}
               </button>
-              <template v-if="row.status === 'REFUND_REQUESTED'">
+              <template v-if="!isCryptoOrder(row) && row.status === 'REFUND_REQUESTED'">
                 <span
                   v-if="row.refund_amount"
                   class="rounded-full bg-purple-100 px-1.5 py-0.5 text-xs font-medium text-purple-700 dark:bg-purple-900/30 dark:text-purple-300"
@@ -114,7 +114,7 @@
                 </button>
               </template>
               <button
-                v-else-if="row.status === 'REFUND_FAILED'"
+                v-else-if="!isCryptoOrder(row) && row.status === 'REFUND_FAILED'"
                 @click="openRefundDialog(row)"
                 class="inline-flex items-center gap-1 rounded-compact px-2 py-1 text-xs font-medium text-purple-600 hover:bg-purple-50 dark:text-purple-400 dark:hover:bg-purple-900/20"
               >
@@ -122,7 +122,10 @@
                 {{ t('payment.admin.retryRefund') }}
               </button>
               <button
-                v-else-if="row.status === 'REFUND_PENDING' || row.status === 'REFUNDING'"
+                v-else-if="
+                  !isCryptoOrder(row) &&
+                  (row.status === 'REFUND_PENDING' || row.status === 'REFUNDING')
+                "
                 :disabled="refundQueryingIds.has(row.id)"
                 @click="handleQueryRefund(row)"
                 class="inline-flex items-center gap-1 rounded-compact px-2 py-1 text-xs font-medium text-orange-600 hover:bg-orange-50 disabled:opacity-60 dark:text-orange-400 dark:hover:bg-orange-900/20"
@@ -135,7 +138,7 @@
                 {{ t('payment.admin.queryRefundStatus') }}
               </button>
               <button
-                v-else-if="row.status === 'COMPLETED'"
+                v-else-if="!isCryptoOrder(row) && row.status === 'COMPLETED'"
                 @click="openRefundDialog(row)"
                 class="inline-flex items-center gap-1 rounded-compact px-2 py-1 text-xs font-medium text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
               >
@@ -711,6 +714,7 @@ const paymentTypeFilterOptions = computed(() => [
   { value: 'wxpay', label: t('payment.methods.wxpay') },
   { value: 'stripe', label: t('payment.methods.stripe') },
   { value: 'airwallex', label: t('payment.methods.airwallex') },
+  { value: 'crypto', label: t('payment.methods.crypto') },
 ])
 
 // orderTypeFilterOptions offers balance and subscription purchase filters with an empty
@@ -844,6 +848,11 @@ async function openInvoice(order: PaymentOrder) {
   } catch (err: unknown) {
     appStore.showError(extractI18nErrorMessage(err, t, 'payment.errors', t('common.error')))
   }
+}
+
+// isCryptoOrder matches on-chain orders advertised by the payment listing.
+function isCryptoOrder(order: PaymentOrder): boolean {
+  return order.payment_type.trim().toLowerCase() === 'crypto'
 }
 
 // openRefundDialog selects an order and opens its refund editor with cleared warning

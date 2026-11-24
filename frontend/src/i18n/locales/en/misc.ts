@@ -566,6 +566,7 @@ export default {
         'Order creation is being checked. Please do not submit another order; check your order history for updates.',
     },
     methods: {
+      crypto: 'On-chain deposit',
       epusdt: 'Cryptocurrency',
       easypay: 'EasyPay',
       alipay: 'Alipay',

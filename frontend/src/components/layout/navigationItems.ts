@@ -123,6 +123,9 @@ export function useNavigationItems(): NavigationItems {
             },
           ]
         : []),
+      ...(appStore.cachedPublicSettings?.crypto_enabled === true
+        ? [{ path: '/deposit', label: t('nav.cryptoDeposit'), icon: 'recharge' as const }]
+        : []),
       { path: '/redeem', label: t('nav.redeem'), icon: 'gift' as const },
       ...(appStore.cachedPublicSettings?.affiliate_enabled === true
         ? [
@@ -274,6 +277,7 @@ export function useNavigationItems(): NavigationItems {
             },
           ]
         : []),
+      { path: '/admin/crypto', label: t('nav.cryptoDeposits'), icon: 'recharge' as const },
       { path: '/admin/usage', label: t('nav.usage'), icon: 'chart' as const },
       { path: '/admin/requests', label: t('requests.title'), icon: 'search' as const },
       { path: '/admin/audit-logs', label: t('nav.auditLogs'), icon: 'shieldCheck' as const },

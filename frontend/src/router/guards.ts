@@ -148,6 +148,7 @@ export function installRouteGuards(router: Router): void {
     // settings before interpreting loaded false as disabled.
     const requiresPublicFeature =
       to.meta.requiresPayment ||
+      to.meta.requiresCrypto ||
       to.meta.requiresRiskControl ||
       to.meta.requiresTeam ||
       to.meta.requiresUsageRanking ||
@@ -158,6 +159,11 @@ export function installRouteGuards(router: Router): void {
       } catch (error) {
         console.warn('Failed to load public settings in route guard', error)
       }
+    }
+    // Standalone deposits are opt-in and require positive public availability.
+    if (to.meta.requiresCrypto && appStore.cachedPublicSettings?.crypto_enabled !== true) {
+      next(authStore.isAdmin ? '/admin/dashboard' : '/dashboard')
+      return
     }
     // Unknown settings leave these feature routes accessible; redirects require a
     // successfully loaded configuration with an explicitly false feature value.

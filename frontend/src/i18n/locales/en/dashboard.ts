@@ -3,6 +3,8 @@
 // phrases support summary cards, while the other namespaces provide account
 // actions, validation messages, and list controls used throughout user pages.
 
+import cryptoAccount from './cryptoAccount'
+
 export default {
   dashboard: {
     title: 'Dashboard',
@@ -814,6 +816,7 @@ export default {
   },
   // Profile
   profile: {
+    bark: cryptoAccount.bark,
     title: 'Profile Settings',
     description: 'Manage your account information and settings',
     accountBalance: 'Account Balance',
@@ -877,6 +880,7 @@ export default {
         'After disabling, you will no longer need a verification code to log in. This may reduce your account security.',
       enterPassword: 'Enter your current password to confirm',
       confirmDisable: 'Confirm Disable',
+      disablePaymentCodeHint: 'Enter a fresh six-digit code from your authenticator app to disable payment verification.',
       disableSuccess: 'Two-factor authentication disabled',
       disableFailed: 'Failed to disable, please check your password',
       loginTitle: 'Two-Factor Authentication',

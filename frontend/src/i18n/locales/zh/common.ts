@@ -174,6 +174,8 @@ export default {
   },
   // Navigation
   nav: {
+    cryptoDeposit: '链上充值',
+    cryptoDeposits: '链上收款管理',
     dashboard: '仪表盘',
     modelMarketplace: '模型广场',
     usageRanking: '用量排行',

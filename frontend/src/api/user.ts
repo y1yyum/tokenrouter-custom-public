@@ -235,6 +235,35 @@ export async function transferAffiliateQuota(): Promise<AffiliateTransferRespons
   return data
 }
 
+// BarkSettings is the device configuration status. The server retains the key.
+export interface BarkSettings {
+  configured: boolean // A device key has been saved.
+  enabled: boolean // Notifications are enabled for the saved device.
+}
+
+// getBarkSettings reads the source endpoint's status envelope through the host client.
+export async function getBarkSettings(): Promise<BarkSettings> {
+  const { data } = await apiClient.get<BarkSettings | { data: BarkSettings }>('/user/bark')
+  return 'data' in data ? data.data : data
+}
+
+// updateBarkSettings omits an unchanged key and sends an empty key to clear it.
+// Mark the request as non-replayable across a session refresh.
+export async function updateBarkSettings(
+  deviceKey: string | undefined,
+  enabled: boolean,
+): Promise<void> {
+  const request = {
+    headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+    _retry: true,
+  }
+  await apiClient.put(
+    '/user/bark',
+    { ...(deviceKey === undefined ? {} : { device_key: deviceKey }), enabled },
+    request,
+  )
+}
+
 /**
  * userAPI groups user profiles, notification addresses and identity binding for
  * callers using the module's named or default API object.
@@ -247,6 +276,8 @@ export const userAPI = {
   verifyNotifyEmail,
   removeNotifyEmail,
   toggleNotifyEmail,
+  getBarkSettings,
+  updateBarkSettings,
   sendEmailBindingCode,
   bindEmailIdentity,
   unbindAuthIdentity,
