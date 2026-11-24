@@ -213,16 +213,25 @@ func allowsReqV3(l location) bool {
 // Rules remain conjunctive: allowing one module dependency cannot bypass a
 // storage boundary, a retired namespace, or a core implementation prohibition.
 // Standard-library restrictions separately include permitted golang.org/x imports
-// because arch-go classifies them as standard. Exact file exceptions are applied
-// only at their declared boundary and do not authorize neighboring source files.
+// because arch-go classifies them as standard. An unregistered test can extend
+// the default allowlist through its own catalog entry. The entry applies only
+// to that file, and the retired-package and assembly restrictions still apply.
 // @project-doc docs/operations/development_workflow.md#backend_dependency_rules
 func rulesFor(filename, standardLibrary string) []*dependencyRule {
 	l := locate(filename)
 	if l.role == "" {
-		return []*dependencyRule{{ShouldOnlyDependsOn: &dependencies{
+		allowed := dependencies{
 			Internal: closed(nil), External: closed(nil),
 			Standard: expressions(strings.Fields("bytes context errors fmt strings testing"), false),
-		}}}
+		}
+		rules := []*dependencyRule{{ShouldOnlyDependsOn: &allowed}}
+		if imports, ok := unregisteredTestImports[filename]; l.test && ok {
+			allowed.Internal = closed(expressions(imports.Internal, true))
+			allowed.External = closed(expressions(imports.External, false))
+			allowed.Standard = append(allowed.Standard, expressions(imports.Standard, false)...)
+			rules = append(rules, denyProject(retiredPackages), denyProject([]string{"internal/app/..."}))
+		}
+		return rules
 	}
 
 	// arch-go classifies golang.org/x as standard, so add only declared libraries instead of permitting every package under that namespace.
@@ -265,11 +274,7 @@ func rulesFor(filename, standardLibrary string) []*dependencyRule {
 		rules = append(rules, denyProject(platforms))
 	}
 
-	retired := strings.Fields("internal/service internal/repository internal/handler internal/domain internal/model internal/platform internal/routes internal/app/legacybridge")
-	for i := range retired {
-		retired[i] += "/..."
-	}
-	rules = append(rules, denyProject(retired))
+	rules = append(rules, denyProject(retiredPackages))
 	if strings.HasPrefix(filename, "internal/") && l.module != "internal/app" && filename != "internal/setup/setup.go" {
 		rules = append(rules, denyProject([]string{"internal/app/..."}))
 	}

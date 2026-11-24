@@ -4,6 +4,11 @@ package architecture
 // and narrow file permissions for architecture checks. Policy matching consumes
 // these tables so a dependency selected for reviewed instrumentation cannot
 // silently authorize neighboring files or unrelated adapters in another module.
+//
+// Test files in unregistered modules can list their own dependencies while the
+// module stays under the default restrictions. The same retirement rule applies
+// to these test imports and to imports from registered owners, so adapting a
+// fixture to the current host cannot reopen a retired package path.
 
 // pureStandard permits in-memory parsing, encoding, Unicode validation, and caller-owned
 // streams for pure packages. File and network acquisition require narrower permissions.
@@ -391,6 +396,40 @@ internal/upstream/usageprovider/... internal/upstream/usageview`, Tests: "intern
 internal/upstream/internal/googleauth internal/upstream/vertex/...`, Tests: "internal/infra/telemetry/..."},
 		"internal/upstream/zhipu": {Production: `internal/upstream/internal/usageclient internal/upstream/usagecontract internal/upstream/usageview
 internal/upstream/zhipu/...`, Tests: ""},
+	}
+
+	// retiredPackages lists the retired namespaces that remain forbidden even
+	// when a registered module or reviewed test file declares a dependency.
+	retiredPackages = []string{
+		"internal/service/...", "internal/repository/...", "internal/handler/...", "internal/domain/...",
+		"internal/model/...", "internal/platform/...", "internal/routes/...", "internal/app/legacybridge/...",
+	}
+
+	// unregisteredTestImports adds reviewed imports to individual test files
+	// whose module roles are still unregistered, pending module ownership review.
+	unregisteredTestImports = map[string]dependencies{
+		// The BSC scenario runs payment fulfillment and reversal with real stores
+		// on a migrated database, and serves scanner responses over loopback HTTP.
+		"internal/cryptopay/bsc_deposit_scenario_integration_test.go": {
+			Internal: []string{
+				"ent", "ent/runtime", "internal/billing", "internal/billing/postgres", "internal/config",
+				"internal/cryptopay/addresses", "internal/cryptopay/rpc", "internal/cryptopay/scanner",
+				"internal/identity", "internal/identity/postgres", "internal/payment", "internal/payment/testkit",
+				"internal/settings", "internal/settings/postgres", "internal/testutil/postgrescontainer",
+			},
+			External: []string{"entgo.io/ent/dialect", "entgo.io/ent/dialect/sql", "github.com/stretchr/testify/require"},
+			Standard: []string{"database/sql", "encoding/json", "net/http", "net/http/httptest", "os", "slices", "strconv", "sync", "sync/atomic"},
+		},
+		// Configuration fixtures use the host settings keys and repository contract.
+		"internal/cryptopay/config_cas_test.go":            {Internal: []string{"internal/settings"}},
+		"internal/cryptopay/config_test.go":                {Internal: []string{"internal/settings"}},
+		"internal/cryptopay/readonly_test.go":              {Internal: []string{"internal/settings"}},
+		"internal/cryptopay/service_config_reload_test.go": {Internal: []string{"internal/settings"}},
+		"internal/cryptopay/sweep_destination_test.go":     {Internal: []string{"internal/settings"}},
+		// SQL fixtures read the host's embedded migration scripts to build the schema.
+		"internal/cryptopay/adapters_postgres_integration_test.go":        {Internal: []string{"migrations"}},
+		"internal/cryptopay/deposit_confirm_postgres_integration_test.go": {Internal: []string{"migrations"}},
+		"internal/cryptopay/sweeper/jobs_postgres_integration_test.go":    {Internal: []string{"migrations"}},
 	}
 
 	pureFileStandard = map[string]string{
