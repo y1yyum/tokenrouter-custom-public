@@ -558,9 +558,10 @@ func (s *SessionService) RefreshTokenPair(ctx context.Context, refreshToken stri
 	}, nil
 }
 
-// RevokeRefreshToken removes one prefixed refresh credential by its digest. An
-// unset cache returns nil, while a configured cache requires the refresh prefix
-// and returns its deletion result; revocation does not use the rotation claim.
+// RevokeRefreshToken finds the supplied credential's family and revokes its
+// payment grants and indexed refresh credentials before deleting the selected
+// record. An already missing record is harmless, while storage errors are
+// returned before logout can report completion.
 func (s *SessionService) RevokeRefreshToken(ctx context.Context, refreshToken string) error {
 	if s.refreshTokenCache == nil {
 		return nil // No-op if cache not configured
@@ -570,13 +571,32 @@ func (s *SessionService) RevokeRefreshToken(ctx context.Context, refreshToken st
 	}
 
 	tokenHash := HashToken(refreshToken)
+	data, err := s.refreshTokenCache.GetRefreshToken(ctx, tokenHash)
+	if err != nil && !errors.Is(err, ErrRefreshTokenNotFound) {
+		return err
+	}
+	if data != nil && data.FamilyID != "" {
+		if err := s.RevokeSessionFamily(ctx, data.FamilyID); err != nil {
+			return err
+		}
+	}
 	return s.refreshTokenCache.DeleteRefreshToken(ctx, tokenHash)
 }
 
-// RevokeSessionFamily removes refresh records named by the selected family
-// index. A missing cache or empty family is a no-op; other deletion failures
-// are returned. Index completeness and concurrent additions determine which
-// records the cache cleanup can actually observe.
+// RevokeCryptoGrantSessionForAccessToken validates the optional logout
+// Bearer JWT before revoking payment grants for its session. Older JWTs use
+// their exact token digest. Ordinary access-token validity is separate.
+func (s *SessionService) RevokeCryptoGrantSessionForAccessToken(ctx context.Context, accessToken string) error {
+	claims, err := s.ValidateToken(accessToken)
+	if err != nil {
+		return err
+	}
+	return s.RevokeSessionFamily(ctx, CryptoSessionKey(claims.SessionID, accessToken))
+}
+
+// RevokeSessionFamily revokes payment grants for the selected family and
+// removes refresh records named by its index. A missing cache or empty family
+// is a no-op; other failures are returned to the caller.
 func (s *SessionService) RevokeSessionFamily(ctx context.Context, familyID string) error {
 	if s.refreshTokenCache == nil || familyID == "" {
 		return nil
@@ -584,10 +604,9 @@ func (s *SessionService) RevokeSessionFamily(ctx context.Context, familyID strin
 	return s.refreshTokenCache.DeleteTokenFamily(ctx, familyID)
 }
 
-// RevokeAllUserSessions removes refresh records indexed for the selected
-// account. An unset cache is a successful no-op; configured-cache errors are
-// returned, and the operation's coverage follows the current user index
-// maintained by issuance.
+// RevokeAllUserSessions revokes account-wide payment grants and removes indexed
+// refresh credentials. An unset cache is a successful no-op. Errors from the
+// configured cache are returned for callers that require explicit confirmation.
 func (s *SessionService) RevokeAllUserSessions(ctx context.Context, userID int64) error {
 	if s.refreshTokenCache == nil {
 		return nil // No-op if cache not configured

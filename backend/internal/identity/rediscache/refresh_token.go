@@ -20,10 +20,11 @@ import (
 // until the relevant set is cleaned up or expires.
 //
 // Consumption delegates the winning removal to Redis DEL after service-level
-// validation. Bulk revocation reads a set and then pipelines deletions, so it covers
-// that observed membership and can miss concurrent additions. Index insertion
-// and expiry refresh also use ordinary pipelines. Their errors can follow partial
-// work; these adapters report failures while callers decide how to handle them.
+// validation. Bulk revocation records the payment grant cutoff before reading
+// its refresh index. Deleting the observed credentials uses a pipeline, so
+// concurrent additions can escape the index cleanup even when the cutoff is
+// recorded. Index insertion and expiry refresh likewise use ordinary pipelines,
+// whose errors can follow partial work.
 
 // These prefixes distinguish credential JSON from user and session-family
 // revocation sets, whose members are the same refresh-token digests.
@@ -113,9 +114,9 @@ func (c *refreshTokenCache) ConsumeRefreshToken(ctx context.Context, tokenHash s
 	return deleted == 1, err
 }
 
-// DeleteUserRefreshTokens removes credential records named by the user's current
-// index and then removes that index. An empty index succeeds, while an index read
-// failure stops revocation before deletion commands are submitted.
+// DeleteUserRefreshTokens revokes existing payment grants before removing
+// credentials named by the current user index. An empty index succeeds after
+// the marker write, while an index read failure prevents credential deletion.
 //
 // The index is read before a regular Redis pipeline sends one DEL per record and
 // for the index itself. Concurrent additions can escape this snapshot, and pipeline
@@ -124,6 +125,11 @@ func (c *refreshTokenCache) ConsumeRefreshToken(ctx context.Context, tokenHash s
 // Family indexes retain their members until family cleanup or expiry, so an
 // indexed digest may already lack its record.
 func (c *refreshTokenCache) DeleteUserRefreshTokens(ctx context.Context, userID int64) error {
+	// Access JWTs can outlive indexed refresh records, so publish payment
+	// revocation even when the account index is empty.
+	if err := c.revokeCryptoGrants(ctx, identity.CryptoGrantUserRevocationKey(userID)); err != nil {
+		return err
+	}
 	tokenHashes, err := c.GetUserTokenHashes(ctx, userID)
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("get user token hashes: %w", err)
@@ -149,9 +155,10 @@ func (c *refreshTokenCache) DeleteUserRefreshTokens(ctx context.Context, userID 
 	return err
 }
 
-// DeleteTokenFamily removes credential records named by the family's current
-// index and then removes that index. An empty family succeeds, while an index read
-// failure prevents submitting the deletion commands.
+// DeleteTokenFamily revokes existing payment grants before removing the
+// credentials named by the family's current index. An empty family succeeds
+// after the marker write, while an index read failure prevents credential
+// deletion.
 //
 // The snapshot and subsequent regular Redis pipeline are separate operations.
 // Concurrent token creation can add records after the snapshot, and a pipeline
@@ -160,6 +167,11 @@ func (c *refreshTokenCache) DeleteUserRefreshTokens(ctx context.Context, userID 
 // User indexes retain their digest members until user cleanup or expiry;
 // membership does not prove a credential record remains available for renewal.
 func (c *refreshTokenCache) DeleteTokenFamily(ctx context.Context, familyID string) error {
+	// Write the marker before checking the index so legacy access JWTs without
+	// a refresh record still lose their outstanding payment grants.
+	if err := c.revokeCryptoGrants(ctx, identity.CryptoGrantSessionRevocationKey(familyID)); err != nil {
+		return err
+	}
 	tokenHashes, err := c.GetFamilyTokenHashes(ctx, familyID)
 	if err != nil && err != redis.Nil {
 		return fmt.Errorf("get family token hashes: %w", err)

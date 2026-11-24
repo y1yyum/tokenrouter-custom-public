@@ -37,6 +37,8 @@
 //   - captcha.go, aliyun_captcha_service.go, tencent_captcha_service.go,
 //     turnstile_service.go, totp_service.go, and passkey.go define CAPTCHA and
 //     strong-factor operations.
+//   - crypto_security*.go and totp_payment_account.go bind payment
+//     verification and enrollment to the native administrator authenticator.
 //   - runtime_settings.go, public_settings.go, settings_participant.go, and
 //     grant_settings*.go supply runtime authentication decisions and signup or
 //     binding grants.

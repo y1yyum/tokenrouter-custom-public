@@ -11,10 +11,9 @@ import (
 // totp_handler.go exposes TOTP enrollment, removal, status, and session
 // step-up verification through authenticated HTTP requests.
 // TOTP account management uses the authenticated Gin subject for setup,
-// activation, disabling, and status reads. Sensitive-operation verification
-// stores a grant under StepUpSessionKey, matching the key used by step-up
-// middleware; HTTP responses convert activation times and grant durations to
-// seconds for panel clients.
+// activation, disabling, and status reads. Administrator enrollment binds to
+// the payment session when that verifier is ready. Native step-up uses
+// StepUpSessionKey so it matches the key checked by step-up middleware.
 
 // TotpHandler handles current-account authenticator setup, status, and
 // sensitive-operation verification.
@@ -53,11 +52,12 @@ type TotpEnableRequest struct {
 	SetupToken string `json:"setup_token" binding:"required"`     // temporary authenticator setup token
 }
 
-// TotpDisableRequest carries account proof for removing an enabled
-// authenticator.
+// TotpDisableRequest supplies account proof for disabling the current
+// authenticator. Payment operators supply the current authenticator code.
 type TotpDisableRequest struct {
 	EmailCode string `json:"email_code"` // account email verification code
 	Password  string `json:"password"`   // current account password proof
+	TotpCode  string `json:"totp_code"`  // current authenticator code
 }
 
 // TotpStepUpRequest carries an authenticator code for a temporary
@@ -132,7 +132,7 @@ func (h *TotpHandler) InitiateSetup(c *gin.Context) {
 		req = TotpSetupRequest{}
 	}
 
-	result, err := h.totpService.InitiateSetup(c.Request.Context(), subject.UserID, req.EmailCode, req.Password)
+	result, err := h.totpService.InitiateSetupForSession(c.Request.Context(), subject.UserID, req.EmailCode, req.Password, authctx.CryptoSessionID(c))
 	if err != nil {
 		response.ErrorFrom(c, err)
 		return
@@ -162,7 +162,7 @@ func (h *TotpHandler) Enable(c *gin.Context) {
 		return
 	}
 
-	if err := h.totpService.CompleteSetup(c.Request.Context(), subject.UserID, req.TotpCode, req.SetupToken); err != nil {
+	if err := h.totpService.CompleteSetupForSession(c.Request.Context(), subject.UserID, req.TotpCode, req.SetupToken, authctx.CryptoSessionID(c)); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
@@ -170,9 +170,9 @@ func (h *TotpHandler) Enable(c *gin.Context) {
 	response.Success(c, gin.H{"success": true})
 }
 
-// Disable removes the authenticated account authenticator after the service
-// checks supplied email or password proof. Malformed JSON stops before that
-// operation, while service failures use the shared panel response mapping.
+// Disable removes the authenticated account's current authenticator. Payment
+// operators prove possession with a fresh TOTP code. Other accounts supply
+// the proof selected by their account settings.
 func (h *TotpHandler) Disable(c *gin.Context) {
 	subject, ok := authctx.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -186,7 +186,7 @@ func (h *TotpHandler) Disable(c *gin.Context) {
 		return
 	}
 
-	if err := h.totpService.Disable(c.Request.Context(), subject.UserID, req.EmailCode, req.Password); err != nil {
+	if err := h.totpService.Disable(c.Request.Context(), subject.UserID, req.EmailCode, req.Password, req.TotpCode); err != nil {
 		response.ErrorFrom(c, err)
 		return
 	}
