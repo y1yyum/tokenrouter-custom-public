@@ -12,16 +12,27 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/nativeprice"
 	"maps"
 	"math"
 	"net/url"
 	"slices"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/service"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/nativeprice"
+	"github.com/TokenFlux/TokenRouter/internal/settings"
 )
+
+// config.go defines the stored crypto payment configuration and its defaults,
+// validation, and patch semantics. Operators can save a subset of settings, so
+// decoding overlays the saved fields onto defaults before checking the selected
+// chains, limits, and destinations. This lets an installation read settings
+// saved before a new optional field was introduced.
+//
+// The runtime consumes normalized values and fingerprints the entire snapshot to
+// detect changes. An administrator preparing a patch also needs the exact stored
+// text for comparison, so that separate read and conditional write are handled
+// by config_cas.go.
 
 // Setting keys live under the "crypto." namespace so fork users who never
 // enable the channel are unaffected.
@@ -632,19 +643,27 @@ func clampInt(value, low, high int) int {
 	return value
 }
 
-// SettingStore is the narrow persistence surface the config needs: read and
-// write one settings key. *SettingService-backed adapters implement it.
+// SettingStore reads and writes raw text for one configuration key.
 type SettingStore interface {
+	// GetCryptoSetting returns the stored text, preserving whitespace and empty
+	// strings. A key without a saved row returns settings.ErrSettingNotFound so
+	// the loader can select the first-run defaults.
 	GetCryptoSetting(ctx context.Context, key string) (string, error)
+	// SetCryptoSetting stores the supplied text for the key. Callers replacing
+	// a previously read snapshot must use the atomic interface so changes made
+	// after that read cannot be lost.
 	SetCryptoSetting(ctx context.Context, key, value string) error
 }
 
-// LoadConfig reads and normalizes the config from settings.
+// LoadConfig reads and normalizes the config from settings. A missing key or
+// blank value uses defaults, while an invalid JSON value or operational storage
+// error is reported to the caller.
 func LoadConfig(ctx context.Context, store SettingStore) (CryptoConfig, error) {
 	raw, err := store.GetCryptoSetting(ctx, SettingKeyCryptoConfig)
 	if err != nil {
-		// A never-saved key is the normal first-run state: return defaults.
-		if errors.Is(err, service.ErrSettingNotFound) {
+		// An absent row is normal before the first save, so the runtime can use
+		// the disabled defaults without concealing storage failures.
+		if errors.Is(err, settings.ErrSettingNotFound) {
 			return DefaultCryptoConfig(), nil
 		}
 		return DefaultCryptoConfig(), err

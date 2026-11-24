@@ -19,6 +19,17 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
 )
 
+// security.go monitors wallet activity and pauses the payment channel when a
+// wallet guard reports an incident. The monitor checks both deposit chains and
+// chains that retain wallet balances after being removed from the deposit
+// configuration. Idle-chain checks have their own cursors and backoff, so a
+// provider failure on one chain cannot stop checks on the others.
+//
+// The guard reads stored configuration even when the payment worker is paused.
+// Incident handling persists the channel disable with a marker for the current
+// wallet lock episode. Operator alert delivery can then retry independently
+// without repeatedly rewriting the configured channel state.
+
 // This monitor survives payment disable/reload, so a lock continues to retry
 // Bark delivery. It does not run on the explicitly read-only review instance.
 func (s *Service) securityMonitor(ctx context.Context) {
@@ -159,7 +170,7 @@ func (s *Service) scanIdleWalletSecurity(ctx context.Context, pacer *idleGuardPa
 	if s.settings == nil {
 		return nil
 	}
-	cfg, err := LoadConfig(ctx, NewServiceSettingStore(s.settings))
+	cfg, err := LoadConfig(ctx, s.settings)
 	if err != nil {
 		return err
 	}
@@ -379,6 +390,9 @@ func isSealedVaultSteadyState(err error) bool {
 	return err != nil && errors.Is(err, wallet.ErrSignerShareRequired)
 }
 
+// checkWalletActivity checks wallet security and the current channel setting
+// before an address assignment. A sealed vault can still accept deposits, while
+// a security pause or a disabled channel blocks this operation.
 func (s *Service) checkWalletActivity(ctx context.Context) error {
 	if err := s.checkWalletSecurity(ctx); err != nil {
 		if errors.Is(err, wallet.ErrSignerShareRequired) {
@@ -392,7 +406,7 @@ func (s *Service) checkWalletActivity(ctx context.Context) error {
 		return wallet.ErrSecurityLocked
 	}
 	if s.settings != nil {
-		cfg, err := LoadConfig(ctx, NewServiceSettingStore(s.settings))
+		cfg, err := LoadConfig(ctx, s.settings)
 		if err != nil {
 			return err
 		}

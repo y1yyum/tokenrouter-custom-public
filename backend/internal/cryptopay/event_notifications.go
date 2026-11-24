@@ -10,8 +10,12 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/notify"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/TokenFlux/TokenRouter/internal/service"
 )
+
+// event_notifications.go routes operator events to webhook and email sinks.
+// The dispatcher reads the saved notification settings for each event, so
+// changes to destinations and enablement take effect without rebuilding the
+// service.
 
 // Event ids published for operator notifications. They are part of the public
 // contract: webhook receivers and mail filters key on these strings.
@@ -27,13 +31,12 @@ const (
 
 // NewEventNotifier builds the best-effort operator notifier: every event is
 // resolved against the current crypto.config.notify and delivered to the
-// configured webhook/email. A nil settings service disables notifications
+// configured webhook/email. A nil settings adapter disables notifications
 // (delegated payments processes never touch the crypto wallet).
-func NewEventNotifier(settings *service.SettingService, email notify.EmailSender) notify.Notifier {
-	if settings == nil {
+func NewEventNotifier(store *ServiceSettingStore, email notify.EmailSender) notify.Notifier {
+	if store == nil {
 		return nil
 	}
-	store := NewServiceSettingStore(settings)
 	provider := func(ctx context.Context) (notify.Config, error) {
 		cfg, err := LoadConfig(ctx, store)
 		if err != nil {

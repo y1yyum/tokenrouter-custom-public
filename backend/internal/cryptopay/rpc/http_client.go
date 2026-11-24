@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
+	"github.com/TokenFlux/TokenRouter/internal/egress/urlpolicy"
 )
 
 type lookupIPAddrFunc func(context.Context, string) ([]net.IPAddr, error)
@@ -69,7 +69,7 @@ func (n publicRPCNetwork) dialContext(ctx context.Context, network, address stri
 
 	for _, ip := range ips {
 		addr, ok := netip.AddrFromSlice(ip.IP)
-		if !ok || ip.Zone != "" || !urlvalidator.IsPublicResolvedIP(addr) {
+		if !ok || ip.Zone != "" || !urlpolicy.IsPublicResolvedIP(addr) {
 			return nil, errors.New("rpc destination is not public")
 		}
 	}

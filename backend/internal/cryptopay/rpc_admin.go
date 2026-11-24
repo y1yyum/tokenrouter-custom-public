@@ -17,7 +17,7 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
-	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
+	"github.com/TokenFlux/TokenRouter/internal/egress/urlpolicy"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"golang.org/x/sync/singleflight"
 )
@@ -70,7 +70,7 @@ func ProbeRPCEndpoint(ctx context.Context, chain, endpoint string) *RPCTestResul
 	}
 	// Admin-only is not a reason to allow probing the host's own network:
 	// a leaked admin token could otherwise read cloud metadata.
-	validated, err := urlvalidator.ValidateHTTPURL(endpoint, true, urlvalidator.ValidationOptions{})
+	validated, err := urlpolicy.ValidateHTTPURL(endpoint, true, urlpolicy.ValidationOptions{})
 	if err != nil {
 		out.Error = "endpoint is not an allowed public URL"
 		return out

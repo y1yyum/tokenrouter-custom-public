@@ -7,9 +7,20 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/pkg/errors"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
 	"github.com/ethereum/go-ethereum/common"
 )
+
+// sweep_destination.go validates and pins the addresses that receive sweeps.
+// A pinned address is checked against the active configuration before use, and
+// an operator moving the destination must go through the edit flow that verifies
+// authorization. Comparisons follow the address representation used on each
+// chain family so spelling differences do not silently change the lock.
+//
+// A destination edit prepares an operator notification against the same
+// configuration snapshot it later attempts to save. Conditional persistence
+// rejects a stale snapshot, preserving the terms of the operator's approval if
+// another writer updates the configuration during the edit.
 
 // SweepDestinationLock pins the sweep destination. It is written once the
 // browser-held signer shards exist, and from then on every settings save that
@@ -72,13 +83,13 @@ func (cfg CryptoConfig) SweepDestination() SweepDestination {
 // ErrSweepDestinationLocked is returned when the generic config API tries to
 // move a pinned sweep destination. The operator must use the dedicated
 // endpoint, which verifies a fresh authenticator code and the risk phrase.
-var ErrSweepDestinationLocked = errors.Conflict(
+var ErrSweepDestinationLocked = apperror.Conflict(
 	"SWEEP_DESTINATION_LOCKED",
 	"归集目标地址已锁定，如需变更请走 /api/v1/admin/crypto/signer/sweep-destination 并验证 2FA + 风险短语",
 )
 
 // errSweepDestinationRequired rejects an update that would leave no destination.
-var errSweepDestinationRequired = errors.BadRequest(
+var errSweepDestinationRequired = apperror.BadRequest(
 	"SWEEP_DESTINATION_REQUIRED",
 	"至少需要提供一个归集目标地址（hot_wallet_evm 或 hot_wallet_solana）",
 )
@@ -87,7 +98,7 @@ var errSweepDestinationRequired = errors.BadRequest(
 // persisted. EVM input that mixes letter case must also pass the EIP-55
 // checksum: a typo in a sweep destination sends funds to an unrecoverable
 // address, and the checksum is the only cheap defense we have.
-var errSweepDestinationInvalid = errors.BadRequest(
+var errSweepDestinationInvalid = apperror.BadRequest(
 	"SWEEP_DESTINATION_INVALID",
 	"归集目标地址格式无效",
 )

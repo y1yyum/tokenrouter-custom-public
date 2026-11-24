@@ -179,7 +179,7 @@ func (s *Service) pinSweepDestinationLock(ctx context.Context) (created bool, ac
 	if s == nil || s.settings == nil {
 		return false, false, nil
 	}
-	created, active, err = PinSweepDestinationLock(ctx, NewServiceSettingStore(s.settings), wallet.AuditActorUserID(ctx), time.Now())
+	created, active, err = PinSweepDestinationLock(ctx, s.settings, wallet.AuditActorUserID(ctx), time.Now())
 	if err != nil {
 		slog.Error("[cryptopay] sweep destination lock could not be persisted", "error", err)
 		return false, false, err

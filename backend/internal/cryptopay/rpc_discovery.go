@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
-	"github.com/TokenFlux/TokenRouter/internal/service"
-	"github.com/TokenFlux/TokenRouter/internal/util/urlvalidator"
+	"github.com/TokenFlux/TokenRouter/internal/egress/urlpolicy"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -135,7 +135,7 @@ func automaticRPCEndpoint(endpoint string) bool {
 	// Registry entries are untrusted. Automated discovery never uses cleartext,
 	// credentials, templates, websocket endpoints or unusual service ports.
 	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if _, validateErr := urlvalidator.ValidateHTTPURL(endpoint, false, urlvalidator.ValidationOptions{}); validateErr != nil {
+	if _, validateErr := urlpolicy.ValidateHTTPURL(endpoint, false, urlpolicy.ValidationOptions{}); validateErr != nil {
 		return false
 	}
 	return err == nil && parsed.Scheme == "https" && parsed.Hostname() != "" &&
@@ -201,7 +201,7 @@ func (s *Service) startRPCDiscoveryLocked() {
 		s.discoveryCancel()
 		s.discoveryCancel = nil
 	}
-	if !service.CryptoInstanceEnabled() || !cryptoWorkersAllowed() {
+	if !mode.InstanceEnabled() || !cryptoWorkersAllowed() {
 		return
 	}
 	ctx, cancel := context.WithCancel(context.Background())

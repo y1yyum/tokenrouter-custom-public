@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"log/slog"
 	"maps"
 	"math/big"
@@ -19,16 +18,27 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/ledger"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/nativeprice"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/notify"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/TokenFlux/TokenRouter/internal/service"
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
 )
+
+// service.go assembles crypto payment components and applies stored configuration
+// to the running workers. Reloads read the host settings adapter and derive a
+// fingerprint from the normalized document. The watcher can then observe changes
+// made through another database connection without refreshing an unchanged
+// configuration or exposing the stored text in logs.
+//
+// Application rebuilds the configured runtime while preserving the distinction
+// between the persisted channel setting and a local security pause. The watcher
+// tracks the last processed stored snapshot so a paused service can detect a new
+// edit without treating the pause itself as a configuration change.
 
 // TokenConfig is one watched asset on a chain. Symbol is display-only:
 // crediting and sweeping key on Contract, and native coin uses the
@@ -176,7 +186,7 @@ var watchedTokens = map[string][]TokenConfig{
 }
 
 func cryptoWorkersAllowed() bool {
-	return !service.BackgroundJobsDisabled() && !mode.ReadOnly()
+	return mode.WorkersAllowed()
 }
 
 // tokenDecimals resolves a token contract's decimals for a chain, falling
@@ -302,7 +312,7 @@ func evmContracts(chain string) []string {
 // the scanner worker, the ledger and the sweeper.
 type Service struct {
 	db       *sql.DB
-	settings *service.SettingService
+	settings *ServiceSettingStore // persisted crypto configuration access
 	creditor ledger.Creditor
 
 	mu                sync.RWMutex
@@ -356,18 +366,20 @@ type Service struct {
 	depositNetworkStatus *depositNetworkMonitor
 }
 
-// NewService builds the facade and starts the scan worker when enabled.
+// NewService builds the facade and starts the scan worker when enabled. The
+// supplied settings adapter reads the stored configuration at startup and
+// during later reloads.
 func NewService(
 	db *sql.DB,
-	settings *service.SettingService,
+	settings *ServiceSettingStore,
 	creditor ledger.Creditor,
 	addressSvc *addresses.Service,
 	appConfig *config.Config,
 	statusRedis ...*redis.Client,
 ) *Service {
 	var masterKey string
-	if appConfig != nil && appConfig.Totp.HasPersistentEncryptionKey() {
-		masterKey = appConfig.Totp.EncryptionKey
+	if appConfig != nil {
+		masterKey = mode.PersistentKey(appConfig.Security.SecretEncryptionKey, appConfig.Security.SecretEncryptionKeyConfigured)
 	}
 	s := &Service{
 		db:        db,
@@ -387,7 +399,7 @@ func NewService(
 	}
 	s.reload(context.Background())
 	s.startConfigPoller(context.Background(), time.Minute)
-	if masterKey != "" && cryptoWorkersAllowed() && service.CryptoInstanceEnabled() {
+	if masterKey != "" && cryptoWorkersAllowed() && mode.InstanceEnabled() {
 		securityCtx, cancel := context.WithCancel(context.Background())
 		s.securityCancel = cancel
 		go s.securityMonitor(securityCtx)
@@ -435,7 +447,7 @@ func (s *Service) reloadLocked(ctx context.Context) error {
 	if closed {
 		return context.Canceled
 	}
-	cfg, err := LoadConfig(ctx, NewServiceSettingStore(s.settings))
+	cfg, err := LoadConfig(ctx, s.settings)
 	var fingerprint string
 	if err == nil {
 		fingerprint, err = configFingerprint(cfg)
@@ -473,7 +485,7 @@ func (s *Service) applyConfigLocked(ctx context.Context, cfg CryptoConfig, finge
 		}
 	}
 	cfg.Enabled = channelEnabled
-	scanEnabled := channelEnabled && service.CryptoInstanceEnabled()
+	scanEnabled := channelEnabled && mode.InstanceEnabled()
 
 	// A queued run must not retain an executor built from obsolete config.
 	// The feed is cheap to build; its quote cache lives inside the provider.
@@ -2069,7 +2081,7 @@ func (s *Service) reloadIfConfigChanged(ctx context.Context) (bool, error) {
 	if closed {
 		return false, context.Canceled
 	}
-	stored, err := LoadConfig(ctx, NewServiceSettingStore(s.settings))
+	stored, err := LoadConfig(ctx, s.settings)
 	var fingerprint string
 	if err == nil {
 		fingerprint, err = configFingerprint(stored)
