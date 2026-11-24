@@ -74,7 +74,7 @@ func nativeLedgerTransfer(amount *big.Int) scanner.Transfer {
 // a credit built from a mis-scaled amount would be off by 1e12.
 func TestNativeDepositIsCreditedOncePerTransaction(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	l.SetNativePricer(fixedPricer(10))
 
@@ -131,7 +131,7 @@ func TestNativeDepositIsCreditedOncePerTransaction(t *testing.T) {
 // deposit distinct from a token deposit in the same transaction.
 func TestNativePendingObservationIsIdempotent(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	l.SetNativePricer(fixedPricer(10))
 
@@ -171,7 +171,7 @@ func TestNativePendingObservationIsIdempotent(t *testing.T) {
 // token-independent reason the UI renders, never silently dropped.
 func TestNativeDepositBelowMinimumIsIgnoredNotDropped(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	l.SetNativePricer(fixedPricer(10))
 

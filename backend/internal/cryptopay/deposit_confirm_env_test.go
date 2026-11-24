@@ -12,12 +12,10 @@ import (
 	entsql "entgo.io/ent/dialect/sql"
 	dbent "github.com/TokenFlux/TokenRouter/ent"
 	"github.com/TokenFlux/TokenRouter/ent/enttest"
-	"github.com/TokenFlux/TokenRouter/ent/paymentorder"
 	_ "github.com/TokenFlux/TokenRouter/ent/runtime"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/ledger"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
-	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/stretchr/testify/require"
 	_ "modernc.org/sqlite"
 )
@@ -151,35 +149,8 @@ func newConfirmEnv(t *testing.T) *confirmEnv {
 	require.NoError(t, err)
 
 	creditor := &DepositCreditor{entClient: client, db: db}
-	// Models the real fulfillment lease: the PAID -> COMPLETED transition and the
-	// balance credit commit together or not at all, and only one caller wins it.
 	creditor.fulfill = func(ctx context.Context, id int64) error {
-		tx, err := client.Tx(ctx)
-		if err != nil {
-			return err
-		}
-		order, err := tx.PaymentOrder.Get(ctx, id)
-		if err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		won, err := tx.PaymentOrder.Update().
-			Where(paymentorder.IDEQ(id), paymentorder.StatusEQ(payment.OrderStatusPaid)).
-			SetStatus(payment.OrderStatusCompleted).Save(ctx)
-		if err != nil {
-			_ = tx.Rollback()
-			return err
-		}
-		if won == 1 {
-			if _, err := tx.User.UpdateOneID(order.UserID).AddBalance(order.Amount).Save(ctx); err != nil {
-				_ = tx.Rollback()
-				return err
-			}
-		} else if order.Status != payment.OrderStatusCompleted {
-			_ = tx.Rollback()
-			return fmt.Errorf("order %d is %s", id, order.Status)
-		}
-		return tx.Commit()
+		return fulfillDepositFixture(ctx, client, id)
 	}
 
 	resolver := &confirmResolver{userID: user.ID, deposit: map[string]bool{strings.ToLower(confirmTo): true}, system: map[string]bool{}}

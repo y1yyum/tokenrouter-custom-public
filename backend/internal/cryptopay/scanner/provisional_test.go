@@ -110,7 +110,8 @@ func TestReorgRevokesProvisionalCreditOnce(t *testing.T) {
 	w, mock, _ := workerFixture(t, fixture)
 
 	revokes, manualAlerts := 0, 0
-	w.onProvisionalRevoke = func(_ context.Context, chain, txHash string, logIndex int, reason string) (bool, error) {
+	w.resolveDepositReorg = func(_ context.Context, target DepositReorg) (DepositReorgOutcome, error) {
+		chain, txHash, logIndex, reason := target.Chain, target.TxHash, target.LogIndex, target.Reason
 		revokes++
 		if chain != tr.Chain || txHash != tr.TxHash || logIndex != tr.LogIndex {
 			t.Fatalf("revoker identity mismatch: %s/%s/%d", chain, txHash, logIndex)
@@ -118,7 +119,7 @@ func TestReorgRevokesProvisionalCreditOnce(t *testing.T) {
 		if reason != "reorg_noncanonical_block" {
 			t.Fatalf("revoke reason=%q", reason)
 		}
-		return true, nil
+		return DepositReorgOutcome{Handled: true, Revoked: true}, nil
 	}
 	w.onReorg = func(chain, txHash string) { manualAlerts++ }
 
@@ -145,21 +146,19 @@ func TestReorgOfFinalCreditKeepsManualReconciliation(t *testing.T) {
 	w, mock, _ := workerFixture(t, fixture)
 
 	revokes, manualAlerts := 0, 0
-	w.onProvisionalRevoke = func(context.Context, string, string, int, string) (bool, error) {
+	w.resolveDepositReorg = func(context.Context, DepositReorg) (DepositReorgOutcome, error) {
 		revokes++
-		return false, nil
+		return DepositReorgOutcome{Handled: true, ManualReview: true}, nil
 	}
 	w.onReorg = func(chain, txHash string) { manualAlerts++ }
 
 	mock.ExpectQuery(`FROM deposit_transactions d`).WillReturnRows(observationRows().AddRow(
 		tr.Chain, tr.TxHash, tr.LogIndex, tr.From, tr.To, tr.Token, "1", tr.BlockNumber, tr.BlockHash, "", false))
-	expectObservationUpdate(mock, tr, "credited", "", "reverted", "reorg_noncanonical_block").
-		WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := w.recheckCredited(t.Context()); err != nil {
 		t.Fatal(err)
 	}
-	if revokes != 0 || manualAlerts != 1 {
-		t.Fatalf("revokes=%d manualAlerts=%d want 0/1", revokes, manualAlerts)
+	if revokes != 1 || manualAlerts != 1 {
+		t.Fatalf("revokes=%d manualAlerts=%d want 1/1", revokes, manualAlerts)
 	}
 	if err := mock.ExpectationsWereMet(); err != nil {
 		t.Fatal(err)

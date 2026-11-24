@@ -7,12 +7,14 @@ import (
 	"math/big"
 	"strconv"
 	"testing"
+	"time"
 
 	"entgo.io/ent/dialect"
 	entsql "entgo.io/ent/dialect/sql"
 	dbent "github.com/TokenFlux/TokenRouter/ent"
 	"github.com/TokenFlux/TokenRouter/ent/enttest"
 	_ "github.com/TokenFlux/TokenRouter/ent/runtime"
+	"github.com/TokenFlux/TokenRouter/internal/billing"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/ledger"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/stretchr/testify/require"
@@ -32,7 +34,7 @@ func newCreditTest(t *testing.T) (*DepositCreditor, ledger.CreditRequest) {
 	_, err = db.Exec(`CREATE TABLE deposit_transactions (
 		chain TEXT, tx_hash TEXT, log_index INTEGER, order_id INTEGER,
 		from_address TEXT, to_address TEXT, token TEXT, amount NUMERIC,
-		status TEXT, block_hash TEXT DEFAULT 'original-block',
+		status TEXT, reason TEXT NOT NULL DEFAULT '', block_hash TEXT DEFAULT 'original-block',
 		provisional INTEGER NOT NULL DEFAULT 0, credited_at TIMESTAMP, revoked_at TIMESTAMP, revoke_reason TEXT,
 		UNIQUE(chain, tx_hash, log_index))`)
 	require.NoError(t, err)
@@ -47,14 +49,7 @@ func newCreditTest(t *testing.T) (*DepositCreditor, ledger.CreditRequest) {
 	require.NoError(t, err)
 	c := &DepositCreditor{entClient: client, db: db}
 	c.fulfill = func(ctx context.Context, id int64) error {
-		o, e := client.PaymentOrder.Get(ctx, id)
-		if e != nil || o.Status == payment.OrderStatusCompleted {
-			return e
-		}
-		if _, e = client.User.UpdateOneID(o.UserID).AddBalance(o.Amount).Save(ctx); e != nil {
-			return e
-		}
-		return client.PaymentOrder.UpdateOneID(id).SetStatus(payment.OrderStatusCompleted).Exec(ctx)
+		return fulfillDepositFixture(ctx, client, id)
 	}
 	return c, req
 }
@@ -219,4 +214,39 @@ func TestCreditKeepsExistingUsername(t *testing.T) {
 	order, err := creditor.entClient.PaymentOrder.Query().Where().Only(ctx)
 	require.NoError(t, err)
 	require.Equal(t, "real-user", order.UserName)
+}
+
+// fulfillDepositFixture records the same durable wallet evidence as production.
+// Portable SQLite fixtures simulate fulfillment without starting a service.
+func fulfillDepositFixture(ctx context.Context, client *dbent.Client, id int64) error {
+	tx, err := client.Tx(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+	txCtx := dbent.NewTxContext(ctx, tx)
+	order, err := tx.PaymentOrder.Get(txCtx, id)
+	if err != nil || order.Status == payment.OrderStatusCompleted {
+		return err
+	}
+	now := time.Now().UTC()
+	code, err := tx.RedeemCode.Create().SetCode(order.RechargeCode).SetType(billing.RedeemTypeBalance).
+		SetValue(order.Amount).SetStatus(billing.StatusUsed).SetMaxUses(1).SetUsedCount(1).
+		SetUsedBy(order.UserID).SetUsedAt(now).Save(txCtx)
+	if err != nil {
+		return err
+	}
+	if _, err := tx.RedeemCodeUsage.Create().SetRedeemCodeID(code.ID).SetUserID(order.UserID).SetUsedAt(now).Save(txCtx); err != nil {
+		return err
+	}
+	if _, err := tx.User.UpdateOneID(order.UserID).AddBalance(order.Amount).Save(txCtx); err != nil {
+		return err
+	}
+	if _, err := tx.Client().ExecContext(txCtx, `UPDATE deposit_transactions SET credited_at = $1 WHERE order_id = $2`, now, id); err != nil {
+		return err
+	}
+	if err := tx.PaymentOrder.UpdateOneID(id).SetStatus(payment.OrderStatusCompleted).Exec(txCtx); err != nil {
+		return err
+	}
+	return tx.Commit()
 }

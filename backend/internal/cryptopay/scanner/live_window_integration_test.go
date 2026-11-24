@@ -40,8 +40,14 @@ func (c *liveWindowCreditor) CreditDeposit(ctx context.Context, req ledger.Credi
 	}
 	if changed, _ := result.RowsAffected(); changed > 0 {
 		c.calls++
-		_, err = c.db.ExecContext(ctx, `UPDATE balances SET amount = amount + ? WHERE user_id = ?`, req.CreditUSDT, req.UserID)
+		if _, err := c.db.ExecContext(ctx, `UPDATE balances SET amount = amount + ? WHERE user_id = ?`, req.CreditUSDT, req.UserID); err != nil {
+			return err
+		}
 	}
+	_, err = c.db.ExecContext(ctx, `UPDATE deposit_transactions
+		SET order_id = (SELECT id FROM payment_orders WHERE out_trade_no = ?),
+		    credited_at = CURRENT_TIMESTAMP, provisional = ?
+		WHERE chain = ? AND tx_hash = ? AND log_index = ?`, tradeNo, req.Provisional, req.Chain, req.TxHash, req.LogIndex)
 	return err
 }
 

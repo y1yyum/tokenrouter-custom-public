@@ -2,6 +2,7 @@ package ledger
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"math/big"
 	"testing"
@@ -21,14 +22,15 @@ func (r fixedResolver) ResolveDeposit(context.Context, string, string) (int64, b
 }
 
 type countingCreditor struct {
+	db       *sql.DB
 	calls    int
 	requests []CreditRequest
 }
 
-func (c *countingCreditor) CreditDeposit(_ context.Context, req CreditRequest) error {
+func (c *countingCreditor) CreditDeposit(ctx context.Context, req CreditRequest) error {
 	c.calls++
 	c.requests = append(c.requests, req)
-	return nil
+	return recordGrantFixture(ctx, c.db, req)
 }
 
 func depositTransfer(raw int64) scanner.Transfer {
@@ -143,4 +145,18 @@ func TestPendingUnassignedAddressRemainsDurableForLaterReconciliation(t *testing
 			}
 		})
 	}
+}
+
+// recordGrantFixture marks the durable handoff for SQLite ledger-only tests.
+func recordGrantFixture(ctx context.Context, db *sql.DB, req CreditRequest) error {
+	if db == nil {
+		return nil
+	}
+	_, tradeNo := OrderIdentity(req.Chain, req.TxHash, req.LogIndex)
+	_, err := db.ExecContext(ctx, `UPDATE deposit_transactions
+		SET credited_at = CURRENT_TIMESTAMP, provisional = $1,
+		    order_id = COALESCE(order_id, (SELECT id FROM payment_orders WHERE out_trade_no = $2), 1)
+		WHERE chain = $3 AND tx_hash = $4 AND log_index = $5`,
+		req.Provisional, tradeNo, req.Chain, req.TxHash, req.LogIndex)
+	return err
 }

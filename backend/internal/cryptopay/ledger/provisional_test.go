@@ -46,7 +46,7 @@ func TestInstantCreditLandsOncePerIdentity(t *testing.T) {
 	}
 
 	// A second pass sees the credited row and must return without crediting.
-	expectDepositState(mock, tr, stateRows().AddRow("credited", 88, 42, 10.0, "", nil, ""))
+	expectDepositState(mock, tr, stateRows().AddRow("credited", 88, 42, 10.0, "", nil, "", false))
 	credited, err = l.ProcessProvisional(t.Context(), tr, 6)
 	if err != nil || credited {
 		t.Fatalf("repeat observation: credited=%v err=%v", credited, err)
@@ -117,7 +117,7 @@ func TestRevokedDepositIsNeverCreditedAgain(t *testing.T) {
 	} {
 		t.Run(call.name, func(t *testing.T) {
 			// revocation already wrote status='reverted' + revoked_at.
-			expectDepositState(mock, tr, stateRows().AddRow("reverted", 88, 42, 10.0, "", nil, ""))
+			expectDepositState(mock, tr, stateRows().AddRow("reverted", 88, 42, 10.0, "", nil, "", false))
 			credited, err := call.fn()
 			if err != nil || credited {
 				t.Fatalf("revoked row credited: credited=%v err=%v", credited, err)
@@ -151,7 +151,7 @@ func TestInstantCreditThenFinalCreditAddsBalanceOnce(t *testing.T) {
 
 	// Finality is reached: the scanner calls Process, which must be a no-op
 	// because the row is already credited.
-	expectDepositState(mock, tr, stateRows().AddRow("credited", 88, 42, 10.0, "", nil, ""))
+	expectDepositState(mock, tr, stateRows().AddRow("credited", 88, 42, 10.0, "", nil, "", false))
 	if credited, err := l.Process(t.Context(), tr, 6); err != nil || credited {
 		t.Fatalf("final credit after instant: credited=%v err=%v", credited, err)
 	}

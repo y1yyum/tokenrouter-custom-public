@@ -179,18 +179,19 @@ func expectObservationUpdate(mock sqlmock.Sqlmock, tr Transfer, oldStatus, oldRe
 		WithArgs(status, reason, tr.Chain, tr.TxHash, tr.LogIndex, oldStatus, oldReason)
 }
 
-func expectPendingReincludedMove(mock sqlmock.Sqlmock, old Transfer, reason string, next Transfer) {
-	mock.ExpectQuery(`SELECT EXISTS \(SELECT 1 FROM payment_orders WHERE out_trade_no = \$1\)`).
-		WithArgs(depositOrderNo(old.Chain, old.TxHash, old.LogIndex)).
-		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(false))
-	mock.ExpectExec(`(?s)UPDATE deposit_transactions SET log_index = \$1, block_number = \$2, block_hash = \$3.*status = 'pending'.*order_id IS NULL`).
-		WithArgs(next.LogIndex, next.BlockNumber, next.BlockHash, old.Chain, old.TxHash, old.LogIndex, reason).
-		WillReturnResult(sqlmock.NewResult(0, 1))
+// expectPendingOrderProbe reports whether receipt/reinclusion recovery can
+// discard an observation without asking the wallet to classify a prior order.
+func expectPendingOrderProbe(mock sqlmock.Sqlmock, transfer Transfer, exists bool) {
+	mock.ExpectQuery(`(?s)SELECT EXISTS .*credited_at IS NOT NULL.*OR EXISTS .*payment_orders`).
+		WithArgs(transfer.Chain, transfer.TxHash, transfer.LogIndex, depositOrderNo(transfer.Chain, transfer.TxHash, transfer.LogIndex)).
+		WillReturnRows(sqlmock.NewRows([]string{"exists"}).AddRow(exists))
 }
 
-func expectPendingReincludedSameIndex(mock sqlmock.Sqlmock, old Transfer, reason string, next Transfer) {
-	mock.ExpectExec(`(?s)UPDATE deposit_transactions SET block_number = \$1, block_hash = \$2, last_attempt_at = NOW\(\).*status = 'pending'.*order_id IS NULL`).
-		WithArgs(next.BlockNumber, next.BlockHash, old.Chain, old.TxHash, old.LogIndex, reason).
+func expectPendingReincludedMove(mock sqlmock.Sqlmock, old Transfer, reason string, next Transfer) {
+	expectPendingOrderProbe(mock, old, false)
+	mock.ExpectExec(`(?s)UPDATE deposit_transactions SET log_index = \$1, block_number = \$2, block_hash = \$3.*status = 'pending'.*order_id IS NULL`).
+		WithArgs(next.LogIndex, next.BlockNumber, next.BlockHash, old.Chain, old.TxHash, old.LogIndex, reason,
+			depositOrderNo(old.Chain, old.TxHash, old.LogIndex)).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 }
 
@@ -459,6 +460,9 @@ func TestPendingRejectsChangedOrNoncanonicalTransfer(t *testing.T) {
 			if tt.reason != "" {
 				status = "reverted"
 			}
+			if tt.reason == "reorg_transfer_changed" {
+				expectPendingOrderProbe(mock, tr, false)
+			}
 			expectObservationUpdate(mock, tr, "pending", "", status, tt.reason).WillReturnResult(sqlmock.NewResult(0, 1))
 			err := w.retryPending(t.Context())
 			if (err != nil) != tt.wantErr {
@@ -493,7 +497,7 @@ func TestPendingReinclusionAtSameLogIndexRefreshesCanonicalObservation(t *testin
 	next := tr
 	next.BlockNumber = 101
 	next.BlockHash = newBlockHash
-	expectPendingReincludedSameIndex(mock, tr, "", next)
+	expectPendingReincludedMove(mock, tr, "", next)
 	if err := w.retryPending(t.Context()); err != nil {
 		t.Fatal(err)
 	}
@@ -547,6 +551,7 @@ func TestPendingReceiptNullNeverBecomesTerminalReorg(t *testing.T) {
 	w, mock, handler := workerFixture(t, fixture)
 	for range missingReceiptThreshold {
 		expectObservation(mock, tr, "1", "")
+		expectPendingOrderProbe(mock, tr, false)
 		expectObservationUpdate(mock, tr, "pending", "", "pending", "").WillReturnResult(sqlmock.NewResult(0, 1))
 		if err := w.retryPending(t.Context()); err != nil {
 			t.Fatalf("null receipt must remain retryable: %v", err)

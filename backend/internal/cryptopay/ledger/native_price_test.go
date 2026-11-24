@@ -18,22 +18,23 @@ import (
 // observe the window in which the price was persisted but the balance was not
 // yet credited.
 type failOnceCreditor struct {
+	db       *sql.DB
 	calls    int
 	requests []CreditRequest
 }
 
-func (c *failOnceCreditor) CreditDeposit(_ context.Context, req CreditRequest) error {
+func (c *failOnceCreditor) CreditDeposit(ctx context.Context, req CreditRequest) error {
 	c.calls++
 	c.requests = append(c.requests, req)
 	if c.calls == 1 {
 		return errors.New("fulfillment temporarily unavailable")
 	}
-	return nil
+	return recordGrantFixture(ctx, c.db, req)
 }
 
 func TestNativeDepositCreditsAtMarketPrice(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	pricer := &stubPricer{price: decimal.NewFromInt(2000)}
 	l.SetNativePricer(pricer)
@@ -61,7 +62,7 @@ func TestNativeDepositCreditsAtMarketPrice(t *testing.T) {
 // The next pass, once the feed answers, must credit it.
 func TestNativePriceFailureLeavesDepositRetryable(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	pricer := &stubPricer{err: errTestPrice}
 	l.SetNativePricer(pricer)
@@ -91,7 +92,7 @@ func TestNativePriceFailureLeavesDepositRetryable(t *testing.T) {
 // A quote older than the freshness ceiling is as unusable as no quote.
 func TestStaleNativePriceIsNotCredited(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	l.SetNativePricer(&stubPricer{price: decimal.NewFromInt(2000), at: time.Now().Add(-nativeprice.MaxQuoteAge - time.Minute)})
 
@@ -109,7 +110,7 @@ func TestStaleNativePriceIsNotCredited(t *testing.T) {
 // market (and therefore the feed) has moved since.
 func TestRepeatedNativeProcessingKeepsTheFirstPrice(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &failOnceCreditor{}
+	creditor := &failOnceCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	pricer := &stubPricer{price: decimal.NewFromInt(2000)}
 	l.SetNativePricer(pricer)
@@ -139,7 +140,7 @@ func TestRepeatedNativeProcessingKeepsTheFirstPrice(t *testing.T) {
 // idempotency guarantee only binds once an order freezes the amount.
 func TestExpiredStoredPriceIsReplacedBeforeSettlement(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	transfer := nativeLedgerTransfer(big.NewInt(1_000_000_000_000_000_000))
 	require.NoError(t, l.ProcessPending(t.Context(), transfer, 18))
@@ -164,7 +165,7 @@ func TestExpiredStoredPriceIsReplacedBeforeSettlement(t *testing.T) {
 // fraction up would mint balance the deposit did not pay for.
 func TestNativeCreditTruncatesInsteadOfRoundingUp(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	l.SetNativePricer(&stubPricer{price: decimal.NewFromInt(1)})
 
@@ -180,7 +181,7 @@ func TestNativeCreditTruncatesInsteadOfRoundingUp(t *testing.T) {
 // never touch the market feed.
 func TestStablecoinCreditIgnoresMarketPrice(t *testing.T) {
 	db := nativeDepositDB(t)
-	creditor := &countingCreditor{}
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{userID: 42, ours: true}, 0.001, 10000, 6.7)
 	pricer := &stubPricer{err: errTestPrice}
 	l.SetNativePricer(pricer)
