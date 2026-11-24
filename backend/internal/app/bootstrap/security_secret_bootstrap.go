@@ -11,6 +11,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/ent"
 	"github.com/TokenFlux/TokenRouter/ent/securitysecret"
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	postgresinfra "github.com/TokenFlux/TokenRouter/internal/infra/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 )
@@ -29,7 +30,8 @@ import (
 // accommodating the absent-row outcome after an insert conflict. Stored values
 // are checked by UTF-8 byte length after trimming, rather than by character
 // count or claimed entropy. The generated-candidate flag is an equality
-// comparison with readback, not a database insertion count.
+// comparison with readback, not a database insertion count. Crypto review
+// instances validate their configured keys and use process-local OAuth signing.
 
 // These values select the shared JWT record and bound missing-row readback
 // retries after conflict-safe insertion: one initial read plus the extra attempts.
@@ -95,6 +97,35 @@ func ensureBootstrapSecrets(ctx context.Context, client *ent.Client, cfg *config
 	if created {
 		logging.LegacyPrintf("bootstrap.security_secret", "%s", "Warning: JWT secret auto-generated and persisted to database. Consider rotating to a managed secret for production.")
 	}
+	return nil
+}
+
+// prepareReviewSecrets requires locally configured JWT and installation keys
+// for review authentication. The JWT key must differ from the persisted
+// production key when that row exists. MCP OAuth receives an independent
+// process key so review startup neither reuses nor provisions shared signing
+// material.
+func prepareReviewSecrets(ctx context.Context, client *ent.Client, cfg *config.Config) error {
+	secret := strings.TrimSpace(cfg.Auth.JWT.Secret)
+	if len(secret) < 32 {
+		return fmt.Errorf("crypto review requires a separate auth.jwt.secret of at least 32 bytes")
+	}
+	if mode.PersistentKey(cfg.Security.SecretEncryptionKey, cfg.Security.SecretEncryptionKeyConfigured) == "" {
+		return fmt.Errorf("crypto review requires a configured security.secret_encryption_key")
+	}
+	stored, err := client.SecuritySecret.Query().Where(securitysecret.KeyEQ(securitySecretKeyJWT)).Only(ctx)
+	if err != nil && !ent.IsNotFound(err) {
+		return fmt.Errorf("check crypto review JWT key isolation: %w", err)
+	}
+	if stored != nil && secret == strings.TrimSpace(stored.Value) {
+		return fmt.Errorf("crypto review JWT key must differ from the persisted JWT key")
+	}
+	oauthSecret, err := generateHexSecret(32)
+	if err != nil {
+		return fmt.Errorf("initialize crypto review MCP OAuth key: %w", err)
+	}
+	cfg.Auth.JWT.Secret = secret
+	cfg.MCPOAuthSigningSecret = oauthSecret
 	return nil
 }
 
