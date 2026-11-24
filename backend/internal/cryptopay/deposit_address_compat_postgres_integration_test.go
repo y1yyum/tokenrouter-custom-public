@@ -5,19 +5,23 @@ package cryptopay
 import (
 	"testing"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
-	"github.com/TokenFlux/TokenRouter/migrations"
 	"github.com/stretchr/testify/require"
 	"golang.org/x/sync/errgroup"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
+	"github.com/TokenFlux/TokenRouter/migrations"
 )
 
+// TestPostgresDepositAddressAllocationWithBothIndexShapes covers the initial
+// and upgraded constraints. Concurrent assignments must reuse one address, and
+// a disabled assignment must prevent allocation of a replacement.
 func TestPostgresDepositAddressAllocationWithBothIndexShapes(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		migrations []string
 	}{
-		{"original index", []string{"261_crypto_deposit.sql"}},
-		{"partial active index", []string{"261_crypto_deposit.sql", "323_crypto_deposit_address_rotate.sql"}},
+		{"original index", []string{"319_crypto_deposit.sql"}},
+		{"partial active index", []string{"319_crypto_deposit.sql", "326_crypto_deposit_address_rotate.sql"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			db := isolatedSweepAlertPostgres(t)
@@ -33,7 +37,8 @@ func TestPostgresDepositAddressAllocationWithBothIndexShapes(t *testing.T) {
 			ctx := t.Context()
 			require.NoError(t, repo.InsertPoolBatch(ctx, family, 10, []string{"0x0000000000000000000000000000000000000001", "0x0000000000000000000000000000000000000002"}))
 
-			// Concurrent first allocations must share one assignment and leave one pool slot.
+			// Start four allocations for one user so the database must serialize first assignment
+			// and leave a free slot for another user under either index.
 			g, groupCtx := errgroup.WithContext(ctx)
 			got := make([]*addresses.Assignment, 4)
 			for i := range got {

@@ -6,25 +6,36 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
-	"github.com/stretchr/testify/require"
+	"github.com/TokenFlux/TokenRouter/migrations"
 )
+
+type recordingProcessor struct {
+	db       *sql.DB
+	mu       sync.Mutex
+	transfer scanner.Transfer
+	decimals int
+	calls    int
+}
 
 // These run only against the disposable cluster that isolatedSweepAlertPostgres
 // insists on (CRYPTO_SWEEP_TEST_DSN, 127.0.0.1:15439). They cover what sqlite
 // and sqlmock cannot: PostgreSQL's two-key advisory locks through lib/pq, and
 // NUMERIC(38,18) rendering.
 
+// applyDepositMigrations installs the schema needed by the manual confirmation
+// query, including retry metadata. The caller provides an isolated schema so
+// these migrations create tables without modifying another test's data.
 func applyDepositMigrations(t *testing.T, db *sql.DB) {
 	t.Helper()
-	for _, name := range []string{"261_crypto_deposit.sql", "264_crypto_deposit_reason.sql", "265_crypto_deposit_retry_clock.sql"} {
-		migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
+	for _, name := range []string{"319_crypto_deposit.sql", "321_crypto_deposit_reason.sql", "322_crypto_deposit_retry_clock.sql"} {
+		migration, err := migrations.FS.ReadFile(name)
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), string(migration))
 		require.NoError(t, err)
@@ -69,14 +80,6 @@ func TestPostgresDepositLockIsExclusivePerDepositAndSeparateFromTheScanLock(t *t
 	require.NoError(t, again())
 }
 
-type recordingProcessor struct {
-	db       *sql.DB
-	mu       sync.Mutex
-	transfer scanner.Transfer
-	decimals int
-	calls    int
-}
-
 // Process stands in for the ledger, which needs payment_orders and users. The
 // direct UPDATE exists only in this test double.
 func (p *recordingProcessor) Process(ctx context.Context, tr scanner.Transfer, decimals int) (bool, error) {
@@ -94,9 +97,11 @@ func TestPostgresManualConfirmReadsNumericAmountAndHoldsTheRealLock(t *testing.T
 	applyDepositMigrations(t, db)
 	chain := newFakeChain(t)
 	processor := &recordingProcessor{db: db}
-	confirmer := &depositConfirmer{db: db, processor: processor, locker: pgDepositLocker{db: db}, adminID: 9,
+	confirmer := &depositConfirmer{
+		db: db, processor: processor, locker: pgDepositLocker{db: db}, adminID: 9,
 		minCredit: 0.001, maxCredit: 10000,
-		pool: func(string) (*rpc.Pool, error) { return chain.pool(), nil }}
+		pool: func(string) (*rpc.Pool, error) { return chain.pool(), nil },
+	}
 
 	tx := fmt.Sprintf("0x%064x", 0xab12cd34)
 	blockHash := fmt.Sprintf("0x%064x", 0xef5600ab)
@@ -111,8 +116,10 @@ func TestPostgresManualConfirmReadsNumericAmountAndHoldsTheRealLock(t *testing.T
 	require.NoError(t, db.QueryRowContext(t.Context(), `SELECT CAST(amount AS TEXT) FROM deposit_transactions WHERE id = $1`, id).Scan(&rendered))
 	require.Equal(t, "10.000000000000000000", rendered)
 
-	chain.receipts[tx] = &chainReceipt{status: "0x1", block: block, blockHash: blockHash,
-		logs: []map[string]any{chainTransferLog(confirmUSDT, confirmFrom, confirmTo, tenUSDT, block, blockHash, tx, 7)}}
+	chain.receipts[tx] = &chainReceipt{
+		status: "0x1", block: block, blockHash: blockHash,
+		logs: []map[string]any{chainTransferLog(confirmUSDT, confirmFrom, confirmTo, tenUSDT, block, blockHash, tx, 7)},
+	}
 	chain.canonical[block] = blockHash
 
 	// Hold the deposit's real advisory lock from another session: the

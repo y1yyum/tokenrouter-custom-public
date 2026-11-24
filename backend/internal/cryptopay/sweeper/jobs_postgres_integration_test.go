@@ -7,16 +7,18 @@ import (
 	"database/sql"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/lib/pq"
+
+	"github.com/TokenFlux/TokenRouter/migrations"
 )
 
-// These tests require an explicitly created disposable local cluster. Never
-// fall back to the application's database or to ambient PG* environment vars.
+// isolatedSweepPostgres opens a private schema for a sweep test and cleans it up
+// when the test ends. It requires an explicit DSN for the disposable local
+// cluster and applies the sweep job migration twice to check repeat execution.
 func isolatedSweepPostgres(t *testing.T) *sql.DB {
 	t.Helper()
 	dsn := os.Getenv("CRYPTO_SWEEP_TEST_DSN")
@@ -59,15 +61,17 @@ func isolatedSweepPostgres(t *testing.T) *sql.DB {
 		}
 		_ = admin.Close()
 	})
-	applySweepMigration(t, db, "261_crypto_deposit.sql")
-	applySweepMigration(t, db, "266_crypto_sweep_jobs.sql")
-	applySweepMigration(t, db, "266_crypto_sweep_jobs.sql")
+	applySweepMigration(t, db, "319_crypto_deposit.sql")
+	applySweepMigration(t, db, "323_crypto_sweep_jobs.sql")
+	applySweepMigration(t, db, "323_crypto_sweep_jobs.sql")
 	return db
 }
 
+// applySweepMigration executes a shipped SQL migration in the test schema.
+// The caller supplies the preceding schema state required by the selected file.
 func applySweepMigration(t *testing.T, db *sql.DB, name string) {
 	t.Helper()
-	script, err := os.ReadFile(filepath.Join("..", "..", "..", "migrations", name))
+	script, err := migrations.FS.ReadFile(name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -234,7 +238,7 @@ func TestPostgresSweepConstraintsAndLegacyUpgrade(t *testing.T) {
 		       ('bsc','legacy-success','target','token',20,'swept','success-hash')`); err != nil {
 		t.Fatal(err)
 	}
-	applySweepMigration(t, db, "266_crypto_sweep_jobs.sql")
+	applySweepMigration(t, db, "323_crypto_sweep_jobs.sql")
 	var pending, successful string
 	if err := db.QueryRowContext(t.Context(), `SELECT status FROM sweep_records WHERE from_address='legacy-pending'`).Scan(&pending); err != nil {
 		t.Fatal(err)

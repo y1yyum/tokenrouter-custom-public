@@ -6,6 +6,9 @@ import (
 	"testing"
 )
 
+// TestTransactionHashCasingCannotCreateSecondCredit submits the same transfer
+// with two spellings of its hash. Both observations must share one fulfillment
+// identity and call the creditor only once.
 func TestTransactionHashCasingCannotCreateSecondCredit(t *testing.T) {
 	db, err := sql.Open("sqlite", ":memory:")
 	if err != nil {
@@ -23,7 +26,9 @@ func TestTransactionHashCasingCannotCreateSecondCredit(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	creditor := &countingCreditor{}
+	// Persist the linked order and grant marker before the ledger tries to publish
+	// credited status for the first observation.
+	creditor := &countingCreditor{db: db}
 	l := New(db, creditor, fixedResolver{ours: true, userID: 42}, 1, 1000, 1)
 	tr := depositTransfer(10_000_000)
 	tr.TxHash = "0x" + strings.Repeat("ab", 32)

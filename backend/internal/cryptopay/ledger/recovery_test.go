@@ -8,8 +8,9 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 	_ "modernc.org/sqlite"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 )
 
 func stateRows() *sqlmock.Rows {
@@ -55,6 +56,9 @@ func TestPendingOrderWithFailedLinkRestoresOriginalTerms(t *testing.T) {
 	}
 }
 
+// TestLinkedPendingRestoresFrozenOrderBeforeMutablePolicies retries a linked
+// deposit after current admission rules change. Recovery pays the frozen amount
+// to the original owner even when current policy would reject a new deposit.
 func TestLinkedPendingRestoresFrozenOrderBeforeMutablePolicies(t *testing.T) {
 	for _, setting := range []string{"minimum raised", "maximum lowered", "multiplier changed", "multiplier zero", "multiplier invalid", "address disabled"} {
 		t.Run(setting, func(t *testing.T) {
@@ -82,8 +86,9 @@ func TestLinkedPendingRestoresFrozenOrderBeforeMutablePolicies(t *testing.T) {
 			// order's owner and frozen amount may drive recovery.
 			l := New(db, creditor, fixedResolver{ours: true}, min, max, multiplier)
 			expectDepositState(mock, tr, stateRows().AddRow("pending", 88, 42, 67.0, "", nil, "", false))
-			mock.ExpectExec(`(?s)UPDATE deposit_transactions\s+SET status = 'credited'.*AND status = 'pending'`).
-				WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, false).WillReturnResult(sqlmock.NewResult(0, 1))
+			mock.ExpectExec(markCreditedPattern).
+				WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, false, tr.BlockHash).
+				WillReturnResult(sqlmock.NewResult(0, 1))
 			credited, err := l.Process(t.Context(), tr, 6)
 			if !credited || err != nil || creditor.calls != 1 {
 				t.Fatalf("credited=%v err=%v calls=%d", credited, err, creditor.calls)
@@ -144,6 +149,9 @@ func TestLinkedPendingWithMissingOrderFailsClosed(t *testing.T) {
 	}
 }
 
+// TestCreditedCASPreservesReorgAndConcurrentCompletion changes the stored
+// state before credit publication. A losing publication preserves the other
+// writer's state and exposes conflicts that need reconciliation.
 func TestCreditedCASPreservesReorgAndConcurrentCompletion(t *testing.T) {
 	for _, concurrentStatus := range []string{"reverted", "ignored", "credited"} {
 		t.Run(concurrentStatus, func(t *testing.T) {
@@ -156,8 +164,9 @@ func TestCreditedCASPreservesReorgAndConcurrentCompletion(t *testing.T) {
 			tr := depositTransfer(10_000_000)
 			l := New(db, creditor, nil, 100, 1, 0)
 			expectDepositState(mock, tr, stateRows().AddRow("pending", 88, 42, 67.0, "", nil, "", false))
-			mock.ExpectExec(`(?s)UPDATE deposit_transactions\s+SET status = 'credited'.*AND status = 'pending'`).
-				WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, false).WillReturnResult(sqlmock.NewResult(0, 0))
+			mock.ExpectExec(markCreditedPattern).
+				WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, false, tr.BlockHash).
+				WillReturnResult(sqlmock.NewResult(0, 0))
 			mock.ExpectQuery(`SELECT status FROM deposit_transactions`).WithArgs(tr.Chain, tr.TxHash, tr.LogIndex).
 				WillReturnRows(sqlmock.NewRows([]string{"status"}).AddRow(concurrentStatus))
 			credited, err := l.Process(t.Context(), tr, 6)
@@ -199,6 +208,9 @@ func TestIgnoredCASDoesNotEraseConcurrentlyLinkedOrder(t *testing.T) {
 	}
 }
 
+// TestFailedCreditedWriteCanResumeLinkedOrder injects a failed status write
+// after the creditor returns. A restart of processing uses the same frozen
+// amount and attempts publication for the same block.
 func TestFailedCreditedWriteCanResumeLinkedOrder(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	if err != nil {
@@ -211,7 +223,8 @@ func TestFailedCreditedWriteCanResumeLinkedOrder(t *testing.T) {
 	writeErr := errors.New("mark credited unavailable")
 	for attempt := 0; attempt < 2; attempt++ {
 		expectDepositState(mock, tr, stateRows().AddRow("pending", 88, 42, 67.0, "", nil, "", false))
-		expectation := mock.ExpectExec(`(?s)UPDATE deposit_transactions\s+SET status = 'credited'.*AND status = 'pending'`)
+		expectation := mock.ExpectExec(markCreditedPattern).
+			WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, false, tr.BlockHash)
 		if attempt == 0 {
 			expectation.WillReturnError(writeErr)
 		} else {

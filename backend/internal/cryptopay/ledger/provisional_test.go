@@ -6,6 +6,14 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 )
 
+// markCreditedPattern checks the settlement write's identity, durable grant
+// evidence, and block guard across provisional credit and recovery tests.
+const markCreditedPattern = "UPDATE deposit_transactions " +
+	"SET status = 'credited', provisional = provisional AND \\$4 " +
+	"WHERE chain = \\$1 AND tx_hash = \\$2 AND log_index = \\$3 AND status = 'pending' " +
+	"AND order_id IS NOT NULL AND credited_at IS NOT NULL " +
+	"AND revoked_at IS NULL AND LOWER\\(block_hash\\) = LOWER\\(\\$5\\)"
+
 // newProvisionalLedger builds a ledger whose instant-credit switch is on.
 func newProvisionalLedger(t *testing.T, minInstant float64) (*Ledger, sqlmock.Sqlmock, *countingCreditor) {
 	t.Helper()
@@ -23,8 +31,9 @@ func newProvisionalLedger(t *testing.T, minInstant float64) (*Ledger, sqlmock.Sq
 	return l, mock, creditor
 }
 
-// The first verified observation credits immediately; a repeated observation of
-// the same identity must not mint a second balance.
+// TestInstantCreditLandsOncePerIdentity credits the first verified observation.
+// A repeated observation of that same transfer must leave the credited balance
+// unchanged and avoid a second creditor call.
 func TestInstantCreditLandsOncePerIdentity(t *testing.T) {
 	l, mock, creditor := newProvisionalLedger(t, 0)
 	tr := depositTransfer(10_000_000) // 10 USDT, multiplier 1
@@ -33,8 +42,8 @@ func TestInstantCreditLandsOncePerIdentity(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO deposit_transactions`).
 		WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, tr.From, tr.To, tr.Token, "10", tr.BlockNumber, tr.BlockHash).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`(?s)UPDATE deposit_transactions\s+SET status = 'credited'.*AND status = 'pending'`).
-		WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, true).
+	mock.ExpectExec(markCreditedPattern).
+		WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, true, tr.BlockHash).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 
 	credited, err := l.ProcessProvisional(t.Context(), tr, 6)
@@ -132,8 +141,9 @@ func TestRevokedDepositIsNeverCreditedAgain(t *testing.T) {
 	}
 }
 
-// A provisional row that rechecked clean and was replayed by the scanner must
-// not be credited twice when the final-credit path runs later.
+// TestInstantCreditThenFinalCreditAddsBalanceOnce replays an already credited
+// provisional observation through the final-credit path. Final processing must
+// leave the original grant as the only balance change.
 func TestInstantCreditThenFinalCreditAddsBalanceOnce(t *testing.T) {
 	l, mock, creditor := newProvisionalLedger(t, 0)
 	tr := depositTransfer(10_000_000)
@@ -142,8 +152,8 @@ func TestInstantCreditThenFinalCreditAddsBalanceOnce(t *testing.T) {
 	mock.ExpectExec(`INSERT INTO deposit_transactions`).
 		WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, tr.From, tr.To, tr.Token, "10", tr.BlockNumber, tr.BlockHash).
 		WillReturnResult(sqlmock.NewResult(1, 1))
-	mock.ExpectExec(`(?s)UPDATE deposit_transactions\s+SET status = 'credited'.*AND status = 'pending'`).
-		WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, true).
+	mock.ExpectExec(markCreditedPattern).
+		WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, true, tr.BlockHash).
 		WillReturnResult(sqlmock.NewResult(0, 1))
 	if credited, err := l.ProcessProvisional(t.Context(), tr, 6); err != nil || !credited {
 		t.Fatalf("instant credit: credited=%v err=%v", credited, err)

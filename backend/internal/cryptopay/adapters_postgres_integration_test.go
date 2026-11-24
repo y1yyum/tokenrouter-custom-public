@@ -4,19 +4,22 @@ package cryptopay
 
 import (
 	"math/big"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
+	"github.com/TokenFlux/TokenRouter/migrations"
 )
 
+// TestPostgresSweepPreviewTracksCreditedDepositsWithoutReservingFunds exercises
+// the planner against the shipped deposit and sweep schema. Preview reflects new
+// credits until a signed job reserves the balance.
 func TestPostgresSweepPreviewTracksCreditedDepositsWithoutReservingFunds(t *testing.T) {
 	db := isolatedSweepAlertPostgres(t)
-	for _, name := range []string{"261_crypto_deposit.sql", "266_crypto_sweep_jobs.sql"} {
-		migration, err := os.ReadFile(filepath.Join("..", "..", "migrations", name))
+	for _, name := range []string{"319_crypto_deposit.sql", "323_crypto_sweep_jobs.sql"} {
+		migration, err := migrations.FS.ReadFile(name)
 		require.NoError(t, err)
 		_, err = db.ExecContext(t.Context(), string(migration))
 		require.NoError(t, err)
@@ -35,8 +38,10 @@ func TestPostgresSweepPreviewTracksCreditedDepositsWithoutReservingFunds(t *test
 	}
 	deposit("first", "10", "credited")
 	reader := newBalanceReader(db, map[string]int{tokenDecimalsKey("bsc", token): 6})
-	planner := sweeper.NewPlanner(db, reader, sweeper.Config{GlobalThreshold: 1000,
-		MinPerAddress: map[string]float64{"bsc": 1}}, nil)
+	planner := sweeper.NewPlanner(db, reader, sweeper.Config{
+		GlobalThreshold: 1000,
+		MinPerAddress:   map[string]float64{"bsc": 1},
+	}, nil)
 	preview, err := planner.BuildManualPlan(t.Context())
 	require.NoError(t, err)
 	require.Len(t, preview.Entries, 1)
