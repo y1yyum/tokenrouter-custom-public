@@ -111,4 +111,3 @@ describe('compact provider cells', () => {
     wrapper.unmount()
   })
 })
-
