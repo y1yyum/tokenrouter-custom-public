@@ -28,10 +28,13 @@ vi.mock('@/composables/useBalanceDisplay', () => ({
 }))
 
 import { describe, expect, it, vi, beforeEach } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { mount, RouterLinkStub } from '@vue/test-utils'
+import { createPinia } from 'pinia'
 import { nextTick } from 'vue'
 
 import UsageTable from '../UsageTable.vue'
+import { getUsageTableColumns, type UsageTableRole } from '../usageTableColumns'
+import type { AdminUsageLog } from '@/api/usage.types'
 
 // UsageTable.spec.ts tests billing, identity, tooltip positioning, and IP lookup
 // behavior in usage rows. Table-slot stubs expose actual cell content, while clipboard
@@ -43,6 +46,17 @@ import UsageTable from '../UsageTable.vue'
 const messages: Record<string, string> = {
   'admin.usage.userDeletedBadge': 'Deleted',
   'usage.costDetails': 'Cost Breakdown',
+  'usage.costUnknown': 'Unknown',
+  'usage.costPartial': 'Partial',
+  'usage.providerCost': 'Provider cost',
+  'usage.imageFrameUnit': ' frames',
+  'usage.compactTable.modelMapping': 'Model mapping',
+  'usage.compactTable.modelDetails': 'Model details',
+  'usage.compactTable.copyUpstreamId': 'Copy upstream request ID',
+  'usage.compactTable.copyUserAgent': 'Copy user agent',
+  'admin.usage.billingTypeBalance': 'Balance',
+  'admin.usage.billingTypeSubscription': 'Subscription',
+  'admin.usage.requestSources.provider_test': 'Manual provider test',
   'admin.usage.inputCost': 'Input Cost',
   'admin.usage.outputCost': 'Output Cost',
   'admin.usage.cacheCreationCost': 'Cache Creation Cost',
@@ -273,7 +287,7 @@ describe('admin UsageTable request ID column', () => {
       },
     })
     expect(wrapper.text()).toContain('admin.usage.requestSources.group_probe')
-    expect(wrapper.text()).toContain('usage.costUnknown')
+    expect(wrapper.text()).toContain('Unknown')
     expect(wrapper.text()).not.toContain('#null')
     expect(wrapper.text()).not.toContain('A $0.000000')
     wrapper.unmount()
@@ -1442,4 +1456,357 @@ it('renders administrator cache-write anomaly badges and raw upstream tooltip de
   })
   expect(wrapper.find('[data-testid="cache-write-anomaly-badge"]').exists()).toBe(false)
   wrapper.unmount()
+})
+
+// Compact fixtures exercise the actual row slots in their canonical column order.
+// The caller may override either the record or the administrator billing flags.
+const CompactSlotTable = {
+  props: ['columns', 'data', 'density'],
+  template: `
+    <div :data-density="density">
+      <div v-for="row in data" :key="row.id">
+        <div v-for="column in columns" :key="column.key" :data-cell="column.key">
+          <slot :name="'cell-' + column.key" :row="row" />
+        </div>
+      </div>
+    </div>
+  `,
+}
+
+// compactUsageRow combines user-visible usage with administrator-only diagnostics
+// to prove that the shared table does not expose those fields in other layouts.
+const compactUsageRow = {
+  ...baseImageRow,
+  id: 19,
+  platform: 'openai',
+  created_at: '2025-11-25T14:06:18Z',
+  request_id: 'req-1234567890-complete',
+  upstream_request_id: 'upstream-1234567890-complete',
+  user_id: 7,
+  user: { id: 7, email: 'ada@example.test', deleted_at: '2025-11-01T00:00:00Z' },
+  api_key: { name: 'Team Key' },
+  group: { name: 'Team Group' },
+  provider: { id: 2, name: 'Private provider' },
+  inbound_endpoint: '/v1/responses',
+  upstream_endpoint: '/private/upstream/endpoint',
+  model: 'requested-model',
+  model_mapping_chain:
+    'requested-model → first-route-model → a-long-intermediate-route-model → routed-model',
+  upstream_model: 'routed-model',
+  upstream_model_mismatch: true,
+  upstream_response_model: 'actual-model',
+  requested_reasoning_effort: 'high',
+  reasoning_effort: 'low',
+  billing_mode: 'token',
+  billing_type: 0,
+  actual_cost: 0.25,
+  total_cost: 0.8,
+  provider_stats_cost: 0.97,
+  provider_rate_multiplier: 2,
+  input_cost: 0.15,
+  input_tokens: 160,
+  output_tokens: 42,
+  cache_read_tokens: 8,
+  cache_creation_tokens: 10,
+  cache_creation_30m_tokens: 7,
+  cache_creation_12h_tokens: 3,
+  cache_ttl_overridden: true,
+  cache_write_anomaly: { kind: 'partial_breakdown', reported_total: 10, reported_30m: 7 },
+  duration_ms: 2020,
+  ttft_ms: 804,
+  ttft_mode: 'first_event',
+  tps: 0,
+  detailed_timing: { provider_slot_acquired_ms: 120 },
+  user_agent: 'openai-python/1.68.2 Python/3.12 (extra data)',
+  ip_address: '2001:db8:1111:2222:3333:4444:5555:6666',
+} as AdminUsageLog
+
+// mountCompactUsage keeps the real clipboard buttons and disclosure controls mounted.
+function mountCompactUsage(
+  role: UsageTableRole,
+  row: AdminUsageLog = compactUsageRow,
+  flags: { showProviderBilling?: boolean; showStandardCost?: boolean } = {},
+) {
+  const pinia = createPinia()
+  pinia.state.value.auth = { user: { role: role === 'admin' ? 'admin' : 'user' } }
+  return mount(UsageTable, {
+    attachTo: document.body,
+    props: {
+      compactRole: role,
+      columns: getUsageTableColumns(role, (key) => messages[key] ?? key),
+      data: [row],
+      showIpGeoToolbar: false,
+      ...flags,
+    },
+    global: {
+      plugins: [pinia],
+      stubs: {
+        DataTable: CompactSlotTable,
+        Icon: true,
+        RouterLink: RouterLinkStub,
+        Teleport: true,
+        MotionTransition: { inheritAttrs: false, template: '<slot />' },
+      },
+    },
+  })
+}
+
+describe('compact UsageTable', () => {
+  beforeEach(() => {
+    clipboardMocks.copyToClipboard.mockReset().mockResolvedValue(true)
+    ipGeoMocks.getEntry.mockReturnValue({ status: 'idle' })
+    ipGeoMocks.fetchOne.mockReset().mockResolvedValue(true)
+  })
+
+  // An administrator can inspect long model mappings and timing, navigate to the
+  // user balance, copy exact header values, and query an IPv6 address in one row.
+  it('keeps administrator details and original values reachable in compact cells', async () => {
+    const wrapper = mountCompactUsage('admin')
+    try {
+      expect(wrapper.get('[data-density]').attributes('data-density')).toBe('compact')
+      expect(wrapper.findAll('[data-cell]')).toHaveLength(9)
+      const time = wrapper.get('[data-cell="time"] time')
+      expect(time.findAll('span')).toHaveLength(2)
+      expect(time.attributes('datetime')).toBe(compactUsageRow.created_at)
+      expect(time.attributes('title')).toMatch(/^2025-11-\d\d \d\d:\d\d:\d\d$/)
+      expect(wrapper.get('[data-cell="caller"]').text()).toMatch(/a\*\*\*a\s*#7\s*Deleted/)
+      await wrapper.get('button[data-test="usage-user-email"]').trigger('click')
+      expect(wrapper.emitted('userClick')).toEqual([[7, 'ada@example.test']])
+      const route = wrapper.get('[data-cell="route"]')
+      expect(route.text()).toContain('Private provider')
+      expect(route.get('[title="/private/upstream/endpoint"]').exists()).toBe(true)
+
+      const model = wrapper.get('[data-cell="model_spec"]')
+      expect(model.get('[data-testid="upstream-response-model"]').text()).toContain('actual-model')
+      const mapping = model.get('button[aria-label="Model mapping"]')
+      await mapping.trigger('click')
+      expect(mapping.attributes('aria-expanded')).toBe('true')
+      expect(
+        model
+          .get('[data-testid="usage-model-details"]')
+          .findAll('ol li')
+          .map((step) => step.text()),
+      ).toEqual([
+        'requested-model',
+        'first-route-model',
+        'a-long-intermediate-route-model',
+        'routed-model',
+      ])
+      expect(model.get('[data-testid="usage-model-details"]').text()).toMatch(/high\s*→\s*low/i)
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))
+
+      const tokens = wrapper.get('[data-cell="tokens"]')
+      expect(
+        tokens
+          .get('dl')
+          .findAll('dd')
+          .map((count) => count.text()),
+      ).toEqual(['160', '42', '8', '10'])
+      expect(tokens.text()).toContain('30m 7 · 12h 3')
+      expect(tokens.get('[data-testid="cache-write-anomaly-badge"]').exists()).toBe(true)
+      const tokenDetails = tokens.get('button[aria-label="usage.tokenDetails"]')
+      await tokenDetails.trigger('focus')
+      expect(wrapper.get('[data-testid="cache-write-anomaly-detail"]').text()).toContain(
+        'Partial split',
+      )
+      await tokenDetails.trigger('keydown', { key: 'Escape' })
+      expect(wrapper.find('[data-testid="token-detail-tooltip"]').exists()).toBe(false)
+
+      const performance = wrapper.get('[data-cell="performance"]')
+      expect(performance.text()).toContain('0.0 tok/s')
+      expect(performance.text()).toContain('804ms')
+      const timing = performance.get('button[aria-label="Detailed Timing"]')
+      await timing.trigger('focus')
+      expect(timing.attributes('aria-describedby')).toBe(
+        wrapper.get('[data-testid="timing-detail-tooltip"]').attributes('id'),
+      )
+      await timing.trigger('keydown', { key: 'Escape' })
+      expect(wrapper.find('[data-testid="timing-detail-tooltip"]').exists()).toBe(false)
+
+      const trace = wrapper.get('[data-cell="request_trace"]')
+      expect(trace.text()).toContain('req-12…lete')
+      expect(trace.text()).toContain('upstre…lete')
+      expect(trace.getComponent(RouterLinkStub).props('to')).toEqual({
+        path: '/admin/requests',
+        query: { request_id: compactUsageRow.request_id },
+      })
+      await trace.get('button[title="Copy request ID"]').trigger('click')
+      await trace.get('button[aria-label="Copy upstream request ID"]').trigger('click')
+      const network = wrapper.get('[data-cell="client_network"]')
+      expect(network.get('[title="' + compactUsageRow.ip_address + '"]').text()).toBe(
+        compactUsageRow.ip_address,
+      )
+      const ua = network.get('[title="' + compactUsageRow.user_agent + '"]')
+      expect(ua.text()).toBe('openai-python/1.68.2')
+      await network.get('button[aria-label="Copy user agent"]').trigger('click')
+      await network
+        .findAll('button')
+        .find((button) => button.text() === 'usage.ipGeo.fetch')!
+        .trigger('click')
+      expect(clipboardMocks.copyToClipboard.mock.calls.map(([value]) => value)).toEqual([
+        compactUsageRow.request_id,
+        compactUsageRow.upstream_request_id,
+        compactUsageRow.user_agent,
+      ])
+      expect(ipGeoMocks.fetchOne).toHaveBeenCalledWith(compactUsageRow.ip_address)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  // Team owners see read-only member attribution and personal accounts see the
+  // key and group. Neither layout may expose administrator-only data by any control.
+  it.each(['teamOwner', 'personal'] as const)(
+    'scopes sensitive fields for %s layout',
+    async (role) => {
+      const wrapper = mountCompactUsage(role)
+      try {
+        expect(wrapper.find('[data-test="usage-user-email"]').exists()).toBe(role === 'teamOwner')
+        expect(wrapper.find('button[data-test="usage-user-email"]').exists()).toBe(false)
+        expect(wrapper.get('[data-cell="caller"]').text()).toContain('Team Key')
+        expect(wrapper.get('[data-cell="route"]').text()).toBe('/v1/responses')
+        expect(wrapper.find('[data-testid="upstream-response-model"]').exists()).toBe(false)
+        expect(wrapper.find('[data-testid="cache-write-anomaly-badge"]').exists()).toBe(false)
+        expect(wrapper.find('button[aria-label="Detailed Timing"]').exists()).toBe(false)
+        expect(wrapper.find('button[aria-label="Copy upstream request ID"]').exists()).toBe(false)
+        expect(wrapper.get('[data-cell="request_trace"]').find('a').exists()).toBe(false)
+        expect(wrapper.html()).not.toContain(compactUsageRow.upstream_request_id)
+        expect(wrapper.html()).not.toContain('Private provider')
+
+        const cost = wrapper.get('[data-cell="cost"]')
+        expect(cost.text()).toContain('$0.250000')
+        expect(cost.text()).toContain('Balance')
+        expect(cost.find('[data-testid="usage-original-cost"]').exists()).toBe(false)
+        await cost.get('button[aria-label="Cost Breakdown"]').trigger('focus')
+        const details = wrapper.get('[data-testid="cost-detail-tooltip"]').text()
+        expect(details).toContain('$0.250000')
+        expect(details).not.toMatch(/\$0\.800000|\$0\.150000|\$1\.940000|Provider billed|Original/)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  // An image record exposes its measured dimensions and frame count to the user
+  // while the charge details retain only the user's actual amount.
+  it('keeps image observations available without exposing standard image prices', async () => {
+    const wrapper = mountCompactUsage('personal', {
+      ...compactUsageRow,
+      billing_mode: 'image',
+      image_frame_count: 12,
+      image_size_source: 'output',
+      image_input_size: '1024x1024',
+      image_output_size: '1536x1024',
+    })
+    try {
+      const tokens = wrapper.get('[data-cell="tokens"]')
+      expect(tokens.text()).toContain('2 images · 12 frames')
+      expect(tokens.text()).toContain('2K')
+      expect(tokens.find('button').exists()).toBe(false)
+
+      await wrapper.get('button[aria-label="Cost Breakdown"]').trigger('focus')
+      const detail = wrapper.get('[data-testid="cost-detail-tooltip"]').text()
+      expect(detail).toContain('Upstream output')
+      expect(detail).toContain('1536x1024')
+      expect(detail).toContain('$0.250000')
+      expect(detail).not.toMatch(/Per-image price|Image total price|Original|Provider billed/)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  // Only numeric 0 and 1 identify funding. Other values cannot imply a balance
+  // charge or change the stored mode displayed in the model cell.
+  it.each([
+    [0, 'Balance'],
+    [1, 'Subscription'],
+    [undefined, undefined],
+    [2, undefined],
+    ['0', undefined],
+    ['1', undefined],
+  ] as const)('uses only explicit numeric funding code %s', (billingType, label) => {
+    const row = {
+      ...compactUsageRow,
+      billing_type: billingType as number,
+      billing_mode: 'per_request',
+    }
+    const wrapper = mountCompactUsage('admin', row)
+    try {
+      const funding = wrapper.find('[data-testid="usage-billing-funding"]')
+      expect(funding.exists() ? funding.text() : undefined).toBe(label)
+      expect(wrapper.get('[data-cell="model_spec"]').text()).toContain('Per request')
+      expect(wrapper.get('[data-cell="tokens"]').text()).toContain('2 images')
+      expect(
+        wrapper
+          .get('[data-cell="tokens"]')
+          .find('button[aria-label="usage.tokenDetails"]')
+          .exists(),
+      ).toBe(false)
+    } finally {
+      wrapper.unmount()
+    }
+  })
+
+  // System costs keep the state reported by the server and never acquire customer
+  // billing labels, even when a row carries a default numeric funding field.
+  it.each([
+    ['unknown', 'Unknown', false],
+    ['partial', 'Partial', true],
+    ['calculated', '$1.940000', true],
+  ] as const)(
+    'uses recorded %s cost state for a system request',
+    async (state, summary, amountVisible) => {
+      const row = {
+        ...compactUsageRow,
+        request_source: 'provider_test',
+        system_usage: {
+          parent_request_id: 'test-run',
+          outcome: 'ok',
+          usage_state: 'complete',
+          cost_state: state,
+        },
+      }
+      const wrapper = mountCompactUsage('admin', row)
+      try {
+        expect(wrapper.get('[data-cell="caller"]').text()).toContain('Manual provider test')
+        const cost = wrapper.get('[data-cell="cost"]')
+        expect(cost.text()).toContain(summary)
+        expect(cost.text().includes('$1.940000')).toBe(amountVisible)
+        expect(cost.find('[data-testid="usage-billing-funding"]').exists()).toBe(false)
+        await cost.get('button[aria-label="Cost Breakdown"]').trigger('click')
+        const details = wrapper.get('[data-testid="cost-detail-tooltip"]').text()
+        expect(details).toContain(summary)
+        expect(details.includes('$1.940000')).toBe(amountVisible)
+        expect(details).not.toMatch(/User billed|\$0\.250000|\$0\.800000/)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
+
+  // Administrators can independently opt out of the provider charge, the standard
+  // amount, or both, including the detail panel.
+  it.each([
+    [true, false],
+    [false, true],
+  ])(
+    'applies separate provider and standard billing flags (%s, %s)',
+    async (showProviderBilling, showStandardCost) => {
+      const wrapper = mountCompactUsage('admin', compactUsageRow, {
+        showProviderBilling,
+        showStandardCost,
+      })
+      try {
+        const cost = wrapper.get('[data-cell="cost"]')
+        expect(cost.find('[data-testid="usage-original-cost"]').exists()).toBe(showStandardCost)
+        expect(cost.text().includes('$1.940000')).toBe(showProviderBilling)
+        await cost.get('button[aria-label="Cost Breakdown"]').trigger('focus')
+        const details = wrapper.get('[data-testid="cost-detail-tooltip"]').text()
+        expect(details.includes('$1.940000')).toBe(showProviderBilling)
+        expect(details.includes('$0.800000')).toBe(showStandardCost)
+      } finally {
+        wrapper.unmount()
+      }
+    },
+  )
 })
