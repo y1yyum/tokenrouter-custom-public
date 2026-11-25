@@ -28,8 +28,8 @@ afterEach(() => setActivePinia(undefined))
 
 /**
  * render mounts a request identifier with an authenticated role and memory router. It
- * waits for router readiness before mounting, returns the mutable auth store for role
- * changes, and lets the shared teardown unmount the component.
+ * waits for router readiness before mounting and returns the auth store and router
+ * for observing role changes and diagnostic navigation. Shared teardown unmounts it.
  */
 async function render(role: 'admin' | 'user', link = true) {
   const pinia = createPinia()
@@ -46,7 +46,7 @@ async function render(role: 'admin' | 'user', link = true) {
     props: { value: 'request-id', link },
     global: { plugins: [pinia, router], stubs: { Icon: true } },
   })
-  return { wrapper, auth }
+  return { wrapper, auth, router }
 }
 
 describe('请求 ID 的诊断入口权限', () => {
@@ -88,5 +88,52 @@ describe('请求 ID 的诊断入口权限', () => {
     const { wrapper } = await render('admin', false)
     expect(wrapper.find('a').exists()).toBe(false)
     expect(wrapper.find('button').exists()).toBe(true)
+  })
+
+  /**
+   * An administrator sees a shortened identifier with special characters in its
+   * original value. The tooltip, accessible link name, routed query, and clipboard
+   * all receive the original identifier.
+   */
+  it('紧凑 ID 保留全文提示、查询与复制', async () => {
+    const { wrapper, router } = await render('admin')
+    const id = '6d431b/raw+value&query=1be2'
+    await wrapper.setProps({ value: id, compact: true })
+
+    const link = wrapper.get('a')
+    expect(link.text()).toBe('6d431b…1be2')
+    expect(link.attributes('title')).toBe(id)
+    expect(link.attributes('aria-label')).toBe(id)
+    await link.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/admin/requests')
+    expect(router.currentRoute.value.query.request_id).toBe(id)
+    await wrapper.get('button').trigger('click')
+    expect(copyToClipboard).toHaveBeenCalledWith(id, 'requests.copied')
+  })
+
+  /**
+   * A regular user switches a compact detail cell to full display, then receives an
+   * empty identifier. The wrapping option takes priority and the empty cell offers no
+   * action. Neither display grants diagnostic access.
+   */
+  it('普通用户紧凑态可复制，完整展示优先，空值没有操作', async () => {
+    const { wrapper } = await render('user')
+    const id = '6d431b22-4d38-42f1-9f09-0f5a110b1be2'
+    await wrapper.setProps({ value: id, compact: true })
+
+    expect(wrapper.text()).toBe('6d431b…1be2')
+    expect(wrapper.get('.font-mono').attributes('title')).toBe(id)
+    expect(wrapper.find('a').exists()).toBe(false)
+    await wrapper.get('button').trigger('click')
+    expect(copyToClipboard).toHaveBeenCalledWith(id, 'requests.copied')
+
+    await wrapper.setProps({ full: true })
+    expect(wrapper.get('.break-all').text()).toBe(id)
+    expect(wrapper.find('a').exists()).toBe(false)
+
+    await wrapper.setProps({ value: null })
+    expect(wrapper.text()).toBe('-')
+    expect(wrapper.find('button').exists()).toBe(false)
   })
 })
