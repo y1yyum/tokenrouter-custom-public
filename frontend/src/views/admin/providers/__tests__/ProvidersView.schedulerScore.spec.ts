@@ -1,11 +1,11 @@
 import { useProtocolCatalogFixture } from '@/__tests__/helpers/protocolCatalog'
-import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 
 import ProvidersView from '../ProvidersView.vue'
 
 // ProvidersView.schedulerScore.spec.ts checks scheduler score rendering and
-// opt-in column preferences in the provider list. Fixtures distinguish grouped
+// merged status-column preferences in the provider list. Fixtures distinguish grouped
 // scores, an ungrouped base score, and missing data while list spies expose
 // whether score enrichment is requested.
 
@@ -77,18 +77,18 @@ const DataTableStub = {
   ],
   template: `
     <div data-test="data-table">
-      <div v-for="row in data" :key="row.id" :data-test="'scheduler-score-' + row.id">
-        <slot name="cell-scheduler_score" :row="row" />
+      <div v-for="row in data" :key="row.id">
+        <slot name="cell-status_schedule" :row="row" />
       </div>
     </div>
   `,
 }
 
-// mountView renders scheduler score slots for every mocked provider row.
-// Configure provider responses before mounting; the table stub renders
-// supplied slots even when the production column preference marks them hidden.
+// mountView captures each page so pending timers and detail overlays can be released.
+let wrapper: ReturnType<typeof mount>
+
 function mountView() {
-  return mount(ProvidersView, {
+  wrapper = mount(ProvidersView, {
     global: {
       stubs: {
         AppLayout: { template: '<div><slot /></div>' },
@@ -120,14 +120,16 @@ function mountView() {
         BulkEditProviderModal: true,
         PlatformTypeBadge: true,
         ProviderCapacityCell: true,
-        ProviderStatusIndicator: true,
+        ProviderStatusIndicator: { template: '<div><slot name="controls" /></div>' },
         ProviderTodayStatsCell: true,
         ProviderGroupsCell: true,
         ProviderUsageCell: true,
         Icon: true,
+        Teleport: true,
       },
     },
   })
+  return wrapper
 }
 
 // baseProvider supplies common active OpenAI fields so each score fixture
@@ -148,6 +150,8 @@ const baseProvider = {
 }
 
 describe('admin ProvidersView scheduler score column', () => {
+  afterEach(() => wrapper?.unmount())
+
   beforeEach(() => {
     // Reset the preference version between cases so score enrichment requests
     // are driven by the specific hidden-column scenario being exercised.
@@ -190,6 +194,13 @@ describe('admin ProvidersView scheduler score column', () => {
               sticky_score: 3,
               sticky_weighted_enabled: true,
             },
+            {
+              group_id: 16,
+              group_name: 'group-sixteen',
+              base_score: 0,
+              sticky_score_infinity: true,
+              sticky_weighted_enabled: true,
+            },
           ],
         },
         {
@@ -215,15 +226,14 @@ describe('admin ProvidersView scheduler score column', () => {
   })
 
   // An ungrouped provider has a base score without per-group scores. Its cell
-  // displays that value and the ungrouped label even when enrichment is
-  // disabled.
+  // displays that value and the ungrouped label with enrichment enabled.
   it('falls back to the base score for ungrouped providers instead of showing a dash', async () => {
     const wrapper = mountView()
     await flushPromises()
 
     expect(listProviders.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({
-        include_scheduler_score: '0',
+        include_scheduler_score: '1',
       }),
     )
 
@@ -231,7 +241,7 @@ describe('admin ProvidersView scheduler score column', () => {
     expect(ungroupedCell.exists()).toBe(true)
     expect(ungroupedCell.text()).toContain('1.234567')
     expect(ungroupedCell.text()).toContain('admin.providers.schedulerScore.ungrouped')
-    expect(ungroupedCell.text()).not.toBe('-')
+    expect(ungroupedCell.text()).not.toBe('—')
   })
 
   // A provider includes a named group and its scheduler score. The rendered
@@ -244,25 +254,25 @@ describe('admin ProvidersView scheduler score column', () => {
     expect(groupedCell.exists()).toBe(true)
     expect(groupedCell.text()).toContain('group-five')
     expect(groupedCell.text()).toContain('2')
+    const trigger = groupedCell.get('button[aria-label="admin.providers.columns.schedulerScore"]')
+    expect(trigger.text()).toBe('+1')
+    await trigger.trigger('click')
+    expect(wrapper.get('[role="dialog"]').text()).toContain('group-sixteen / 0 / +∞')
+    await wrapper.get('[role="dialog"]').trigger('keydown', { key: 'Escape' })
+    expect(trigger.attributes('aria-expanded')).toBe('false')
   })
 
-  // An older hidden-column preference predates scheduler-score opt-in.
-  // Mounting migrates scheduler_score into the hidden set and requests the
-  // list with score enrichment disabled.
-  it('keeps scheduler score hidden for old saved column settings until the admin opts in again', async () => {
+  // An old default-hidden score does not hide its merged status column.
+  it('still projects scheduler scores when only the old score field was hidden', async () => {
     localStorage.setItem('provider-hidden-columns', JSON.stringify(['today_stats']))
 
     mountView()
     await flushPromises()
 
     expect(listProviders.mock.calls[0]?.[2]).toEqual(
-      expect.objectContaining({
-        include_scheduler_score: '0',
-      }),
+      expect.objectContaining({ include_scheduler_score: '1' }),
     )
-    expect(JSON.parse(localStorage.getItem('provider-hidden-columns') || '[]')).toContain(
-      'scheduler_score',
-    )
+    expect(JSON.parse(localStorage.getItem('provider-hidden-columns') || '[]')).toEqual(['today_stats'])
   })
 
   // A current preference version leaves scheduler_score visible. The provider
@@ -291,7 +301,7 @@ describe('admin ProvidersView scheduler score column', () => {
 
     const emptyCell = wrapper.find('[data-test="scheduler-score-3"]')
     expect(emptyCell.exists()).toBe(true)
-    expect(emptyCell.text()).toBe('-')
+    expect(emptyCell.text()).toBe('—')
   })
 })
 

@@ -106,6 +106,12 @@ import type {
 import Icon from '@/components/icons/Icon.vue'
 import UsageProgressBar from './UsageProgressBar.vue'
 import { isUpstreamUsageQueryEnabled } from '@/utils/upstreamUsage'
+import {
+  normalizeUpstreamUsageResult,
+  resolveUpstreamUsageResult,
+  upstreamUsageLimits,
+  upstreamUsageUtilization,
+} from './providerUsagePresentation'
 
 /**
  * ProviderUpstreamUsageCell.vue renders manually queried upstream balances, limits, and
@@ -170,43 +176,8 @@ const { t } = useI18n()
  */
 const queryEnabled = computed(() => isUpstreamUsageQueryEnabled(props.provider))
 
-/**
- * monitorResult accepts a version-one CN snapshot with an adapter and parseable observation
- * time, then exposes its stored amounts before a manual result exists.
- */
-const monitorResult = computed<UpstreamUsageQueryResult | null>(() => {
-  if (!['kimi', 'zhipu', 'deepseek'].includes(props.provider.platform)) return null
-  const raw = props.provider.extra?.cn_usage_monitor_snapshot
-  if (!raw || typeof raw !== 'object') return null
-  const snapshot = raw as Record<string, unknown>
-  if (
-    snapshot.version !== 1 ||
-    typeof snapshot.adapter !== 'string' ||
-    typeof snapshot.observed_at !== 'string' ||
-    !Number.isFinite(Date.parse(snapshot.observed_at))
-  )
-    return null
-  return {
-    provider_id: props.provider.id,
-    adapter: snapshot.adapter,
-    observed_at: snapshot.observed_at,
-    provider: typeof snapshot.provider === 'string' ? snapshot.provider : props.provider.platform,
-    mode: typeof snapshot.mode === 'string' ? snapshot.mode : '',
-    unit: typeof snapshot.unit === 'string' ? snapshot.unit : undefined,
-    balance: snapshot.balance as UpstreamUsageQueryResult['balance'],
-    balances: snapshot.balances as UpstreamUsageQueryResult['balances'],
-    available: typeof snapshot.available === 'boolean' ? snapshot.available : undefined,
-    limits: snapshot.limits as UpstreamUsageQueryResult['limits'],
-    subscription: snapshot.subscription as UpstreamUsageQueryResult['subscription'],
-    expires_at: typeof snapshot.expires_at === 'string' ? snapshot.expires_at : undefined,
-  }
-})
-
-/**
- * effectiveResult chooses a present manual result before the saved monitor snapshot, keeping
- * manual query ownership with the parent page.
- */
-const effectiveResult = computed(() => props.result ?? monitorResult.value)
+// effectiveResult chooses a manual query result before the saved monitor snapshot.
+const effectiveResult = computed(() => resolveUpstreamUsageResult(props.provider, props.result))
 
 /**
  * formatNumber renders finite observations with compact million or billion suffixes when
@@ -269,27 +240,8 @@ const formatExactAmount = (value: number | null | undefined, unit?: string) => {
   return `${formatExactNumber(value)}${suffix}`
 }
 
-/**
- * normalizedUsage prefers the nested usage object and adapts older top-level response fields
- * into the same display shape when it is absent.
- */
-const normalizedUsage = computed(() => {
-  const result = effectiveResult.value
-  if (!result) return null
-  return (
-    result.usage ?? {
-      provider: result.provider || '',
-      mode: result.mode || '',
-      unit: result.unit,
-      balance: result.balance,
-      balances: result.balances,
-      available: result.available,
-      limits: result.limits,
-      subscription: result.subscription,
-      expires_at: result.expires_at,
-    }
-  )
-})
+// normalizedUsage adapts the response shape for all upstream details.
+const normalizedUsage = computed(() => normalizeUpstreamUsageResult(effectiveResult.value))
 
 /**
  * hasSeparateQuota identifies New API and Zivv observations whose balance and key-quota fields
@@ -396,26 +348,17 @@ const isPercentUsage = computed(() => normalizedUsage.value?.unit === 'PERCENT')
  * allLimits combines provider and subscription limits, and visibleLimits derives labels,
  * optional amounts, bounded bar geometry, and reset timestamps for display.
  */
-const allLimits = computed(() => {
-  const usage = normalizedUsage.value
-  return [...(usage?.limits ?? []), ...(usage?.subscription?.limits ?? [])]
-})
-
 const visibleLimits = computed(() =>
-  allLimits.value.map((limit) => ({
+  upstreamUsageLimits(normalizedUsage.value).map((limit) => ({
     name: limitDisplayName(limit.name),
     used: limit.used,
     limit: limit.limit,
     remaining: limit.remaining,
     hasAmount: limit.used != null || limit.limit != null || limit.remaining != null,
-    // Percentage windows already expose their observation through the bar label; suppress a
-    // duplicate raw used-versus-limit amount in that representation.
+    // The percentage bar already displays the observed amount.
     showAmount: !isPercentUsage.value && !isDuplicateLimit(limit),
     wideLabel: limitDisplayName(limit.name).length > 4,
-    utilization:
-      limit.limit && limit.limit > 0 && limit.used != null
-        ? Math.max(0, (limit.used / limit.limit) * 100)
-        : 0,
+    utilization: upstreamUsageUtilization(limit) ?? 0,
     resetAt: limit.reset_at ?? null,
     status: limit.status,
   })),

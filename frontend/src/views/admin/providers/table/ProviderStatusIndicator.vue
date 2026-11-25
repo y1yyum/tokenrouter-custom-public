@@ -1,5 +1,42 @@
 <template>
-  <div class="flex items-center gap-2">
+  <div v-if="compact" class="min-w-0 space-y-0.5 text-xs leading-4">
+    <div class="flex min-w-0 items-center gap-1">
+      <button
+        v-if="isTempUnschedulable && !isRateLimited && !isOverloaded"
+        type="button"
+        :class="['badge min-w-0 text-xs', statusClass]"
+        :title="t('admin.providers.status.viewTempUnschedDetails')"
+        @click="handleTempUnschedClick"
+      ><span class="truncate">{{ statusText }}</span></button>
+      <span v-else :class="['badge min-w-0 text-xs', compactStatusClass]">
+        <span class="truncate">{{ compactStatusText }}</span>
+      </span>
+      <ProviderCellDetails v-if="hasStatusDetails" :label="t('admin.providers.compact.statusDetails')">
+        <template #trigger><Icon name="more" size="xs" /></template>
+        <template #default="{ close }">
+          <div class="space-y-2">
+            <p v-if="provider.error_message && hasError" class="whitespace-pre-wrap break-words">{{ provider.error_message }}</p>
+            <p v-if="isRateLimited">{{ t('admin.providers.status.rateLimitedUntil', { time: formatDateTime(provider.rate_limit_reset_at) }) }}</p>
+            <p v-if="isOverloaded">{{ t('admin.providers.status.overloadedUntil', { time: formatDateTime(provider.overload_until) }) }}</p>
+            <div v-if="isTempUnschedulable">
+              <p>{{ tempUnschedRecoveryText }}</p>
+              <button type="button" class="rounded-compact text-link" @click="close(); handleTempUnschedClick()">
+                {{ t('admin.providers.status.viewTempUnschedDetails') }}
+              </button>
+            </div>
+            <ul v-if="activeModelStatuses.length" class="space-y-1 break-words">
+              <li v-for="item in activeModelStatuses" :key="item.kind + '-' + item.model">{{ modelRecoveryText(item) }}</li>
+            </ul>
+          </div>
+        </template>
+      </ProviderCellDetails>
+    </div>
+    <slot name="controls" />
+    <p v-if="compactRecoveryText" class="truncate text-gray-500 dark:text-gray-400" :title="compactRecoveryText">
+      {{ compactRecoveryText }}
+    </p>
+  </div>
+  <div v-else class="flex items-center gap-2">
     <!-- Rate Limit Display (429) - Two-line layout -->
     <div v-if="isRateLimited" class="flex flex-col items-center gap-1">
       <span class="badge text-xs badge-warning">{{ t('admin.providers.status.rateLimited') }}</span>
@@ -120,19 +157,7 @@
           class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-max max-w-[320px] -translate-x-1/2 whitespace-nowrap tooltip-panel rounded-compact px-3 py-2 text-center text-xs leading-relaxed opacity-0 transition-opacity group-hover:opacity-100"
         >
           {{
-            item.kind === 'credits_exhausted'
-              ? t('admin.providers.status.creditsExhaustedUntil', {
-                  time: formatDateTimeToMinute(item.reset_at),
-                })
-              : item.kind === 'credits_active'
-                ? t('admin.providers.status.modelCreditOveragesUntil', {
-                    model: formatScopeName(item.model),
-                    time: formatDateTimeToMinute(item.reset_at),
-                  })
-                : t('admin.providers.status.modelRateLimitedUntil', {
-                    model: formatScopeName(item.model),
-                    time: formatDateTimeToMinute(item.reset_at),
-                  })
+            modelRecoveryText(item)
           }}
           <div class="tooltip-caret -bottom-1 left-1/2 -translate-x-1/2 border-b border-r"></div>
         </div>
@@ -164,6 +189,7 @@
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import Icon from '@/components/icons/Icon.vue'
+import ProviderCellDetails from './ProviderCellDetails.vue'
 import type { Provider } from '@/api/admin/providers.types'
 import {
   formatCountdown,
@@ -200,6 +226,7 @@ const { t } = useI18n()
  */
 const props = defineProps<{
   provider: Provider // current provider availability record
+  compact?: boolean // Keep the row summary separate from recovery details.
 }>()
 
 /**
@@ -436,6 +463,43 @@ const statusText = computed(() => {
   }
   return t(`admin.providers.status.${props.provider.status}`)
 })
+
+// Compact status uses the same precedence as the regular status badges.
+const compactStatusText = computed(() => {
+  if (isRateLimited.value) return t('admin.providers.status.rateLimited')
+  if (isOverloaded.value) return t('admin.providers.status.overloaded')
+  return statusText.value
+})
+const compactStatusClass = computed(() => {
+  if (isRateLimited.value) return 'badge-warning'
+  if (isOverloaded.value) return 'badge-danger'
+  return statusClass.value
+})
+const compactRecoveryText = computed(() => {
+  if (isRateLimited.value) return rateLimitResumeText.value
+  if (isOverloaded.value) return overloadCountdown.value
+  return tempUnschedRecoveryText.value
+})
+const hasStatusDetails = computed(() =>
+  Boolean(
+    (hasError.value && props.provider.error_message) ||
+    isRateLimited.value ||
+    isOverloaded.value ||
+    isTempUnschedulable.value ||
+    activeModelStatuses.value.length,
+  ),
+)
+
+// modelRecoveryText identifies both the model scope and its exact recovery time.
+function modelRecoveryText(item: ProviderModelStatusItem) {
+  const time = formatDateTimeToMinute(item.reset_at)
+  if (item.kind === 'credits_exhausted') {
+    return t('admin.providers.status.creditsExhaustedUntil', { time })
+  }
+  const model = formatScopeName(item.model)
+  const key = item.kind === 'credits_active' ? 'modelCreditOveragesUntil' : 'modelRateLimitedUntil'
+  return t('admin.providers.status.' + key, { model, time })
+}
 
 /**
  * handleTempUnschedClick emits the current provider for temporary-suspension inspection when

@@ -20,7 +20,7 @@ import type { Provider, ProviderUsageInfo, WindowStats } from '@/api/admin/provi
 
 // useProviderUsage owns daily statistics, queued usage batches, and manual
 // usage-refresh signals for the provider page. Pass live rows, selected IDs,
-// and the shared hidden-column set. Daily statistics and usage batches retain
+// and a live usage-column visibility predicate. Daily statistics and usage batches retain
 // separate request ownership because one covers a visible page and the other
 // covers individual providers.
 //
@@ -31,7 +31,7 @@ import type { Provider, ProviderUsageInfo, WindowStats } from '@/api/admin/provi
 export function useProviderUsage(
   providers: Ref<Provider[]>,
   selIds: Readonly<Ref<number[]>>,
-  hiddenColumns: ReadonlySet<string>,
+  isUsageVisible: () => boolean,
 ) {
   // The translator and application store supply messages for this controller
   // while its request and selection state belongs to this mounted page.
@@ -296,26 +296,22 @@ export function useProviderUsage(
   // remains current. Missing provider entries become zero-valued records, while
   // transport failures retain the current data and expose an error. This keeps an
   // earlier page request from replacing a later page's metrics.
+  const invalidateTodayStats = () => {
+    todayStatsReqSeq.value += 1
+    todayStatsLoading.value = false
+    todayStatsError.value = null
+  }
+
+  // refreshTodayStatsBatch owns one batch for the currently accepted, visible page.
   const refreshTodayStatsBatch = async () => {
-    // Why this checks both columns:
-    // - today_stats column shows dedicated today's metrics.
-    // - usage column also embeds today's stats for Key/Bedrock rows.
-    // So we only skip fetching when BOTH columns are hidden.
-    if (hiddenColumns.has('today_stats') && hiddenColumns.has('usage')) {
-      todayStatsLoading.value = false
-      todayStatsError.value = null
-      return
-    }
-
     const providerIDs = providers.value.map((provider) => provider.id)
-    const reqSeq = ++todayStatsReqSeq.value
-    if (providerIDs.length === 0) {
+    if (!isUsageVisible() || providerIDs.length === 0) {
+      invalidateTodayStats()
       todayStatsByProviderId.value = {}
-      todayStatsError.value = null
-      todayStatsLoading.value = false
       return
     }
 
+    const reqSeq = ++todayStatsReqSeq.value
     todayStatsLoading.value = true
     todayStatsError.value = null
 
@@ -333,7 +329,7 @@ export function useProviderUsage(
       todayStatsByProviderId.value = nextStats
     } catch (error) {
       if (reqSeq !== todayStatsReqSeq.value) return
-      todayStatsError.value = 'Failed'
+      todayStatsError.value = t('admin.providers.usageError')
       console.error('Failed to load provider today stats:', error)
     } finally {
       if (reqSeq === todayStatsReqSeq.value) {
@@ -443,6 +439,7 @@ export function useProviderUsage(
     handleProviderUsageLoaded,
     queueBatchedUsage,
     refreshTodayStatsBatch,
+    invalidateTodayStats,
     bulkUsageLoading,
     handleBulkQueryUsage,
   }

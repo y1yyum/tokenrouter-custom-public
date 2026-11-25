@@ -103,7 +103,7 @@ const DataTableStub = {
       <span v-for="column in columns" :key="column.key" data-test="column-key">{{ column.key }}</span>
       <div v-for="row in data" :key="row.id">
         <div data-test="select-row"><slot name="cell-select" :row="row" /></div>
-        <slot name="cell-created_at" :value="row.created_at" :row="row" />
+        <slot name="cell-timestamps" :row="row" />
         <slot name="cell-actions" :row="row" />
       </div>
     </div>
@@ -345,10 +345,8 @@ describe('admin ProvidersView bulk edit scope', () => {
     expect(modal.attributes('data-types')).toBe('apikey,oauth,service_account')
   })
 
-  // A fresh provider list contains a row with a creation timestamp. Its
-  // columns expose created_at with the translated label and sorting enabled by
-  // default.
-  it('renders the created_at column by default', async () => {
+  // Creation time remains visible and sortable inside the composite timestamp column.
+  it('renders the creation timestamp and offers the corresponding sort by default', async () => {
     listProviders.mockResolvedValue({
       items: [
         {
@@ -411,16 +409,15 @@ describe('admin ProvidersView bulk edit scope', () => {
     await flushPromises()
 
     const columnKeys = wrapper.findAll('[data-test="column-key"]').map((node) => node.text())
-    expect(columnKeys).toContain('created_at')
-    const columns = wrapper.getComponent(DataTableStub).props('columns') as Array<{
-      key: string // table column identifier
-      label: string // translated display label
-      sortable: boolean // column supports sorting
-    }>
-    expect(columns.find((column) => column.key === 'created_at')).toMatchObject({
-      label: 'admin.providers.columns.createdAt',
-      sortable: true,
+    expect(columnKeys).toContain('timestamps')
+    const columns = wrapper.getComponent(DataTableStub).props('columns')
+    expect(columns.find((column: { key: string }) => column.key === 'timestamps')).toMatchObject({
+      label: 'admin.providers.compact.timestamps',
+      sortOptions: expect.arrayContaining([
+        { key: 'created_at', label: 'admin.providers.compact.created' },
+      ]),
     })
+    expect(wrapper.text()).toContain('03-07')
   })
 
   // Two privacy updates return different privacy modes despite both resolving
