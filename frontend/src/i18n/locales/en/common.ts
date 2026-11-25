@@ -46,6 +46,8 @@ export default {
     all: 'All',
     selectAll: 'Select all',
     reorderColumn: 'Drag to move {column}, or use the left and right arrow keys',
+    sortAscending: 'Ascending',
+    sortDescending: 'Descending',
     none: 'None',
     or: 'or',
     noData: 'No data',
