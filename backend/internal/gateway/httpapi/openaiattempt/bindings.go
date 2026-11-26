@@ -277,8 +277,8 @@ type openAIExecutionDependencies struct {
 // New binds shared attempt operations and HTTP helpers into a reusable runtime.
 // Callers supply a nonnil Support and the callbacks required by their execution
 // paths. The copied binding values retain shared service references; Open
-// creates fresh request state, and completion submission uses Support's
-// image-count policy.
+// creates fresh request state. Forwarded results retain their billing task when
+// the completion queue is full or stopped.
 func New(b Bindings) *Runtime {
 	support := b.Support
 	output := gatewayhttp.DefaultOpenAIErrorOutput()
@@ -316,19 +316,7 @@ func New(b Bindings) *Runtime {
 			return support.RecordCyberPolicyIfMarked(c, key, provider, sub, model, failed, body, fields, hash, compact...)
 		},
 		submitOpenAIUsageRecordTask: func(c *gin.Context, result *forwardcore.OpenAIResult, task completion.UsageRecordTask) {
-			if result != nil && result.ResponsesSettlement != nil {
-				support.Submission.SubmitMandatory(c, task)
-				return
-			}
-			images := 0
-			if result != nil {
-				images = result.ImageCount
-			}
-			// Completion has captured request values before
-			// reaching this callback. Use observed image count to
-			// select Submission's queue and fallback policy for
-			// that task.
-			support.Submission.SubmitImages(c.Request.Context(), images, task)
+			support.Submission.SubmitResult(c.Request.Context(), result != nil, task)
 		},
 	}
 	return &Runtime{dependencies: d}

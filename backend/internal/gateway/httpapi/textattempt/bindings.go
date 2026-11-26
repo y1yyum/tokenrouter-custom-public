@@ -227,7 +227,7 @@ func New(b Bindings) *Runtime {
 		handleFailoverExhausted:           output.Exhausted,
 		handleFailoverExhaustedSimple:     output.ExhaustedStatus,
 		ensureForwardErrorResponse:        output.EnsureResponse,
-		submitUsageRecordTask:             b.Submission.Submit,
+		submitUsageRecordTask:             b.Submission.SubmitMandatory,
 		prepareGatewayAttemptRequest: func(ctx context.Context, parsed *requeststate.ParsedRequest, body []byte, key *apikey.APIKey, model string) (*requeststate.ParsedRequest, routing.GroupMappingResult, error) {
 			return gatewayhttp.PrepareGroupAttempt(ctx, parsed, body, key, model, b.PlanRoute)
 		},
