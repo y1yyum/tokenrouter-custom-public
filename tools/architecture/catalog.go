@@ -113,7 +113,7 @@ github.com/stretchr/testify/suite`},
 
 	moduleDependencies = map[string]dependencySet{
 		"internal/bstats": {Production: "internal/bstats/... internal/settings", Tests: ""},
-		"internal/plugin": {Production: `internal/plugin/... internal/pkg/apperror internal/server/... internal/identity/httpapi/authctx ent/... plugin-sdk/go/...`, Tests: `internal/testutil/postgrescontainer internal/infra/crypto internal/identity migrations`},
+		"internal/plugin": {Production: `internal/plugin/... internal/pkg/apperror internal/server/... internal/identity/httpapi/authctx ent/... plugin-sdk/go/...`, Tests: `internal/testutil/assertion internal/testutil/postgrescontainer internal/infra/crypto internal/identity migrations`},
 		"internal/mcp": {Production: `internal/mcp/... internal/identity internal/identity/provider internal/identity/httpapi internal/identity/httpapi/authctx
 internal/audit internal/server/adminapi internal/server/httpx`, Tests: `ent ent/runtime internal/identity/postgres internal/infra/crypto internal/testutil/postgrescontainer migrations`},
 		"internal/requestlog": {Production: `internal/usage internal/requestlog/... internal/infra/telemetry/... internal/identity/httpapi/authctx internal/server/httpx`, Tests: `internal/testutil/postgrescontainer migrations`},
@@ -150,7 +150,7 @@ migrations`},
 internal/infra/postgres/... internal/infra/telemetry/... internal/pkg/ internal/server/httpx
 internal/settings`, Tests: ""},
 		"internal/backup": {Production: `internal/server/adminapi internal/backup/... internal/identity/httpapi/authctx internal/infra/telemetry/... internal/pkg/
-internal/server/httpx`, Tests: "internal/identity internal/infra/postgres/..."},
+internal/server/httpx`, Tests: "internal/testutil/assertion internal/identity internal/infra/postgres/..."},
 		"internal/batchimage": {Production: `internal/provider/modelrules internal/modelcatalog ent/... internal/provider internal/provider/provider internal/apikey internal/batchimage/...
 internal/billing internal/gateway/httpapi internal/infra/postgres/... internal/infra/redis/... internal/infra/telemetry/...
 internal/pkg/ internal/protocol internal/protocol/wirejson internal/routing internal/routing/capability
@@ -167,7 +167,7 @@ internal/server/httpx internal/server/middleware internal/settings`, Tests: `int
 internal/testutil/rediscontainer internal/testutil/sqlite internal/upstream/grok
 internal/upstream/openai`},
 		"internal/config": {Production: `internal/config/... internal/identity/authconfig internal/scheduler/policy
-internal/server/clientip/policy internal/server/httpconfig`, Tests: ""},
+internal/server/clientip/policy internal/server/httpconfig`, Tests: "internal/testutil/assertion"},
 		"internal/creative": {Production: `internal/provider/modelrules internal/server/adminapi internal/modelcatalog ent/... internal/provider internal/provider/provider internal/billing internal/billing/pricing
 internal/creative/... internal/identity/httpapi/authctx internal/infra/postgres/... internal/infra/redis/... internal/infra/telemetry/... internal/pkg/
 internal/protocol internal/protocol/gemini internal/routing internal/routing/capability internal/routing/modelmap
@@ -265,7 +265,7 @@ internal/upstream/antigravity internal/upstream/grok internal/usage`, Tests: "in
 		"internal/setup": {Production: `internal/app/bootstrap internal/config internal/identity internal/infra/telemetry/...
 internal/server/httpx internal/setup/...`, Tests: ""},
 		"internal/site": {Production: `internal/server/adminapi ent/... internal/identity/httpapi/authctx internal/infra/postgres/... internal/pkg/
-internal/server/httpx internal/settings internal/site/...`, Tests: "internal/testutil/postgrescontainer"},
+internal/server/httpx internal/settings internal/site/...`, Tests: "internal/testutil/assertion internal/testutil/postgrescontainer"},
 		"internal/team": {Production: `internal/server/adminapi internal/billing internal/identity internal/identity/httpapi/authctx internal/pkg/
 internal/server/httpx internal/settings internal/team/... internal/usage/postgres/query`, Tests: `internal/apikey internal/apikey/postgres internal/billing/postgres internal/notification
 internal/notification/smtp internal/notification/testkit internal/site`},

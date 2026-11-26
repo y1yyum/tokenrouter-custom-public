@@ -15,6 +15,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/testutil/assertion"
 )
 
 // TestUpgradeConfigFilePreservesBackup exercises durable migration and a second load.
@@ -175,7 +177,7 @@ func TestUpgradeReadOnlyDirectoryFailsBeforeReplacement(t *testing.T) {
 		account, err := user.Current()
 		require.NoError(t, err)
 		sid := "*" + account.Uid
-		acl := filepath.Join(os.Getenv("SystemRoot"), "System32", "icacls.exe")
+		const acl = "icacls.exe"
 		output, err := exec.CommandContext(t.Context(), acl, dir, "/deny", sid+":(WD)").CombinedOutput()
 		require.NoError(t, err, "%s", output)
 		t.Cleanup(func() {
@@ -303,7 +305,9 @@ func TestUpgradePreservesConfigSymlink(t *testing.T) {
 			file := filepath.Join(dir, "config.yaml")
 			raw := []byte("server:\n  port: 9090\n")
 			require.NoError(t, os.WriteFile(target, raw, 0o640))
-			require.NoError(t, os.Symlink("managed/runtime.yaml", file))
+			originalInfo, err := os.Stat(target)
+			require.NoError(t, err)
+			assertion.Symlink(t, "managed/runtime.yaml", file)
 			env := upgradeEnvironment{}
 			if fallback {
 				resolved, err := filepath.EvalSymlinks(target)
@@ -314,14 +318,14 @@ func TestUpgradePreservesConfigSymlink(t *testing.T) {
 					return syscall.EBUSY
 				}
 			}
-			_, err := upgradeConfigFile(file, true, env)
+			_, err = upgradeConfigFile(file, true, env)
 			require.NoError(t, err)
 			link, err := os.Readlink(file)
 			require.NoError(t, err)
-			require.Equal(t, "managed/runtime.yaml", link)
+			require.Equal(t, filepath.Join("managed", "runtime.yaml"), link)
 			info, err := os.Stat(target)
 			require.NoError(t, err)
-			require.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+			require.Equal(t, originalInfo.Mode().Perm(), info.Mode().Perm())
 			backup, err := os.ReadFile(file + ".v1.bak")
 			require.NoError(t, err)
 			require.Equal(t, raw, backup)
@@ -342,7 +346,7 @@ func TestUpgradePreservesConfigSymlink(t *testing.T) {
 func TestWriteConfigFileRejectsDanglingSymlink(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.Symlink("missing.yaml", file))
+	assertion.Symlink(t, "missing.yaml", file)
 	require.ErrorIs(t, WriteConfigFile(file, []byte("config_version: 2\n")), os.ErrNotExist)
 	link, err := os.Readlink(file)
 	require.NoError(t, err)
@@ -354,24 +358,34 @@ func TestWriteConfigFileRejectsDanglingSymlink(t *testing.T) {
 // A retry with the same PID must succeed without reusing, following, or deleting
 // either the stale bytes or a preexisting temporary symlink.
 func TestUpgradeIgnoresStaleTemporaryFiles(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(file, []byte("server: {port: 9090}\n"), 0o600))
-	stale := filepath.Join(dir, fmt.Sprintf(".config.yaml.tmp-%d", os.Getpid()))
-	require.NoError(t, os.WriteFile(stale, []byte("interrupted write"), 0o600))
-	link := filepath.Join(dir, ".config.yaml.tmp-preexisting")
-	require.NoError(t, os.Symlink(filepath.Base(stale), link))
-	_, err := upgradeConfigFile(file, true, upgradeEnvironment{})
-	require.NoError(t, err)
-	raw, err := os.ReadFile(stale)
-	require.NoError(t, err)
-	require.Equal(t, "interrupted write", string(raw))
-	_, err = os.Readlink(link)
-	require.NoError(t, err)
-	temps, err := filepath.Glob(filepath.Join(dir, ".config.yaml.tmp-*"))
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{stale, link}, temps)
-	loaded, err := loadFrom(file, true, upgradeEnvironment{}, true)
-	require.NoError(t, err)
-	require.Equal(t, 9090, loaded.Server.Port)
+	for _, withLink := range []bool{false, true} {
+		t.Run(fmt.Sprintf("symlink_%t", withLink), func(t *testing.T) {
+			dir := t.TempDir()
+			file := filepath.Join(dir, "config.yaml")
+			require.NoError(t, os.WriteFile(file, []byte("server: {port: 9090}\n"), 0o600))
+			stale := filepath.Join(dir, fmt.Sprintf(".config.yaml.tmp-%d", os.Getpid()))
+			require.NoError(t, os.WriteFile(stale, []byte("interrupted write"), 0o600))
+			link := filepath.Join(dir, ".config.yaml.tmp-preexisting")
+			wantTemps := []string{stale}
+			if withLink {
+				assertion.Symlink(t, filepath.Base(stale), link)
+				wantTemps = append(wantTemps, link)
+			}
+			_, err := upgradeConfigFile(file, true, upgradeEnvironment{})
+			require.NoError(t, err)
+			raw, err := os.ReadFile(stale)
+			require.NoError(t, err)
+			require.Equal(t, "interrupted write", string(raw))
+			if withLink {
+				_, err = os.Readlink(link)
+				require.NoError(t, err)
+			}
+			temps, err := filepath.Glob(filepath.Join(dir, ".config.yaml.tmp-*"))
+			require.NoError(t, err)
+			require.ElementsMatch(t, wantTemps, temps)
+			loaded, err := loadFrom(file, true, upgradeEnvironment{}, true)
+			require.NoError(t, err)
+			require.Equal(t, 9090, loaded.Server.Port)
+		})
+	}
 }

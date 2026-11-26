@@ -10,6 +10,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/TokenFlux/TokenRouter/internal/plugin"
+	"github.com/TokenFlux/TokenRouter/internal/testutil/assertion"
 )
 
 // TestPackageAssetLookupIsLocalAndBoundsDescriptorGrowth opens a published package and then appends bytes after acquiring its asset handle.
@@ -56,19 +57,21 @@ func TestPackageAssetRejectsLinkedAndEscapingFiles(t *testing.T) {
 	require.NoError(t, err)
 	local, err := files.Ensure(t.Context(), uploadReference(upload))
 	require.NoError(t, err)
-	name := filepath.Join(local.Directory, "frontend/index.js")
-	require.NoError(t, os.Remove(name))
-	require.NoError(t, os.Symlink(filepath.Join(local.Directory, "plugin.json"), name))
-	_, err = files.Open(t.Context(), local, "frontend/index.js", 8<<20)
-	require.ErrorIs(t, err, plugin.ErrPackageMissing)
-	require.NoError(t, os.RemoveAll(filepath.Join(local.Directory, "frontend")))
-	require.NoError(t, os.Mkdir(filepath.Join(local.Directory, "relocated"), 0o700))
-	require.NoError(t, os.WriteFile(filepath.Join(local.Directory, "relocated/index.js"), []byte("globalThis.fixture = true;"), 0o600))
-	require.NoError(t, os.Symlink("relocated", filepath.Join(local.Directory, "frontend")))
-	_, err = files.Open(t.Context(), local, "frontend/index.js", 8<<20)
-	require.ErrorIs(t, err, plugin.ErrPackageMissing)
 	_, err = files.Local(t.Context(), plugin.PackageRef{PluginID: "../test.plugin", Version: "1.0.0"})
 	require.ErrorIs(t, err, plugin.ErrPackageMissing)
 	_, err = files.Local(t.Context(), plugin.PackageRef{PluginID: "test.plugin", Version: "../1.0.0"})
 	require.ErrorIs(t, err, plugin.ErrPackageMissing)
+	t.Run("linked assets", func(t *testing.T) {
+		name := filepath.Join(local.Directory, "frontend/index.js")
+		require.NoError(t, os.Remove(name))
+		assertion.Symlink(t, filepath.Join(local.Directory, "plugin.json"), name)
+		_, err := files.Open(t.Context(), local, "frontend/index.js", 8<<20)
+		require.ErrorIs(t, err, plugin.ErrPackageMissing)
+		require.NoError(t, os.RemoveAll(filepath.Join(local.Directory, "frontend")))
+		require.NoError(t, os.Mkdir(filepath.Join(local.Directory, "relocated"), 0o700))
+		require.NoError(t, os.WriteFile(filepath.Join(local.Directory, "relocated/index.js"), []byte("globalThis.fixture = true;"), 0o600))
+		assertion.Symlink(t, "relocated", filepath.Join(local.Directory, "frontend"))
+		_, err = files.Open(t.Context(), local, "frontend/index.js", 8<<20)
+		require.ErrorIs(t, err, plugin.ErrPackageMissing)
+	})
 }

@@ -14,6 +14,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
 	"github.com/TokenFlux/TokenRouter/internal/site"
 	"github.com/TokenFlux/TokenRouter/internal/site/filesystem"
+	"github.com/TokenFlux/TokenRouter/internal/testutil/assertion"
 )
 
 // pageMenuFixture exposes a normal guide and an administrator-only page to handlers.
@@ -31,9 +32,6 @@ func TestPageHTTPBoundaryAndVisibility(t *testing.T) {
 	data := t.TempDir()
 	store := filesystem.New(data)
 	pages := filepath.Join(data, "pages")
-	outside := filepath.Join(t.TempDir(), "outside.md")
-	require.NoError(t, os.WriteFile(outside, []byte("private-fixture"), 0o600))
-	require.NoError(t, os.Symlink(outside, filepath.Join(pages, "guide.md")))
 	require.NoError(t, os.WriteFile(filepath.Join(pages, "private.md"), []byte("admin content"), 0o600))
 	h := NewPageHandler(site.NewPages(store, pageMenuFixture{}))
 	router := gin.New()
@@ -58,7 +56,7 @@ func TestPageHTTPBoundaryAndVisibility(t *testing.T) {
 		path, role string // requested URL path and caller role header
 		status     int    // expected response status
 	}{
-		{"/api/v1/pages/guide", "", 401}, {"/api/v1/pages/guide", "user", 404}, {"/api/v1/pages/private", "user", 404}, {"/api/v1/pages/private", "admin", 200}, {"/api/v1/pages", "user", 403}, {"/api/v1/pages", "admin", 200}, {"/api/v1/pages/private/images/x.png", "admin", 404},
+		{"/api/v1/pages/guide", "", 401}, {"/api/v1/pages/private", "user", 404}, {"/api/v1/pages/private", "admin", 200}, {"/api/v1/pages", "user", 403}, {"/api/v1/pages", "admin", 200}, {"/api/v1/pages/private/images/x.png", "admin", 404},
 	} {
 		request := httptest.NewRequest(http.MethodGet, test.path, nil)
 		request.Header.Set("X-Fixture-Role", test.role)
@@ -67,6 +65,17 @@ func TestPageHTTPBoundaryAndVisibility(t *testing.T) {
 		require.Equal(t, test.status, response.Code, test.path)
 		require.NotContains(t, response.Body.String(), "private-fixture")
 	}
+	t.Run("external markdown", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "outside.md")
+		require.NoError(t, os.WriteFile(outside, []byte("private-fixture"), 0o600))
+		assertion.Symlink(t, outside, filepath.Join(pages, "guide.md"))
+		request := httptest.NewRequest(http.MethodGet, "/api/v1/pages/guide", nil)
+		request.Header.Set("X-Fixture-Role", "user")
+		response := httptest.NewRecorder()
+		router.ServeHTTP(response, request)
+		require.Equal(t, http.StatusNotFound, response.Code)
+		require.NotContains(t, response.Body.String(), "private-fixture")
+	})
 }
 
 // TestPageImagesCannotReadMarkdown supplies translated bodies, ordinary documents, and a disguised symlink.
@@ -87,7 +96,6 @@ func TestPageImagesCannotReadMarkdown(t *testing.T) {
 	} {
 		require.NoError(t, os.WriteFile(filepath.Join(dir, path), []byte(body), 0o600))
 	}
-	require.NoError(t, os.Symlink(filepath.Join(dir, "en.md"), filepath.Join(dir, "alias.png")))
 	handler := NewPageHandler(site.NewPages(store, pageMenuFixture{}))
 	router := gin.New()
 	auth := func(c *gin.Context) {
@@ -96,7 +104,7 @@ func TestPageImagesCannotReadMarkdown(t *testing.T) {
 		}
 	}
 	handler.Register(router.Group("/api/v1"), auth, auth)
-	for _, name := range []string{"en.md", "en%2emd", "zh-Hans.md", "notes.txt", "example.html", "alias.png", "alias.png?locale=en"} {
+	for _, name := range []string{"en.md", "en%2emd", "zh-Hans.md", "notes.txt", "example.html"} {
 		response := httptest.NewRecorder()
 		router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/pages/guide/images/"+name, nil))
 		require.Equal(t, http.StatusNotFound, response.Code, name)
@@ -119,4 +127,13 @@ func TestPageImagesCannotReadMarkdown(t *testing.T) {
 		require.Equal(t, test.status, response.Code, test.path)
 		require.Equal(t, test.body, response.Body.String(), test.path)
 	}
+	t.Run("linked image", func(t *testing.T) {
+		assertion.Symlink(t, filepath.Join(dir, "en.md"), filepath.Join(dir, "alias.png"))
+		for _, name := range []string{"alias.png", "alias.png?locale=en"} {
+			response := httptest.NewRecorder()
+			router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/v1/pages/guide/images/"+name, nil))
+			require.Equal(t, http.StatusNotFound, response.Code, name)
+			require.Empty(t, response.Body.String())
+		}
+	})
 }

@@ -10,6 +10,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/pkg/locale"
 	"github.com/TokenFlux/TokenRouter/internal/site"
+	"github.com/TokenFlux/TokenRouter/internal/testutil/assertion"
 )
 
 // TestLocalizedPageFiles creates translated Markdown, language assets, and shared images.
@@ -35,19 +36,21 @@ func TestLocalizedPageFiles(t *testing.T) {
 	selected := locale.WithLanguage(ctx, "en")
 	image, err := files.ImagePath(selected, "guide", "logo.png")
 	require.NoError(t, err)
-	require.Contains(t, image, "/guide/en/logo.png")
+	require.Equal(t, mustEvalSymlinks(t, filepath.Join(dir, "guide", "en", "logo.png")), image)
 	image, err = files.ImagePath(selected, "guide", "shared.png")
 	require.NoError(t, err)
-	require.Contains(t, image, "/guide/shared.png")
-	external := filepath.Join(t.TempDir(), "external.md")
-	require.NoError(t, os.WriteFile(external, []byte("private"), 0o600))
-	require.NoError(t, os.Symlink(external, filepath.Join(dir, "guide", "zh-Hans.md")))
-	body, language, err = files.ReadLocalizedMarkdown(ctx, "guide", "zh")
-	require.NoError(t, err)
-	require.Equal(t, "原文", string(body))
-	require.Empty(t, language)
+	require.Equal(t, mustEvalSymlinks(t, filepath.Join(dir, "guide", "shared.png")), image)
 	_, err = files.ImagePath(selected, "guide", "../guide.md")
 	require.ErrorIs(t, err, site.ErrPageNotFound)
+	t.Run("linked translation", func(t *testing.T) {
+		external := filepath.Join(t.TempDir(), "external.md")
+		require.NoError(t, os.WriteFile(external, []byte("private"), 0o600))
+		assertion.Symlink(t, external, filepath.Join(dir, "guide", "zh-Hans.md"))
+		body, language, err := files.ReadLocalizedMarkdown(ctx, "guide", "zh")
+		require.NoError(t, err)
+		require.Equal(t, "原文", string(body))
+		require.Empty(t, language)
+	})
 }
 
 // TestMarkdownRootAndSize supplies in-root and external symlinks plus boundary-sized bodies.
@@ -58,17 +61,19 @@ func TestMarkdownRootAndSize(t *testing.T) {
 	store := New(root)
 	pages := filepath.Join(root, "pages")
 	require.NoError(t, os.WriteFile(filepath.Join(pages, "guide.md"), []byte("guide"), 0o600))
-	outside := filepath.Join(t.TempDir(), "outside.md")
-	require.NoError(t, os.WriteFile(outside, []byte("private-fixture"), 0o600))
-	require.NoError(t, os.Symlink(outside, filepath.Join(pages, "escape.md")))
-	_, err := store.ReadMarkdown(context.Background(), "escape")
-	require.ErrorIs(t, err, site.ErrPageNotFound)
-	require.NoError(t, os.Symlink(filepath.Join(pages, "guide.md"), filepath.Join(pages, "inside.md")))
-	body, err := store.ReadMarkdown(context.Background(), "inside")
-	require.NoError(t, err)
-	require.Equal(t, "guide", string(body))
+	t.Run("linked markdown", func(t *testing.T) {
+		outside := filepath.Join(t.TempDir(), "outside.md")
+		require.NoError(t, os.WriteFile(outside, []byte("private-fixture"), 0o600))
+		assertion.Symlink(t, outside, filepath.Join(pages, "escape.md"))
+		_, err := store.ReadMarkdown(context.Background(), "escape")
+		require.ErrorIs(t, err, site.ErrPageNotFound)
+		assertion.Symlink(t, filepath.Join(pages, "guide.md"), filepath.Join(pages, "inside.md"))
+		body, err := store.ReadMarkdown(context.Background(), "inside")
+		require.NoError(t, err)
+		require.Equal(t, "guide", string(body))
+	})
 	require.NoError(t, os.WriteFile(filepath.Join(pages, "limit.md"), make([]byte, site.MaxPageFileSize), 0o600))
-	body, err = store.ReadMarkdown(context.Background(), "limit")
+	body, err := store.ReadMarkdown(context.Background(), "limit")
 	require.NoError(t, err)
 	require.Len(t, body, site.MaxPageFileSize)
 	require.NoError(t, os.WriteFile(filepath.Join(pages, "large.md"), make([]byte, site.MaxPageFileSize+1), 0o600))
@@ -171,11 +176,7 @@ func TestResolvePageImagePathRejectsSymlinkEscape(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(outside, "secret.png"), []byte("secret"), 0o644); err != nil {
 		t.Fatalf("create outside file: %v", err)
 	}
-	if err := os.Symlink(outside, filepath.Join(base, "images")); err != nil {
-		// This scenario requires an actual symlink escape. Platforms that cannot
-		// create the fixture skip it instead of interpreting setup failure as access rejection.
-		t.Skipf("symlink not supported: %v", err)
-	}
+	assertion.Symlink(t, outside, filepath.Join(base, "images"))
 
 	if got, ok := resolvePageImagePath(pagesDir, base, "images/secret.png"); ok {
 		t.Fatalf("expected symlink escape to be rejected, got %q", got)
