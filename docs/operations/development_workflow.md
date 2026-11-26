@@ -254,6 +254,8 @@ make -C backend generate
 | `deploy/`、`tools/goreleaser*` | `make test-scripts` |
 | `tools/*.py`、`tools/declorder/`、`.githooks/` | `make test-tools` |
 
+Windows 本机预检使用 Git for Windows 的 Bash。请将其与原生 Go、Python、GNU Make 和项目指定版本的 golangci-lint 加入 PATH。配置升级测试在临时目录上设置并清理 Windows ACL，验证备份写入受阻时原文件保留。缺少创建符号链接的权限时，仅跳过需要真实链接的用例，同组的路径、访问控制和文件大小检查仍会运行。Linux CI 执行链接用例和 POSIX 权限检查。
+
 包级单测复用 Go 缓存，架构测试以 `-count=1` 每次重扫；集成测试、前端生产构建与下游调用方由 CI 覆盖。确需跳过可用 `git push --no-verify`；手动执行 `make check` 可传 `BASE=<提交>`。
 
 ### CI 与本地全量验证
