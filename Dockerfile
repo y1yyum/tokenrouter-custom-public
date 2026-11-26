@@ -18,6 +18,11 @@ ARG NPM_CONFIG_REGISTRY=
 # 前端产物是与架构无关的 JS，固定在构建平台执行以避免目标架构的 QEMU 模拟。
 FROM --platform=${BUILDPLATFORM} ${NODE_IMAGE} AS frontend-builder
 ARG NPM_CONFIG_REGISTRY
+ARG GITHUB_REPO=y1yyum/tokenrouter-custom-public
+ARG DOCKER_IMAGE=ghcr.io/y1yyum/tokenrouter
+
+ENV VITE_RELEASE_REPO=${GITHUB_REPO}
+ENV VITE_DOCKER_IMAGE=${DOCKER_IMAGE}
 
 WORKDIR /app/frontend
 
@@ -52,6 +57,8 @@ FROM --platform=${BUILDPLATFORM} ${GOLANG_IMAGE} AS backend-builder
 ARG VERSION=
 ARG COMMIT=docker
 ARG DATE
+ARG GITHUB_REPO=y1yyum/tokenrouter-custom-public
+ARG DOCKER_IMAGE=ghcr.io/y1yyum/tokenrouter
 ARG GOPROXY
 ARG GOSUMDB
 # buildx 根据 --platform 指定的目标自动注入，例如 linux/amd64。
@@ -89,7 +96,7 @@ RUN --mount=type=cache,id=tokenrouter-gomod,target=/go/pkg/mod \
     DATE_VALUE="${DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}" && \
     CGO_ENABLED=0 GOOS=${TARGETOS:-linux} GOARCH=${TARGETARCH} go build \
     -tags embed \
-    -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release" \
+    -ldflags="-s -w -X main.Version=${VERSION_VALUE} -X main.Commit=${COMMIT} -X main.Date=${DATE_VALUE} -X main.BuildType=release -X github.com/TokenFlux/TokenRouter/internal/ops.defaultGitHubRepo=${GITHUB_REPO} -X github.com/TokenFlux/TokenRouter/internal/ops.defaultDockerImage=${DOCKER_IMAGE}" \
     -trimpath \
     -o /app/tokenrouter \
     ./cmd/server
@@ -105,9 +112,9 @@ FROM ${POSTGRES_IMAGE} AS pg-client
 FROM ${ALPINE_IMAGE}
 
 # Labels
-LABEL maintainer="Wei-Shaw <github.com/Wei-Shaw>"
+LABEL maintainer="y1yyum <github.com/y1yyum>"
 LABEL description="TokenRouter - AI API Gateway Platform"
-LABEL org.opencontainers.image.source="https://github.com/TokenFlux/TokenRouter"
+LABEL org.opencontainers.image.source="https://github.com/y1yyum/tokenrouter-custom-public"
 
 # Install runtime dependencies
 RUN apk add --no-cache \
@@ -138,8 +145,8 @@ WORKDIR /app
 # 复制已内嵌默认价格补充的二进制，并设置运行用户。
 COPY --from=backend-builder --chown=tokenrouter:tokenrouter /app/tokenrouter /app/tokenrouter
 
-# Create data directory
-RUN mkdir -p /app/data && chown tokenrouter:tokenrouter /app/data
+# Create data directory and ensure /app ownership matches release images
+RUN mkdir -p /app/data && chown -R tokenrouter:tokenrouter /app
 
 # Copy entrypoint script (fixes volume permissions then drops to tokenrouter)
 COPY deploy/docker-entrypoint.sh /app/docker-entrypoint.sh

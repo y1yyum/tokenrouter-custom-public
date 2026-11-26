@@ -139,6 +139,7 @@ test-scripts:
 		/bin/bash -n "$$script" || exit 1; \
 	done
 	/bin/bash deploy/tests/install-github-token-test.sh
+	/bin/bash deploy/tests/docker-entrypoint-slot-test.sh
 	@if [ "$$(uname -s)" = Darwin ]; then /bin/bash deploy/tests/apple-container-test.sh; fi
 	/bin/sh deploy/tests/docker-compose-security-test.sh
 	/bin/sh deploy/tests/docker-compose-postgres-test.sh
