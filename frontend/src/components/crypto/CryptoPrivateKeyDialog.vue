@@ -1,27 +1,64 @@
 <template>
-  <BaseDialog :panel-data="{ 'data-crypto-ui': '' }" trap-focus :show="showResult" :title="t('admin.crypto.privateKeyExportTitle')" @close="close">
+  <BaseDialog
+    :panel-data="{ 'data-crypto-ui': '' }"
+    trap-focus
+    :show="showResult"
+    :title="t('admin.crypto.privateKeyExportTitle')"
+    @close="close"
+  >
     <div class="crypto-private-key space-y-4 text-sm">
       <div class="space-y-1.5">
         <span class="font-medium text-default">{{ t('admin.crypto.address') }}</span>
-        <code data-testid="private-key-address" class="block rounded-md bg-elevated px-3 py-2 font-mono text-xs break-all text-default">{{ displayedAddress?.address }}</code>
+        <code
+          data-testid="private-key-address"
+          class="block rounded-md bg-elevated px-3 py-2 font-mono text-xs break-all text-default"
+          >{{ displayedAddress?.address }}</code
+        >
       </div>
       <template v-if="privateKey">
         <div class="space-y-1.5">
-          <span id="crypto-private-key-label" class="font-medium text-default">{{ t('admin.crypto.privateKey') }}</span>
-          <pre id="crypto-private-key-value" ref="privateKeyElement" data-testid="private-key-value" aria-labelledby="crypto-private-key-label" class="m-0 rounded-md bg-elevated px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-default">{{ visible ? privateKey : '••••••••••••••••••••••••••••••••' }}</pre>
+          <span id="crypto-private-key-label" class="font-medium text-default">{{
+            t('admin.crypto.privateKey')
+          }}</span>
+          <pre
+            id="crypto-private-key-value"
+            ref="privateKeyElement"
+            data-testid="private-key-value"
+            aria-labelledby="crypto-private-key-label"
+            class="m-0 rounded-md bg-elevated px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-default"
+            >{{ visible ? privateKey : '••••••••••••••••••••••••••••••••' }}</pre>
         </div>
         <div class="flex flex-wrap gap-2">
-          <UButton color="neutral" variant="outline" size="sm" :icon="visible ? 'i-lucide-eye-off' : 'i-lucide-eye'" :aria-pressed="visible" aria-controls="crypto-private-key-value" @click="visible = !visible">
+          <UButton
+            color="neutral"
+            variant="outline"
+            size="sm"
+            :icon="visible ? 'i-lucide-eye-off' : 'i-lucide-eye'"
+            :aria-pressed="visible"
+            aria-controls="crypto-private-key-value"
+            @click="visible = !visible"
+          >
             {{ t(visible ? 'admin.crypto.privateKeyHide' : 'admin.crypto.privateKeyShow') }}
           </UButton>
-          <UButton color="neutral" variant="outline" size="sm" icon="i-lucide-copy" data-testid="private-key-copy" @click="copyPrivateKey">
+          <UButton
+            color="neutral"
+            variant="outline"
+            size="sm"
+            icon="i-lucide-copy"
+            data-testid="private-key-copy"
+            @click="copyPrivateKey"
+          >
             {{ t('admin.crypto.privateKeyCopy') }}
           </UButton>
         </div>
-        <p role="timer" class="text-xs text-muted">{{ t('admin.crypto.privateKeyAutoClear', { seconds: remainingSeconds }) }}</p>
+        <p role="timer" class="text-xs text-muted">{{
+          t('admin.crypto.privateKeyAutoClear', { seconds: remainingSeconds })
+        }}</p>
       </template>
       <p v-else role="status" class="text-muted">{{ t('admin.crypto.privateKeyExpired') }}</p>
-      <p v-if="displayedAddress?.family === 'evm'" class="text-xs text-muted">{{ t('admin.crypto.privateKeyEvmShared') }}</p>
+      <p v-if="displayedAddress?.family === 'evm'" class="text-xs text-muted">{{
+        t('admin.crypto.privateKeyEvmShared')
+      }}</p>
       <p class="text-xs text-muted">{{ t('admin.crypto.privateKeyExternalTransferHint') }}</p>
       <p v-if="copyNotice" role="status" class="text-toned">{{ copyNotice }}</p>
     </div>
@@ -40,7 +77,12 @@ import { matchedRouteKey, onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-ro
 import { useI18n } from 'vue-i18n'
 import BaseDialog from '@/components/common/BaseDialog.vue'
 import CryptoSecurityDialog from './CryptoSecurityDialog.vue'
-import { exportAddressPrivateKey, reportWalletOperationIntent, type CryptoPrivateKeyExport, type DepositAddress } from '@/api/admin/crypto'
+import {
+  exportAddressPrivateKey,
+  reportWalletOperationIntent,
+  type CryptoPrivateKeyExport,
+  type DepositAddress,
+} from '@/api/admin/crypto'
 import { isCryptoGrantRejected } from '@/composables/cryptoGrant'
 import { useAppStore } from '@/stores/app'
 
@@ -99,11 +141,24 @@ function startDisplayTimer() {
 }
 
 function matchesAddress(result: CryptoPrivateKeyExport, selected: ExportAddress): boolean {
-  if (!result || result.address_id !== selected.id || result.family !== selected.family || typeof result.address !== 'string') return false
-  const sameAddress = selected.family === 'evm'
-    ? result.address.toLowerCase() === selected.address.toLowerCase()
-    : result.address === selected.address
-  if (!sameAddress || !Number.isSafeInteger(result.derivation_index) || result.derivation_index < 0 || typeof result.private_key !== 'string') return false
+  if (
+    !result ||
+    result.address_id !== selected.id ||
+    result.family !== selected.family ||
+    typeof result.address !== 'string'
+  )
+    return false
+  const sameAddress =
+    selected.family === 'evm'
+      ? result.address.toLowerCase() === selected.address.toLowerCase()
+      : result.address === selected.address
+  if (
+    !sameAddress ||
+    !Number.isSafeInteger(result.derivation_index) ||
+    result.derivation_index < 0 ||
+    typeof result.private_key !== 'string'
+  )
+    return false
   return selected.family === 'evm'
     ? result.format === 'hex' && /^(?:0x)?[0-9a-fA-F]{64}$/.test(result.private_key)
     : result.format === 'base58' && /^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(result.private_key)
@@ -111,8 +166,11 @@ function matchesAddress(result: CryptoPrivateKeyExport, selected: ExportAddress)
 
 async function requestExport(selected: ExportAddress) {
   const current = generation
-  const active = () => current === generation && props.address?.id === selected.id &&
-    props.address.address === selected.address && props.address.family === selected.family
+  const active = () =>
+    current === generation &&
+    props.address?.id === selected.id &&
+    props.address.address === selected.address &&
+    props.address.family === selected.family
   try {
     try {
       await reportWalletOperationIntent('export_private_key')
@@ -125,30 +183,38 @@ async function requestExport(selected: ExportAddress) {
     }
     if (!active()) return
     let operationFailed = false
-    const completed = await securityDialog.value?.verify(t('admin.crypto.privateKeyExportOperation', { address: selected.address }), async (verification) => {
-      if (!active()) return
-      let result: CryptoPrivateKeyExport | undefined
-      const requestController = new AbortController()
-      controller = requestController
-      try {
-        result = await exportAddressPrivateKey(selected.id, verification, requestController.signal)
+    const completed = await securityDialog.value?.verify(
+      t('admin.crypto.privateKeyExportOperation', { address: selected.address }),
+      async (verification) => {
         if (!active()) return
-        if (!matchesAddress(result, selected)) throw new Error(t('admin.crypto.privateKeyExportFailed'))
-        privateKey.value = result.private_key
-        displayedAddress.value = selected
-        startDisplayTimer()
-        showResult.value = true
-      } catch (error) {
-        // Only a grant rejection may trigger the existing fresh-verification path.
-        // Keep API response bodies out of plaintext-export errors and notices.
-        if (isCryptoGrantRejected(error)) throw error
-        operationFailed = true
-        throw new Error(t('admin.crypto.privateKeyExportFailed'))
-      } finally {
-        if (result) result.private_key = ''
-        if (controller === requestController) controller = undefined
-      }
-    })
+        let result: CryptoPrivateKeyExport | undefined
+        const requestController = new AbortController()
+        controller = requestController
+        try {
+          result = await exportAddressPrivateKey(
+            selected.id,
+            verification,
+            requestController.signal,
+          )
+          if (!active()) return
+          if (!matchesAddress(result, selected))
+            throw new Error(t('admin.crypto.privateKeyExportFailed'))
+          privateKey.value = result.private_key
+          displayedAddress.value = selected
+          startDisplayTimer()
+          showResult.value = true
+        } catch (error) {
+          // Only a grant rejection may trigger the existing fresh-verification path.
+          // Keep API response bodies out of plaintext-export errors and notices.
+          if (isCryptoGrantRejected(error)) throw error
+          operationFailed = true
+          throw new Error(t('admin.crypto.privateKeyExportFailed'))
+        } finally {
+          if (result) result.private_key = ''
+          if (controller === requestController) controller = undefined
+        }
+      },
+    )
     if (active() && !completed && !showResult.value) {
       if (operationFailed) appStore.showError(t('admin.crypto.privateKeyExportFailed'))
       close()
@@ -166,19 +232,30 @@ async function copyPrivateKey() {
   const current = generation
   try {
     await navigator.clipboard.writeText(privateKey.value)
-    if (current === generation && privateKey.value) copyNotice.value = t('admin.crypto.privateKeyCopied')
+    if (current === generation && privateKey.value)
+      copyNotice.value = t('admin.crypto.privateKeyCopied')
   } catch {
-    if (current === generation && privateKey.value) copyNotice.value = t('admin.crypto.privateKeyCopyFailed')
+    if (current === generation && privateKey.value)
+      copyNotice.value = t('admin.crypto.privateKeyCopyFailed')
   }
 }
 
-watch(() => [props.address?.id, props.address?.address, props.address?.family], () => {
-  reset()
-  const selected = props.address
-  if (selected && Number.isSafeInteger(selected.id) && selected.id > 0 && (selected.family === 'evm' || selected.family === 'solana')) {
-    void requestExport({ id: selected.id, address: selected.address, family: selected.family })
-  }
-}, { immediate: true, flush: 'sync' })
+watch(
+  () => [props.address?.id, props.address?.address, props.address?.family],
+  () => {
+    reset()
+    const selected = props.address
+    if (
+      selected &&
+      Number.isSafeInteger(selected.id) &&
+      selected.id > 0 &&
+      (selected.family === 'evm' || selected.family === 'solana')
+    ) {
+      void requestExport({ id: selected.id, address: selected.address, family: selected.family })
+    }
+  },
+  { immediate: true, flush: 'sync' },
+)
 
 // Nested route components share the route record; standalone test mounts do not.
 if (inject(matchedRouteKey, undefined)) {

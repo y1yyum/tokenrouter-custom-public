@@ -22,7 +22,7 @@ const KNOWN_REVOKE_REASON_KEYS: Record<string, string> = {
   // The receipt the credit relied on disappeared.
   reorg_receipt_missing: 'deposit.revokeReasonReceiptMissing',
   // The transaction reverted on-chain after being credited provisionally.
-  reorg_receipt_reverted: 'deposit.revokeReasonReceiptReverted'
+  reorg_receipt_reverted: 'deposit.revokeReasonReceiptReverted',
 }
 
 export function depositRevokeReasonCopy(code: string | null | undefined): DepositRevokeReasonCopy {
@@ -31,6 +31,6 @@ export function depositRevokeReasonCopy(code: string | null | undefined): Deposi
   if (key) return { key }
   return {
     key: 'deposit.revokeReasonGeneric',
-    params: { code: normalized || 'unknown' }
+    params: { code: normalized || 'unknown' },
   }
 }

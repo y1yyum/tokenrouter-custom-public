@@ -36,7 +36,7 @@ export async function shareQrDataUrl(text: string, options: QrRenderOptions = {}
     errorCorrectionLevel: 'M',
     margin: options.margin ?? DEFAULT_QR_MARGIN,
     width: options.size ?? DEFAULT_QR_SIZE,
-    color: { dark: '#000000', light: '#ffffff' }
+    color: { dark: '#000000', light: '#ffffff' },
   })
 }
 
@@ -50,13 +50,16 @@ export function detectQrCameraSupport(): CameraSupport {
   const globalSecure = typeof window !== 'undefined' ? window.isSecureContext : undefined
   if (globalSecure === false) return { supported: false, reason: 'insecure' }
   const media = navigator.mediaDevices as MediaDevices | undefined
-  if (!media || typeof media.getUserMedia !== 'function') return { supported: false, reason: 'unsupported' }
+  if (!media || typeof media.getUserMedia !== 'function')
+    return { supported: false, reason: 'unsupported' }
   return { supported: true }
 }
 
 function cameraErrorCode(error: unknown): QrCameraFailure {
-  const name = error && typeof error === 'object' ? String((error as { name?: unknown }).name ?? '') : ''
-  if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError') return 'denied'
+  const name =
+    error && typeof error === 'object' ? String((error as { name?: unknown }).name ?? '') : ''
+  if (name === 'NotAllowedError' || name === 'SecurityError' || name === 'PermissionDeniedError')
+    return 'denied'
   return 'unavailable'
 }
 
@@ -75,8 +78,8 @@ export async function openQrCamera(): Promise<MediaStream> {
       video: {
         facingMode: { ideal: 'environment' },
         width: { ideal: 1280 },
-        height: { ideal: 720 }
-      }
+        height: { ideal: 720 },
+      },
     })
   } catch (firstError) {
     const firstCode = cameraErrorCode(firstError)
@@ -100,7 +103,11 @@ export function stopMediaStream(stream: MediaStream | null | undefined): void {
   }
 }
 
-export function decodeQrPixels(data: Uint8ClampedArray, width: number, height: number): string | null {
+export function decodeQrPixels(
+  data: Uint8ClampedArray,
+  width: number,
+  height: number,
+): string | null {
   if (!width || !height || data.length < width * height * 4) return null
   try {
     return jsQR(data, width, height, { inversionAttempts: 'attemptBoth' })?.data ?? null
@@ -154,7 +161,10 @@ export async function decodeQrFromImageFile(file: Blob): Promise<string | null> 
 }
 
 /** Grab one frame from the live preview and try to decode it. */
-export function decodeQrFromVideoFrame(video: HTMLVideoElement, canvas: HTMLCanvasElement): string | null {
+export function decodeQrFromVideoFrame(
+  video: HTMLVideoElement,
+  canvas: HTMLCanvasElement,
+): string | null {
   const width = video.videoWidth
   const height = video.videoHeight
   if (!width || !height) return null

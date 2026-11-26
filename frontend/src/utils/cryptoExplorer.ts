@@ -7,7 +7,7 @@ const explorerBases: Readonly<Record<string, string>> = {
   arbitrum: 'https://arbiscan.io/tx/',
   base: 'https://basescan.org/tx/',
   xlayer: 'https://web3.okx.com/explorer/xlayer/tx/',
-  solana: 'https://solscan.io/tx/'
+  solana: 'https://solscan.io/tx/',
 }
 
 /** Link only recognized transaction hashes, never backend-supplied URLs. */
@@ -15,9 +15,10 @@ export function explorerTxURL(chain: string, txHash: string): string {
   if (!Object.prototype.hasOwnProperty.call(explorerBases, chain)) return ''
   const base = explorerBases[chain]
   if (!base) return ''
-  const valid = chain === 'solana'
-    ? /^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(txHash)
-    : /^0x[0-9a-fA-F]{64}$/.test(txHash)
+  const valid =
+    chain === 'solana'
+      ? /^[1-9A-HJ-NP-Za-km-z]{64,88}$/.test(txHash)
+      : /^0x[0-9a-fA-F]{64}$/.test(txHash)
   return valid ? base + txHash : ''
 }
 
@@ -30,7 +31,7 @@ const explorerAddressBases: Readonly<Record<string, string>> = {
   arbitrum: 'https://arbiscan.io/address/',
   base: 'https://basescan.org/address/',
   xlayer: 'https://web3.okx.com/explorer/xlayer/address/',
-  solana: 'https://solscan.io/account/'
+  solana: 'https://solscan.io/account/',
 }
 
 /** Link only recognized addresses, never backend-supplied URLs. */
@@ -38,8 +39,9 @@ export function explorerAddressURL(chain: string, address: string): string {
   if (!Object.prototype.hasOwnProperty.call(explorerAddressBases, chain)) return ''
   const base = explorerAddressBases[chain]
   if (!base) return ''
-  const valid = chain === 'solana'
-    ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)
-    : /^0x[0-9a-fA-F]{40}$/.test(address)
+  const valid =
+    chain === 'solana'
+      ? /^[1-9A-HJ-NP-Za-km-z]{32,44}$/.test(address)
+      : /^0x[0-9a-fA-F]{40}$/.test(address)
   return valid ? base + address : ''
 }

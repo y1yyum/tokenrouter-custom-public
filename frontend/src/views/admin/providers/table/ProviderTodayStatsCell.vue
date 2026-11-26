@@ -1,9 +1,9 @@
 <template>
   <div v-if="compact" class="min-w-0 truncate text-xs leading-4 text-gray-600 dark:text-gray-300">
     <span v-if="stats" class="tabular-nums" data-test="provider-today-summary">
-      {{ t('admin.providers.compact.today') }} ·
-      {{ formatNumber(stats.requests) }} {{ t('admin.providers.usageStats.requests') }} ·
-      {{ formatTokens(stats.tokens) }} {{ t('admin.providers.usageStats.tokens') }} ·
+      {{ t('admin.providers.compact.today') }} · {{ formatNumber(stats.requests) }}
+      {{ t('admin.providers.usageStats.requests') }} · {{ formatTokens(stats.tokens) }}
+      {{ t('admin.providers.usageStats.tokens') }} ·
       {{ formatUsdAmount(stats.cost, { fractionDigits: 2 }) }}
     </span>
     <div v-else-if="loading" class="skeleton h-3 w-24"></div>

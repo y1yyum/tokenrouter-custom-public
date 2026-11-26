@@ -25,7 +25,9 @@ export interface SensitiveCopyHandle {
 
 function clipboardApi(): Clipboard | null {
   if (typeof navigator === 'undefined') return null
-  return navigator.clipboard && typeof navigator.clipboard.writeText === 'function' ? navigator.clipboard : null
+  return navigator.clipboard && typeof navigator.clipboard.writeText === 'function'
+    ? navigator.clipboard
+    : null
 }
 
 export function execCommandCopy(text: string): boolean {
@@ -34,7 +36,8 @@ export function execCommandCopy(text: string): boolean {
   textarea.value = text
   textarea.setAttribute('readonly', 'true')
   textarea.setAttribute('aria-hidden', 'true')
-  textarea.style.cssText = 'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none'
+  textarea.style.cssText =
+    'position:fixed;left:0;top:0;width:1px;height:1px;opacity:0;pointer-events:none'
   document.body.appendChild(textarea)
   textarea.focus({ preventScroll: true })
   textarea.select()
@@ -101,7 +104,7 @@ export async function copySensitiveText(text: string): Promise<SensitiveCopyHand
     clearNow(): void {
       cancelPendingClear()
       clearClipboardBestEffort()
-    }
+    },
   }
 }
 

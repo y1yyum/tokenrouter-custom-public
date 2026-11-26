@@ -26,7 +26,8 @@ export interface DepositAmountLimits {
  * `unverifiable` is not a failure: the amount may be fine, but its USD notional
  * cannot be derived (no market quote), so the page must neither block nor warn.
  */
-export type DepositAmountState = 'empty' | 'invalid' | 'below_min' | 'above_max' | 'ok' | 'unverifiable'
+export type DepositAmountState =
+  'empty' | 'invalid' | 'below_min' | 'above_max' | 'ok' | 'unverifiable'
 
 export interface DepositAmountCheck {
   state: DepositAmountState
@@ -50,7 +51,12 @@ export interface DepositAmountContext {
 // string; anything unparsable is treated as absent rather than as zero.
 function readLimit(value: unknown): number | null | undefined {
   if (value === null || value === undefined) return undefined
-  const n = typeof value === 'number' ? value : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim() !== ''
+        ? Number(value)
+        : Number.NaN
   if (!Number.isFinite(n)) return undefined
   // A non-positive threshold disables the check; it must not reject everything.
   return n > 0 ? n : null
@@ -60,7 +66,10 @@ function readLimit(value: unknown): number | null | undefined {
 // existing `min_amount` / `max_amount` are the same credit thresholds, so an
 // older response is still validated. Present-but-disabled fields do not fall
 // back: an explicit 0 means "no limit", not "use the legacy field".
-function normalizeLimits(minimum: number | null | undefined, maximum: number | null | undefined): DepositAmountLimits {
+function normalizeLimits(
+  minimum: number | null | undefined,
+  maximum: number | null | undefined,
+): DepositAmountLimits {
   return { min: minimum ?? null, max: maximum ?? null }
 }
 
@@ -76,7 +85,7 @@ export function depositAmountLimits(info: DepositInfo | null | undefined): Depos
   const legacyMax = readLimit(info.max_amount)
   return normalizeLimits(
     explicitMin !== undefined ? explicitMin : legacyMin,
-    explicitMax !== undefined ? explicitMax : legacyMax
+    explicitMax !== undefined ? explicitMax : legacyMax,
   )
 }
 
@@ -104,7 +113,7 @@ export function parseDepositAmount(raw: string): number | null {
 export function validateDepositAmount(
   raw: string,
   limits: DepositAmountLimits,
-  context: DepositAmountContext = {}
+  context: DepositAmountContext = {},
 ): DepositAmountCheck {
   const base = { amount: null, notional: null, limits, blocked: false } as const
   if (!raw || raw.trim() === '') return { ...base, state: 'empty' }
@@ -137,7 +146,10 @@ export function validateDepositAmount(
  * null when there is no usable rate (market-priced assets have none), so the
  * page never prints a made-up estimate.
  */
-export function estimatedDepositCredit(amount: number | null, rate: number | null | undefined): number | null {
+export function estimatedDepositCredit(
+  amount: number | null,
+  rate: number | null | undefined,
+): number | null {
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount <= 0) return null
   if (typeof rate !== 'number' || !Number.isFinite(rate) || rate <= 0) return null
   return Number((amount * rate).toFixed(8))

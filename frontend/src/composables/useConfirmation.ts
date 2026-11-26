@@ -32,7 +32,7 @@ const state = reactive<ConfirmationState>({
   message: '',
   confirmText: '',
   cancelText: '',
-  danger: true
+  danger: true,
 })
 
 const queue: PendingConfirmation[] = []
@@ -64,7 +64,8 @@ function showNext() {
  * patches `window.confirm`, so nothing outside these call sites changes.
  */
 export function confirm(options: ConfirmationOptions | string): Promise<boolean> {
-  const normalized: ConfirmationOptions = typeof options === 'string' ? { message: options } : options
+  const normalized: ConfirmationOptions =
+    typeof options === 'string' ? { message: options } : options
   if (!normalized?.message?.trim()) return Promise.resolve(false)
   if (mountedHosts === 0) return Promise.resolve(false)
 
@@ -110,6 +111,6 @@ export function useConfirmation() {
     state: readonly(state),
     confirm,
     settleConfirmation,
-    cancelConfirmation
+    cancelConfirmation,
   }
 }

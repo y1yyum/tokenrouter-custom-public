@@ -13,7 +13,7 @@ import {
   parseShare,
   splitSecret,
   verifySharesOpenWallet,
-  type ShardShare
+  type ShardShare,
 } from './shardFormat'
 import { VAULT_DATA_KEY_BYTES } from './walletVaultV3'
 
@@ -35,8 +35,13 @@ export interface GenerateOptions {
   random?: (length: number) => Uint8Array
 }
 
-export async function generateSignerShardSet(crypto: SignerCrypto, options: GenerateOptions = {}): Promise<SignerShardSet> {
-  const dataKey = options.dataKey ? options.dataKey.slice() : crypto.randomBytes(VAULT_DATA_KEY_BYTES)
+export async function generateSignerShardSet(
+  crypto: SignerCrypto,
+  options: GenerateOptions = {},
+): Promise<SignerShardSet> {
+  const dataKey = options.dataKey
+    ? options.dataKey.slice()
+    : crypto.randomBytes(VAULT_DATA_KEY_BYTES)
   if (dataKey.length !== VAULT_DATA_KEY_BYTES) throw new Error('data key must be 32 bytes')
   const shares = await splitSecret(dataKey, { random: options.random }, crypto)
   const shareTexts: string[] = []
@@ -50,7 +55,7 @@ export function shareSlot(index: number): ShardSlot | null {
 }
 
 export function shareTextForSlot(set: SignerShardSet, slot: ShardSlot): string {
-  const share = set.shares.find(candidate => shareSlot(candidate.index) === slot)
+  const share = set.shares.find((candidate) => shareSlot(candidate.index) === slot)
   const text = share ? set.shareTexts[share.index - 1] : ''
   if (!text) throw new Error(`share ${slot} is not part of this set`)
   return text
@@ -80,7 +85,7 @@ export async function buildSignerSetupPayload(
     commitment: string
     totpCode: string
     riskPhrase: string
-  }
+  },
 ): Promise<SignerSetupPayload> {
   if (input.dataKey.length !== VAULT_DATA_KEY_BYTES) throw new Error('data key must be 32 bytes')
   for (const text of [input.shareA, input.confirmShare]) await parseShare(text, crypto)
@@ -92,7 +97,7 @@ export async function buildSignerSetupPayload(
     data_key: bytesToBase64(input.dataKey),
     share_a: input.shareA.trim(),
     confirm_share: input.confirmShare.trim(),
-    dk_commitment: input.commitment
+    dk_commitment: input.commitment,
   }
 }
 
@@ -100,7 +105,7 @@ export async function buildSignerSetupPayload(
 export async function recoverDataKeyFromShares(
   crypto: SignerCrypto,
   shareTexts: string[],
-  commitment?: string
+  commitment?: string,
 ): Promise<Uint8Array> {
   if (commitment) {
     const result = await verifySharesOpenWallet(shareTexts, commitment, crypto)
@@ -114,7 +119,7 @@ export async function recoverDataKeyFromShares(
 export async function matchesShownShare(
   crypto: SignerCrypto,
   typed: string,
-  shown: string[]
+  shown: string[],
 ): Promise<number | null> {
   let parsed: ShardShare
   try {
@@ -125,10 +130,14 @@ export async function matchesShownShare(
   for (let i = 0; i < shown.length; i += 1) {
     try {
       const candidate = await parseShare(shown[i], crypto)
-      if (candidate.index === parsed.index && candidate.version === parsed.version &&
-        candidate.threshold === parsed.threshold && candidate.total === parsed.total &&
+      if (
+        candidate.index === parsed.index &&
+        candidate.version === parsed.version &&
+        candidate.threshold === parsed.threshold &&
+        candidate.total === parsed.total &&
         candidate.data.length === parsed.data.length &&
-        candidate.data.every((byte, offset) => byte === parsed.data[offset])) {
+        candidate.data.every((byte, offset) => byte === parsed.data[offset])
+      ) {
         return i
       }
     } catch {
@@ -141,10 +150,13 @@ export async function matchesShownShare(
 /** Best-effort scrub of the in-memory set once the wizard completed. */
 export function wipeSignerShardSet(set: SignerShardSet | null): void {
   if (!set) return
-  zeroBytes(set.dataKey, ...set.shares.map(share => share.data))
+  zeroBytes(set.dataKey, ...set.shares.map((share) => share.data))
   set.shareTexts.fill('')
 }
 
-export async function commitmentForDataKey(crypto: SignerCrypto, dataKey: Uint8Array): Promise<string> {
+export async function commitmentForDataKey(
+  crypto: SignerCrypto,
+  dataKey: Uint8Array,
+): Promise<string> {
   return bytesToBase64(await dataKeyCommitment(crypto, dataKey))
 }

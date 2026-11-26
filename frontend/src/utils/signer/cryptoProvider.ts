@@ -42,9 +42,19 @@ export interface SignerCrypto {
   randomBytes(length: number): Uint8Array
   sha256(data: Uint8Array): Promise<Uint8Array>
   /** AES-256-GCM seal; returns ciphertext || 16-byte tag. */
-  aesGcmSeal(key: Uint8Array, nonce: Uint8Array, plaintext: Uint8Array, aad: Uint8Array): Promise<Uint8Array>
+  aesGcmSeal(
+    key: Uint8Array,
+    nonce: Uint8Array,
+    plaintext: Uint8Array,
+    aad: Uint8Array,
+  ): Promise<Uint8Array>
   /** AES-256-GCM open; `ciphertext` includes the 16-byte tag. */
-  aesGcmOpen(key: Uint8Array, nonce: Uint8Array, ciphertext: Uint8Array, aad: Uint8Array): Promise<Uint8Array>
+  aesGcmOpen(
+    key: Uint8Array,
+    nonce: Uint8Array,
+    ciphertext: Uint8Array,
+    aad: Uint8Array,
+  ): Promise<Uint8Array>
 }
 
 export interface SignerCryptoEnvOverrides {
@@ -68,7 +78,10 @@ function globalCrypto(): Crypto | undefined {
 
 function readSecureContext(env?: SignerCryptoEnvOverrides): boolean | undefined {
   if (env?.isSecureContext !== undefined) return env.isSecureContext
-  if (typeof globalThis !== 'undefined' && typeof (globalThis as { isSecureContext?: unknown }).isSecureContext === 'boolean') {
+  if (
+    typeof globalThis !== 'undefined' &&
+    typeof (globalThis as { isSecureContext?: unknown }).isSecureContext === 'boolean'
+  ) {
     return (globalThis as { isSecureContext: boolean }).isSecureContext
   }
   return undefined
@@ -78,7 +91,7 @@ function readGetRandomValues(env?: SignerCryptoEnvOverrides) {
   if (env?.getRandomValues !== undefined) return env.getRandomValues
   const runtime = globalCrypto()
   return runtime && typeof runtime.getRandomValues === 'function'
-    ? runtime.getRandomValues.bind(runtime) as <T extends ArrayBufferView>(array: T) => T
+    ? (runtime.getRandomValues.bind(runtime) as <T extends ArrayBufferView>(array: T) => T)
     : null
 }
 
@@ -104,7 +117,10 @@ export function detectSignerCryptoSupport(env?: SignerCryptoEnvOverrides): Detec
   return { supported: true, backend: 'noble', reason: null }
 }
 
-function createWebCryptoBackend(getRandomValues: (<T extends ArrayBufferView>(array: T) => T), subtle: SubtleCrypto): SignerCrypto {
+function createWebCryptoBackend(
+  getRandomValues: <T extends ArrayBufferView>(array: T) => T,
+  subtle: SubtleCrypto,
+): SignerCrypto {
   return {
     backend: 'webcrypto',
     randomBytes(length: number): Uint8Array {
@@ -118,27 +134,43 @@ function createWebCryptoBackend(getRandomValues: (<T extends ArrayBufferView>(ar
       return new Uint8Array(digest)
     },
     async aesGcmSeal(key, nonce, plaintext, aad): Promise<Uint8Array> {
-      const handle = await subtle.importKey('raw', toArrayBuffer(key), { name: AES_GCM }, false, ['encrypt'])
+      const handle = await subtle.importKey('raw', toArrayBuffer(key), { name: AES_GCM }, false, [
+        'encrypt',
+      ])
       const sealed = await subtle.encrypt(
-        { name: AES_GCM, iv: toArrayBuffer(nonce), additionalData: toArrayBuffer(aad), tagLength: 128 },
+        {
+          name: AES_GCM,
+          iv: toArrayBuffer(nonce),
+          additionalData: toArrayBuffer(aad),
+          tagLength: 128,
+        },
         handle,
-        toArrayBuffer(plaintext)
+        toArrayBuffer(plaintext),
       )
       return new Uint8Array(sealed)
     },
     async aesGcmOpen(key, nonce, ciphertext, aad): Promise<Uint8Array> {
-      const handle = await subtle.importKey('raw', toArrayBuffer(key), { name: AES_GCM }, false, ['decrypt'])
+      const handle = await subtle.importKey('raw', toArrayBuffer(key), { name: AES_GCM }, false, [
+        'decrypt',
+      ])
       const opened = await subtle.decrypt(
-        { name: AES_GCM, iv: toArrayBuffer(nonce), additionalData: toArrayBuffer(aad), tagLength: 128 },
+        {
+          name: AES_GCM,
+          iv: toArrayBuffer(nonce),
+          additionalData: toArrayBuffer(aad),
+          tagLength: 128,
+        },
         handle,
-        toArrayBuffer(ciphertext)
+        toArrayBuffer(ciphertext),
       )
       return new Uint8Array(opened)
-    }
+    },
   }
 }
 
-function createNobleBackend(getRandomValues: (<T extends ArrayBufferView>(array: T) => T)): SignerCrypto {
+function createNobleBackend(
+  getRandomValues: <T extends ArrayBufferView>(array: T) => T,
+): SignerCrypto {
   return {
     backend: 'noble',
     randomBytes(length: number): Uint8Array {
@@ -155,7 +187,7 @@ function createNobleBackend(getRandomValues: (<T extends ArrayBufferView>(array:
     },
     async aesGcmOpen(key, nonce, ciphertext, aad): Promise<Uint8Array> {
       return gcm(key, nonce, aad).decrypt(ciphertext)
-    }
+    },
   }
 }
 
@@ -171,7 +203,8 @@ export function detectSignerCrypto(options: DetectOptions = {}): SignerCrypto {
   let backend = options.forceBackend
   if (!backend) {
     const support = detectSignerCryptoSupport(env)
-    if (!support.supported || !support.backend) throw new SignerCryptoUnavailableError(support.reason ?? 'no-aes-gcm')
+    if (!support.supported || !support.backend)
+      throw new SignerCryptoUnavailableError(support.reason ?? 'no-aes-gcm')
     backend = support.backend
   }
   if (backend === 'noble') return createNobleBackend(getRandomValues)
@@ -200,6 +233,9 @@ export function wipeKey(key: Uint8Array | null | undefined): void {
 /** Domain-separated SHA-256 commitment for the wallet data key. */
 export const DK_COMMITMENT_DOMAIN = 'sub2api/crypto-wallet/dk-commitment/v1:'
 
-export async function dataKeyCommitment(crypto: SignerCrypto, dataKey: Uint8Array): Promise<Uint8Array> {
+export async function dataKeyCommitment(
+  crypto: SignerCrypto,
+  dataKey: Uint8Array,
+): Promise<Uint8Array> {
   return crypto.sha256(new Uint8Array([...utf8Bytes(DK_COMMITMENT_DOMAIN), ...dataKey]))
 }

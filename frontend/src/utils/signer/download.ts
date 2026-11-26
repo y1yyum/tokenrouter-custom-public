@@ -35,7 +35,7 @@ export function shareFileName(slotLabel: string, shotDate = new Date()): string 
   const stamp = [
     shotDate.getFullYear(),
     String(shotDate.getMonth() + 1).padStart(2, '0'),
-    String(shotDate.getDate()).padStart(2, '0')
+    String(shotDate.getDate()).padStart(2, '0'),
   ].join('')
   return `sub2api-shard-${slotLabel}-${stamp}.txt`
 }
@@ -65,7 +65,7 @@ export function downloadTextFile(text: string, filename: string): boolean {
 /** A printable A4 sheet with the share, its timestamp, recovery notes and warnings. */
 export function buildShareSheetHtml(input: ShareSheetInput): string {
   const { labels } = input
-  const steps = labels.recoverySteps.map(step => `<li>${escapeHtml(step)}</li>`).join('')
+  const steps = labels.recoverySteps.map((step) => `<li>${escapeHtml(step)}</li>`).join('')
   const qr = input.qrDataUrl
     ? `<section class="qr"><img src="${escapeHtml(input.qrDataUrl)}" alt="shard qr" width="240" height="240"/></section>`
     : ''

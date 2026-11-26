@@ -32,20 +32,27 @@ const CONFIRMING_STATUSES = ['pending', 'provisional'] as const
 
 /** True while the transfer is still on its way to a final credit. */
 export function isConfirmingDeposit(status: string | null | undefined): boolean {
-  return CONFIRMING_STATUSES.some(value => value === status)
+  return CONFIRMING_STATUSES.some((value) => value === status)
 }
 
 /**
  * Confirmation depth for a row that is still in flight. Null when the backend
  * sends no usable counter pair: the page then shows a generic line and no bar.
  */
-export function confirmationProgress(row: DepositRecord | null | undefined): ConfirmationProgress | null {
+export function confirmationProgress(
+  row: DepositRecord | null | undefined,
+): ConfirmationProgress | null {
   if (!row || !isConfirmingDeposit(row.status)) return null
   const required = Math.floor(Number(row.required_confirmations))
   const confirmations = Number(row.confirmations)
   if (!Number.isFinite(required) || required <= 0 || !Number.isFinite(confirmations)) return null
   const done = Math.min(Math.max(Math.floor(confirmations), 0), required)
-  return { done, required, remaining: required - done, percent: Math.round((done / required) * 100) }
+  return {
+    done,
+    required,
+    remaining: required - done,
+    percent: Math.round((done / required) * 100),
+  }
 }
 
 /**
@@ -54,7 +61,7 @@ export function confirmationProgress(row: DepositRecord | null | undefined): Con
  */
 export function depositProgressCopy(
   row: Pick<DepositRecord, 'status'> | null | undefined,
-  progress: ConfirmationProgress | null
+  progress: ConfirmationProgress | null,
 ): DepositProgressCopy {
   const provisional = row?.status === 'provisional'
   if (!progress) {
@@ -63,11 +70,11 @@ export function depositProgressCopy(
   if (progress.remaining > 0) {
     return {
       key: provisional ? 'deposit.provisionalProgress' : 'deposit.confirmProgress',
-      params: { done: progress.done, required: progress.required, remaining: progress.remaining }
+      params: { done: progress.done, required: progress.required, remaining: progress.remaining },
     }
   }
   return {
     key: provisional ? 'deposit.provisionalProgressDone' : 'deposit.confirmProgressDone',
-    params: { done: progress.done, required: progress.required }
+    params: { done: progress.done, required: progress.required },
   }
 }

@@ -7,32 +7,59 @@
         :class="['badge min-w-0 text-xs', statusClass]"
         :title="t('admin.providers.status.viewTempUnschedDetails')"
         @click="handleTempUnschedClick"
-      ><span class="truncate">{{ statusText }}</span></button>
+        ><span class="truncate">{{ statusText }}</span></button
+      >
       <span v-else :class="['badge min-w-0 text-xs', compactStatusClass]">
         <span class="truncate">{{ compactStatusText }}</span>
       </span>
-      <ProviderCellDetails v-if="hasStatusDetails" :label="t('admin.providers.compact.statusDetails')">
+      <ProviderCellDetails
+        v-if="hasStatusDetails"
+        :label="t('admin.providers.compact.statusDetails')"
+      >
         <template #trigger><Icon name="more" size="xs" /></template>
         <template #default="{ close }">
           <div class="space-y-2">
-            <p v-if="provider.error_message && hasError" class="whitespace-pre-wrap break-words">{{ provider.error_message }}</p>
-            <p v-if="isRateLimited">{{ t('admin.providers.status.rateLimitedUntil', { time: formatDateTime(provider.rate_limit_reset_at) }) }}</p>
-            <p v-if="isOverloaded">{{ t('admin.providers.status.overloadedUntil', { time: formatDateTime(provider.overload_until) }) }}</p>
+            <p v-if="provider.error_message && hasError" class="whitespace-pre-wrap break-words">{{
+              provider.error_message
+            }}</p>
+            <p v-if="isRateLimited">{{
+              t('admin.providers.status.rateLimitedUntil', {
+                time: formatDateTime(provider.rate_limit_reset_at),
+              })
+            }}</p>
+            <p v-if="isOverloaded">{{
+              t('admin.providers.status.overloadedUntil', {
+                time: formatDateTime(provider.overload_until),
+              })
+            }}</p>
             <div v-if="isTempUnschedulable">
               <p>{{ tempUnschedRecoveryText }}</p>
-              <button type="button" class="rounded-compact text-link" @click="close(); handleTempUnschedClick()">
+              <button
+                type="button"
+                class="rounded-compact text-link"
+                @click="
+                  close();
+                  handleTempUnschedClick();
+                "
+              >
                 {{ t('admin.providers.status.viewTempUnschedDetails') }}
               </button>
             </div>
             <ul v-if="activeModelStatuses.length" class="space-y-1 break-words">
-              <li v-for="item in activeModelStatuses" :key="item.kind + '-' + item.model">{{ modelRecoveryText(item) }}</li>
+              <li v-for="item in activeModelStatuses" :key="item.kind + '-' + item.model">{{
+                modelRecoveryText(item)
+              }}</li>
             </ul>
           </div>
         </template>
       </ProviderCellDetails>
     </div>
     <slot name="controls" />
-    <p v-if="compactRecoveryText" class="truncate text-gray-500 dark:text-gray-400" :title="compactRecoveryText">
+    <p
+      v-if="compactRecoveryText"
+      class="truncate text-gray-500 dark:text-gray-400"
+      :title="compactRecoveryText"
+    >
       {{ compactRecoveryText }}
     </p>
   </div>
@@ -156,9 +183,7 @@
         <div
           class="pointer-events-none absolute bottom-full left-1/2 z-50 mb-2 w-max max-w-[320px] -translate-x-1/2 whitespace-nowrap tooltip-panel rounded-compact px-3 py-2 text-center text-xs leading-relaxed opacity-0 transition-opacity group-hover:opacity-100"
         >
-          {{
-            modelRecoveryText(item)
-          }}
+          {{ modelRecoveryText(item) }}
           <div class="tooltip-caret -bottom-1 left-1/2 -translate-x-1/2 border-b border-r"></div>
         </div>
       </div>

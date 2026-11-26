@@ -36,7 +36,7 @@ function normalizeOwner(raw: unknown): AddressOwner | null {
     user_id: id,
     username: typeof value.username === 'string' ? value.username : '',
     email: typeof value.email === 'string' ? value.email : '',
-    deleted: value.deleted === true
+    deleted: value.deleted === true,
   }
 }
 
@@ -54,7 +54,7 @@ async function resolveOwners(addresses: readonly string[]): Promise<void> {
   for (let start = 0; start < wanted.length; start += OWNER_BATCH_SIZE) {
     if (endpointMissing) return
     const batch = wanted.slice(start, start + OWNER_BATCH_SIZE)
-    batch.forEach(key => inflight.add(key))
+    batch.forEach((key) => inflight.add(key))
     try {
       const owners = await getAddressOwners(batch)
       for (const key of batch) cache.set(key, normalizeOwner(owners[key]))
@@ -63,7 +63,7 @@ async function resolveOwners(addresses: readonly string[]): Promise<void> {
       // Anything else: leave the batch unknown and stop; the next change retries.
       return
     } finally {
-      batch.forEach(key => inflight.delete(key))
+      batch.forEach((key) => inflight.delete(key))
     }
   }
 }
@@ -77,8 +77,10 @@ export function useAddressOwners(addresses: WatchSource<readonly string[]>) {
   watch(
     // A fresh array each time, so an in-place push is noticed too.
     () => [...(typeof addresses === 'function' ? addresses() : addresses.value)],
-    list => { void resolveOwners(list) },
-    { immediate: true }
+    (list) => {
+      void resolveOwners(list)
+    },
+    { immediate: true },
   )
 
   function ownerOf(address: string | null | undefined): AddressOwner | null | undefined {

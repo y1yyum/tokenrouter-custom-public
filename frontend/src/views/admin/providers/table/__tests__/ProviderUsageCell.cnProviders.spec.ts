@@ -265,7 +265,9 @@ describe('紧凑提供商用量', () => {
       upstreamUsage: {
         ...makeResult(provider),
         limits: Array.from({ length: 6 }, (_, i) => ({
-          name: 'upstream-window-' + i, used: i * 10, limit: 100,
+          name: 'upstream-window-' + i,
+          used: i * 10,
+          limit: 100,
         })),
       },
     })

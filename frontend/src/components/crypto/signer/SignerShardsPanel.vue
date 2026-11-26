@@ -5,8 +5,17 @@
       <p class="mt-1 text-sm text-muted">{{ t('admin.crypto.signer.description') }}</p>
     </div>
 
-    <p v-if="loading && !status" role="status" class="text-sm text-muted">{{ t('admin.crypto.signer.loading') }}</p>
-    <UAlert v-if="loadError" role="alert" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="loadError" />
+    <p v-if="loading && !status" role="status" class="text-sm text-muted">{{
+      t('admin.crypto.signer.loading')
+    }}</p>
+    <UAlert
+      v-if="loadError"
+      role="alert"
+      color="error"
+      variant="subtle"
+      icon="i-lucide-circle-alert"
+      :title="loadError"
+    />
 
     <template v-if="status">
       <div class="flex flex-wrap items-center gap-2">
@@ -14,7 +23,14 @@
           :color="status.configured ? 'success' : 'warning'"
           variant="subtle"
           icon="i-lucide-shield-check"
-        >{{ t(status.configured ? 'admin.crypto.signer.configuredTitle' : 'admin.crypto.signer.notConfiguredTitle') }}</UBadge>
+          >{{
+            t(
+              status.configured
+                ? 'admin.crypto.signer.configuredTitle'
+                : 'admin.crypto.signer.notConfiguredTitle',
+            )
+          }}</UBadge
+        >
         <template v-if="status.configured">
           <UBadge
             :color="lockState.tone"
@@ -22,7 +38,8 @@
             :icon="lockState.icon"
             data-testid="signer-lock-state"
             :data-state="lockState.id"
-          >{{ t(lockState.labelKey) }}</UBadge>
+            >{{ t(lockState.labelKey) }}</UBadge
+          >
           <template v-if="windowActive">
             <UBadge
               :color="countdownTone"
@@ -30,15 +47,25 @@
               icon="i-lucide-timer"
               data-testid="signer-unlock-countdown"
               :data-tone="countdownTone"
-            >{{ t('admin.crypto.signer.unlockWindow', { time: unlockRemainingLabel }) }}</UBadge>
-            <span v-if="countdownTone === 'warning'" class="text-xs text-warning" data-testid="signer-countdown-soon">{{ t('admin.crypto.signer.unlockWindowEnding') }}</span>
+              >{{ t('admin.crypto.signer.unlockWindow', { time: unlockRemainingLabel }) }}</UBadge
+            >
+            <span
+              v-if="countdownTone === 'warning'"
+              class="text-xs text-warning"
+              data-testid="signer-countdown-soon"
+              >{{ t('admin.crypto.signer.unlockWindowEnding') }}</span
+            >
           </template>
         </template>
       </div>
 
       <!-- Secondary facts (scheme, auto-sweep share, crypto backend) stay out of the
            primary status row so they never read like an action item. -->
-      <p v-if="status.configured" class="text-xs leading-relaxed text-muted" data-testid="signer-secondary-status">
+      <p
+        v-if="status.configured"
+        class="text-xs leading-relaxed text-muted"
+        data-testid="signer-secondary-status"
+      >
         {{ secondaryStatusLabel }}
       </p>
 
@@ -59,7 +86,14 @@
           icon="i-lucide-timer-off"
           :title="t('admin.crypto.signer.lockedExpired')"
           :description="t('admin.crypto.signer.windowExpiredHint')"
-          :actions="[{ label: t('admin.crypto.signer.reunlockAction'), color: 'warning', variant: 'solid', onClick: () => emit('open-sweep') }]"
+          :actions="[
+            {
+              label: t('admin.crypto.signer.reunlockAction'),
+              color: 'warning',
+              variant: 'solid',
+              onClick: () => emit('open-sweep'),
+            },
+          ]"
           data-testid="signer-window-expired"
         />
         <UAlert
@@ -69,7 +103,14 @@
           icon="i-lucide-lock"
           :title="t('admin.crypto.signer.locked')"
           :description="t('admin.crypto.signer.lockedHint')"
-          :actions="[{ label: t('admin.crypto.signer.goUnlock'), color: 'warning', variant: 'solid', onClick: () => emit('open-sweep') }]"
+          :actions="[
+            {
+              label: t('admin.crypto.signer.goUnlock'),
+              color: 'warning',
+              variant: 'solid',
+              onClick: () => emit('open-sweep'),
+            },
+          ]"
           data-testid="signer-locked-notice"
         />
         <UAlert
@@ -85,11 +126,20 @@
 
       <!-- Empty state: guide the operator through the setup instead of a wall of
            warning badges and disabled controls. -->
-      <div v-if="!status.configured" class="rounded-lg border border-default p-3" data-testid="signer-setup-steps">
-        <p class="text-sm font-medium text-highlighted">{{ t('admin.crypto.signer.setupStepsTitle') }}</p>
+      <div
+        v-if="!status.configured"
+        class="rounded-lg border border-default p-3"
+        data-testid="signer-setup-steps"
+      >
+        <p class="text-sm font-medium text-highlighted">{{
+          t('admin.crypto.signer.setupStepsTitle')
+        }}</p>
         <ol class="mt-2 grid gap-1.5 text-sm text-muted">
           <li v-for="(step, index) in setupSteps" :key="step" class="flex gap-2">
-            <span class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary">{{ index + 1 }}</span>
+            <span
+              class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary"
+              >{{ index + 1 }}</span
+            >
             <span>{{ t(step) }}</span>
           </li>
         </ol>
@@ -111,7 +161,8 @@
           data-testid="signer-generate"
           :disabled="!cryptoReady || loading"
           @click="openWizard('setup')"
-        >{{ t('admin.crypto.signer.generateAction') }}</UButton>
+          >{{ t('admin.crypto.signer.generateAction') }}</UButton
+        >
         <template v-else>
           <!-- Locked/expired: unlocking is the primary next step. While a window is
                open the same button is a quiet secondary action, so it never competes
@@ -125,7 +176,14 @@
             :class="effectivelyLocked ? 'signer-verify--primary' : 'signer-verify--secondary'"
             :disabled="!cryptoReady"
             @click="verifyOpen = true"
-          >{{ t(effectivelyLocked ? 'admin.crypto.signer.verifyAction' : 'admin.crypto.signer.reunlockAction') }}</UButton>
+            >{{
+              t(
+                effectivelyLocked
+                  ? 'admin.crypto.signer.verifyAction'
+                  : 'admin.crypto.signer.reunlockAction',
+              )
+            }}</UButton
+          >
           <UButton
             color="neutral"
             variant="outline"
@@ -133,7 +191,8 @@
             data-testid="signer-resplit"
             :disabled="!cryptoReady || !status.dk_commitment"
             @click="openWizard('resplit')"
-          >{{ t('admin.crypto.signer.resplitAction') }}</UButton>
+            >{{ t('admin.crypto.signer.resplitAction') }}</UButton
+          >
         </template>
       </div>
 
@@ -145,12 +204,19 @@
           variant="ghost"
           size="xs"
           trailing-icon="i-lucide-chevron-down"
-          :ui="{ trailingIcon: advancedOpen ? 'rotate-180 transition-transform' : 'transition-transform' }"
+          :ui="{
+            trailingIcon: advancedOpen ? 'rotate-180 transition-transform' : 'transition-transform',
+          }"
           :aria-expanded="advancedOpen ? 'true' : 'false'"
           data-testid="signer-advanced-toggle"
           @click="advancedOpen = !advancedOpen"
-        >{{ t('admin.crypto.signer.advanced') }}</UButton>
-        <dl v-if="advancedOpen" class="mt-2 grid gap-2 text-sm sm:grid-cols-[9rem_minmax(0,1fr)]" data-testid="signer-advanced">
+          >{{ t('admin.crypto.signer.advanced') }}</UButton
+        >
+        <dl
+          v-if="advancedOpen"
+          class="mt-2 grid gap-2 text-sm sm:grid-cols-[9rem_minmax(0,1fr)]"
+          data-testid="signer-advanced"
+        >
           <dt class="text-muted">{{ t('admin.crypto.signer.vaultVersion') }}</dt>
           <dd class="text-default">{{ status.vault_version }}</dd>
           <dt class="text-muted">{{ t('admin.crypto.signer.createdAt') }}</dt>
@@ -158,13 +224,17 @@
           <template v-if="status.dk_commitment">
             <dt class="text-muted">{{ t('admin.crypto.signer.commitment') }}</dt>
             <dd class="min-w-0">
-              <p class="font-mono text-xs break-all text-default" data-testid="signer-commitment">{{ status.dk_commitment }}</p>
+              <p class="font-mono text-xs break-all text-default" data-testid="signer-commitment">{{
+                status.dk_commitment
+              }}</p>
               <p class="mt-1 text-xs text-muted">{{ t('admin.crypto.signer.commitmentHint') }}</p>
             </dd>
           </template>
         </dl>
       </div>
-      <p class="text-xs leading-relaxed text-muted">{{ t('admin.crypto.signer.noStorageNotice') }}</p>
+      <p class="text-xs leading-relaxed text-muted">{{
+        t('admin.crypto.signer.noStorageNotice')
+      }}</p>
     </template>
 
     <SignerShardSetupWizard
@@ -201,13 +271,13 @@ import {
   getSignerRiskNotice,
   getSignerShardStatus,
   type SignerRiskNotice,
-  type SignerShardStatus
+  type SignerShardStatus,
 } from '@/api/admin/cryptoSigner'
 import {
   detectSignerCrypto,
   detectSignerCryptoSupport,
   type SignerCrypto,
-  type SignerCryptoUnavailableCode
+  type SignerCryptoUnavailableCode,
 } from '@/utils/signer/cryptoProvider'
 import { extractApiErrorMessage } from '@/utils/apiError'
 import { useAppStore } from '@/stores/app'
@@ -261,27 +331,61 @@ const windowExpired = computed(() => {
   if (!unlockedUntilMs.value) return false
   return unlockRemainingSeconds.value <= 0
 })
-const effectivelyLocked = computed(() => !!status.value && (status.value.locked || windowExpired.value))
-const unlocked = computed(() => !!status.value && status.value.configured && !effectivelyLocked.value)
-const windowActive = computed(() => unlocked.value && unlockedUntilMs.value > 0 && unlockRemainingSeconds.value > 0)
+const effectivelyLocked = computed(
+  () => !!status.value && (status.value.locked || windowExpired.value),
+)
+const unlocked = computed(
+  () => !!status.value && status.value.configured && !effectivelyLocked.value,
+)
+const windowActive = computed(
+  () => unlocked.value && unlockedUntilMs.value > 0 && unlockRemainingSeconds.value > 0,
+)
 const unlockRemainingLabel = computed(() => {
   const total = unlockRemainingSeconds.value
   const minutes = Math.floor(total / 60)
   const seconds = total % 60
   return `${minutes}:${String(seconds).padStart(2, '0')}`
 })
-const countdownTone = computed<string>(() => (unlockRemainingSeconds.value <= 60 && unlockRemainingSeconds.value > 0 ? 'warning' : 'success'))
-const lockState = computed<{ id: 'expired' | 'locked' | 'unlocked'; tone: 'error' | 'success'; icon: string; labelKey: string }>(() => {
-  if (windowExpired.value) return { id: 'expired', tone: 'error', icon: 'i-lucide-timer-off', labelKey: 'admin.crypto.signer.lockedExpired' }
-  if (status.value?.locked) return { id: 'locked', tone: 'error', icon: 'i-lucide-lock', labelKey: 'admin.crypto.signer.locked' }
-  return { id: 'unlocked', tone: 'success', icon: 'i-lucide-lock-open', labelKey: 'admin.crypto.signer.unlocked' }
+const countdownTone = computed<string>(() =>
+  unlockRemainingSeconds.value <= 60 && unlockRemainingSeconds.value > 0 ? 'warning' : 'success',
+)
+const lockState = computed<{
+  id: 'expired' | 'locked' | 'unlocked'
+  tone: 'error' | 'success'
+  icon: string
+  labelKey: string
+}>(() => {
+  if (windowExpired.value)
+    return {
+      id: 'expired',
+      tone: 'error',
+      icon: 'i-lucide-timer-off',
+      labelKey: 'admin.crypto.signer.lockedExpired',
+    }
+  if (status.value?.locked)
+    return {
+      id: 'locked',
+      tone: 'error',
+      icon: 'i-lucide-lock',
+      labelKey: 'admin.crypto.signer.locked',
+    }
+  return {
+    id: 'unlocked',
+    tone: 'success',
+    icon: 'i-lucide-lock-open',
+    labelKey: 'admin.crypto.signer.unlocked',
+  }
 })
 const secondaryStatusLabel = computed(() => {
   if (!status.value) return ''
   const parts: string[] = []
   if (status.value.configured) {
-    parts.push(`${status.value.scheme ?? 'shamir-gf256'} · ${status.value.threshold ?? 2}-of-${status.value.total ?? 3}`)
-    parts.push(t(status.value.auto_enabled ? 'admin.crypto.signer.autoOn' : 'admin.crypto.signer.autoOff'))
+    parts.push(
+      `${status.value.scheme ?? 'shamir-gf256'} · ${status.value.threshold ?? 2}-of-${status.value.total ?? 3}`,
+    )
+    parts.push(
+      t(status.value.auto_enabled ? 'admin.crypto.signer.autoOn' : 'admin.crypto.signer.autoOff'),
+    )
   }
   parts.push(`${t('admin.crypto.signer.backendLabel')}: ${backendLabel.value}`)
   return parts.join(' · ')
@@ -289,18 +393,22 @@ const secondaryStatusLabel = computed(() => {
 const setupSteps = [
   'admin.crypto.signer.setupStep1',
   'admin.crypto.signer.setupStep2',
-  'admin.crypto.signer.setupStep3'
+  'admin.crypto.signer.setupStep3',
 ] as const
 
-const cryptoUnavailableKey = computed(() => (cryptoUnavailable.value === 'insecure-context'
-  ? 'admin.crypto.signer.insecureContext'
-  : cryptoUnavailable.value === 'no-csprng'
-    ? 'admin.crypto.signer.noCsprng'
-    : 'admin.crypto.signer.noAes'))
+const cryptoUnavailableKey = computed(() =>
+  cryptoUnavailable.value === 'insecure-context'
+    ? 'admin.crypto.signer.insecureContext'
+    : cryptoUnavailable.value === 'no-csprng'
+      ? 'admin.crypto.signer.noCsprng'
+      : 'admin.crypto.signer.noAes',
+)
 
-const backendLabel = computed(() => (crypto.value?.backend === 'noble'
-  ? t('admin.crypto.signer.noble')
-  : t('admin.crypto.signer.webcrypto')))
+const backendLabel = computed(() =>
+  crypto.value?.backend === 'noble'
+    ? t('admin.crypto.signer.noble')
+    : t('admin.crypto.signer.webcrypto'),
+)
 
 function probeCrypto(): void {
   const support = detectSignerCryptoSupport()
@@ -325,7 +433,7 @@ async function refresh(): Promise<void> {
   try {
     const [nextStatus, nextNotice] = await Promise.all([
       getSignerShardStatus(),
-      getSignerRiskNotice().catch(() => null)
+      getSignerRiskNotice().catch(() => null),
     ])
     status.value = nextStatus
     if (nextNotice) notice.value = nextNotice
@@ -386,7 +494,9 @@ function formatTime(value?: string): string {
 onMounted(() => {
   probeCrypto()
   void refresh()
-  unlockTicker = setInterval(() => { unlockClock.value = Date.now() }, 1000)
+  unlockTicker = setInterval(() => {
+    unlockClock.value = Date.now()
+  }, 1000)
 })
 
 onUnmounted(() => {

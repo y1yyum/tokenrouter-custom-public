@@ -23,7 +23,7 @@ const API_CODES: Record<string, string> = {
   CRYPTO_GRANT_REQUIRED: 'totpRequired',
   CRYPTO_TOTP_REQUIRED: 'totpRequired',
   CRYPTO_TOTP_INVALID: 'totpInvalid',
-  CRYPTO_RATE_LIMITED: 'totpRateLimited'
+  CRYPTO_RATE_LIMITED: 'totpRateLimited',
 }
 
 const SHARE_ERRORS: Record<string, string> = {
@@ -32,20 +32,20 @@ const SHARE_ERRORS: Record<string, string> = {
   checksum: 'shareChecksum',
   parameters: 'shareParameters',
   threshold: 'shareThreshold',
-  duplicate: 'shareDuplicate'
+  duplicate: 'shareDuplicate',
 }
 
 const CRYPTO_ERRORS: Record<string, string> = {
   'insecure-context': 'insecureContext',
   'no-csprng': 'noCsprng',
-  'no-aes-gcm': 'cryptoUnavailable'
+  'no-aes-gcm': 'cryptoUnavailable',
 }
 
 const CAMERA_ERRORS: Record<string, string> = {
   insecure: 'cameraInsecure',
   unsupported: 'cameraUnsupported',
   denied: 'cameraDenied',
-  unavailable: 'cameraUnavailable'
+  unavailable: 'cameraUnavailable',
 }
 
 export function signerErrorCode(error: unknown): string | undefined {
@@ -66,7 +66,8 @@ export function isRateLimitedError(error: unknown): boolean {
 /** Returns a key suffix (without the `admin.crypto.signer.errors.` prefix). */
 export function signerErrorKey(error: unknown): string | undefined {
   if (error instanceof ShareFormatError) {
-    if (error.code === 'format' && error.detail?.startsWith('invalid-character')) return 'shareInvalidCharacter'
+    if (error.code === 'format' && error.detail?.startsWith('invalid-character'))
+      return 'shareInvalidCharacter'
     return SHARE_ERRORS[error.code]
   }
   if (error instanceof SignerCryptoUnavailableError) return CRYPTO_ERRORS[error.code]

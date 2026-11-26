@@ -8,19 +8,35 @@
         data-test="provider-compact-window"
       >
         <span class="min-w-0 truncate" :title="window.label">{{ window.label }}</span>
-        <div v-if="window.utilization !== null" class="h-1 min-w-1 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700" aria-hidden="true">
-          <div class="h-full rounded-full bg-primary-500" :style="{ width: Math.min(100, Math.max(0, window.utilization)) + '%' }"></div>
+        <div
+          v-if="window.utilization !== null"
+          class="h-1 min-w-1 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700"
+          aria-hidden="true"
+        >
+          <div
+            class="h-full rounded-full bg-primary-500"
+            :style="{ width: Math.min(100, Math.max(0, window.utilization)) + '%' }"
+          ></div>
         </div>
-        <span class="ml-auto shrink-0 tabular-nums">{{ window.utilization === null ? '—' : Math.round(window.utilization) + '%' }}</span>
+        <span class="ml-auto shrink-0 tabular-nums">{{
+          window.utilization === null ? '—' : Math.round(window.utilization) + '%'
+        }}</span>
       </div>
     </div>
     <div v-else-if="compact && (loading || upstreamUsageLoading)" class="skeleton h-3 w-20"></div>
-    <div v-else-if="compact && compactUsageNotice" class="truncate text-xs leading-4 text-gray-500 dark:text-gray-400">
+    <div
+      v-else-if="compact && compactUsageNotice"
+      class="truncate text-xs leading-4 text-gray-500 dark:text-gray-400"
+    >
       {{ compactUsageNotice }}
     </div>
 
     <div class="min-w-0" :class="{ 'flex items-center gap-1 text-xs leading-4': compact }">
-      <span v-if="compact && compactObservedAt" class="min-w-0 truncate text-gray-500 dark:text-gray-400" :title="compactObservedAt">
+      <span
+        v-if="compact && compactObservedAt"
+        class="min-w-0 truncate text-gray-500 dark:text-gray-400"
+        :title="compactObservedAt"
+      >
         {{ compactObservedAt }}
       </span>
       <ProviderUpstreamUsageQueryButton
@@ -30,9 +46,15 @@
         :loading="upstreamUsageLoading"
         :request="requestUpstreamUsage"
       />
-      <ProviderCellDetails :inline="!compact" keep-mounted :label="t('admin.providers.compact.usageDetails')">
+      <ProviderCellDetails
+        :inline="!compact"
+        keep-mounted
+        :label="t('admin.providers.compact.usageDetails')"
+      >
         <template #trigger>
-          <span v-if="compactWindows.length > 4" data-test="provider-compact-window-overflow">+{{ compactWindows.length - 4 }}</span>
+          <span v-if="compactWindows.length > 4" data-test="provider-compact-window-overflow"
+            >+{{ compactWindows.length - 4 }}</span
+          >
           <span v-else>{{ t('common.more') }}</span>
         </template>
         <div v-if="showUsageWindows">
@@ -297,7 +319,9 @@
             <!-- Usage data from API -->
             <div v-else-if="antigravityUsageGroups.length > 0" class="space-y-2">
               <div v-for="group in antigravityUsageGroups" :key="group.key" class="space-y-1">
-                <div class="text-right text-xs font-medium text-gray-500 dark:text-dark-400 lg:text-left">
+                <div
+                  class="text-right text-xs font-medium text-gray-500 dark:text-dark-400 lg:text-left"
+                >
                   {{ t(group.labelKey) }}
                 </div>
                 <UsageProgressBar
@@ -335,7 +359,10 @@
             </div>
             <div v-else class="text-xs text-gray-400">-</div>
 
-            <div v-if="!loading" class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start">
+            <div
+              v-if="!loading"
+              class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start"
+            >
               <button
                 type="button"
                 class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8"
@@ -427,7 +454,9 @@
                     class="rounded-compact bg-emerald-50 px-1 py-0.5 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
                     :title="t('admin.providers.usageWindow.grokPrepaid')"
                   >
-                    {{ t('admin.providers.usageWindow.grokPrepaid') }} ${{ grokPrepaidMoneyLine.prepaid }}
+                    {{ t('admin.providers.usageWindow.grokPrepaid') }} ${{
+                      grokPrepaidMoneyLine.prepaid
+                    }}
                   </span>
                   <span
                     v-if="grokPrepaidMoneyLine.showUsedLimit"
@@ -609,7 +638,9 @@
                   <div class="font-semibold mb-1">{{
                     t('admin.providers.gemini.quotaPolicy.title')
                   }}</div>
-                  <div class="mb-2 text-gray-300">{{ t('admin.providers.gemini.quotaPolicy.note') }}</div>
+                  <div class="mb-2 text-gray-300">{{
+                    t('admin.providers.gemini.quotaPolicy.note')
+                  }}</div>
                   <div class="space-y-1">
                     <div
                       ><strong>{{ geminiQuotaPolicyChannel }}:</strong></div
@@ -682,7 +713,10 @@
             <div
               v-if="
                 provider.type !== 'apikey' ||
-                (!upstreamUsage && !upstreamUsageError && !upstreamUsageLoading && !upstreamUsageDisabled)
+                (!upstreamUsage &&
+                  !upstreamUsageError &&
+                  !upstreamUsageLoading &&
+                  !upstreamUsageDisabled)
               "
               class="text-xs text-gray-400"
               >-</div
@@ -743,7 +777,11 @@
               @updated="handleOllamaCloudUsageUpdated"
             />
             <!-- Daily accounting includes requests, tokens, provider USD cost, and optional user charges. -->
-            <ProviderUsageStatsChips v-if="!compact && todayStats" :stats="todayStats" scope="today" />
+            <ProviderUsageStatsChips
+              v-if="!compact && todayStats"
+              :stats="todayStats"
+              scope="today"
+            />
             <!-- Loading skeleton for today stats -->
             <div
               v-else-if="!compact && todayStatsLoading"
@@ -810,7 +848,11 @@
         </div>
         <div v-if="compact" class="mt-2 border-t border-gray-200 pt-2 dark:border-dark-600">
           <p class="mb-1 font-medium">{{ t('admin.providers.columns.todayStats') }}</p>
-          <ProviderTodayStatsCell :stats="todayStats" :loading="todayStatsLoading" :error="todayStatsError" />
+          <ProviderTodayStatsCell
+            :stats="todayStats"
+            :loading="todayStatsLoading"
+            :error="todayStatsError"
+          />
         </div>
       </ProviderCellDetails>
     </div>
@@ -1206,7 +1248,9 @@ const compactUpstreamResult = computed(() =>
     ? resolveUpstreamUsageResult(props.provider, props.upstreamUsage)
     : null,
 )
-const compactUpstreamUsage = computed(() => normalizeUpstreamUsageResult(compactUpstreamResult.value))
+const compactUpstreamUsage = computed(() =>
+  normalizeUpstreamUsageResult(compactUpstreamResult.value),
+)
 
 // compactWindows preserves each platform's applicable periods and feeds the overflow count.
 const compactWindows = computed<CompactUsageWindow[]>(() => {
@@ -1218,7 +1262,12 @@ const compactWindows = computed<CompactUsageWindow[]>(() => {
   const provider = props.provider
   if (showUsageWindows.value) {
     const usage = usageInfo.value
-    if (provider.platform === 'antigravity' && !isForbidden.value && !needsReauth.value && !usage?.error) {
+    if (
+      provider.platform === 'antigravity' &&
+      !isForbidden.value &&
+      !needsReauth.value &&
+      !usage?.error
+    ) {
       for (const group of antigravityUsageGroups.value) {
         const family = t(group.labelKey)
         add(family + ' 7d', group.weekly)
@@ -1276,7 +1325,9 @@ const compactUsageNotice = computed(() => {
   if (usageInfo.value?.error) return usageErrorLabel.value
   const wallet = compactUpstreamUsage.value
   if (wallet?.balances?.length) {
-    return wallet.balances.map((entry) => entry.currency + ' ' + formatCompactNumber(entry.remaining)).join(' · ')
+    return wallet.balances
+      .map((entry) => entry.currency + ' ' + formatCompactNumber(entry.remaining))
+      .join(' · ')
   }
   const remaining = wallet?.balance?.remaining
   if (remaining != null) {
@@ -1285,7 +1336,8 @@ const compactUsageNotice = computed(() => {
     })
   }
   if (wallet?.subscription) return wallet.subscription.plan_name
-  if (grokQuotaUnknown.value && props.provider.platform === 'grok') return grokQuotaUnknownLabel.value
+  if (grokQuotaUnknown.value && props.provider.platform === 'grok')
+    return grokQuotaUnknownLabel.value
   return ''
 })
 

@@ -30,7 +30,8 @@
         :disabled="disabled"
         data-testid="share-input-scan"
         @click="openScanner"
-      >{{ t('admin.crypto.signer.shareInput.scan') }}</UButton>
+        >{{ t('admin.crypto.signer.shareInput.scan') }}</UButton
+      >
       <UButton
         color="neutral"
         variant="outline"
@@ -39,7 +40,8 @@
         :disabled="disabled"
         data-testid="share-input-upload"
         @click="fileInput?.click()"
-      >{{ t('admin.crypto.signer.shareInput.upload') }}</UButton>
+        >{{ t('admin.crypto.signer.shareInput.upload') }}</UButton
+      >
       <input
         ref="fileInput"
         type="file"
@@ -68,21 +70,24 @@ import { signerErrorI18nKey } from '@/utils/signer/errors'
 import { decodeQrFromImageFile, detectQrCameraSupport } from '@/utils/signer/qr'
 import { normalizeShareText, parseShare, type ShardShare } from '@/utils/signer/shardFormat'
 
-const props = withDefaults(defineProps<{
-  modelValue: string
-  crypto: SignerCrypto | null
-  label?: string
-  hint?: string
-  inputId?: string
-  disabled?: boolean
-  invalid?: boolean
-}>(), {
-  label: '',
-  hint: '',
-  inputId: 'signer-share-input',
-  disabled: false,
-  invalid: false
-})
+const props = withDefaults(
+  defineProps<{
+    modelValue: string
+    crypto: SignerCrypto | null
+    label?: string
+    hint?: string
+    inputId?: string
+    disabled?: boolean
+    invalid?: boolean
+  }>(),
+  {
+    label: '',
+    hint: '',
+    inputId: 'signer-share-input',
+    disabled: false,
+    invalid: false,
+  },
+)
 
 const emit = defineEmits<{
   (event: 'update:modelValue', value: string): void
@@ -105,7 +110,7 @@ const parsedSummary = computed(() => {
     index: parsedInfo.value.index,
     total: parsedInfo.value.total,
     threshold: parsedInfo.value.threshold,
-    length: parsedInfo.value.data.length
+    length: parsedInfo.value.data.length,
   })
 })
 
@@ -123,7 +128,8 @@ async function validate(value: string): Promise<void> {
     emit('parsed', share)
   } catch (error) {
     parsedInfo.value = null
-    if (touched) messageKey.value = signerErrorI18nKey(error) ?? 'admin.crypto.signer.errors.shareFormat'
+    if (touched)
+      messageKey.value = signerErrorI18nKey(error) ?? 'admin.crypto.signer.errors.shareFormat'
     emit('parsed', null)
   }
 }
@@ -168,9 +174,10 @@ function onBlur(event: Event): void {
 function openScanner(): void {
   const support = detectQrCameraSupport()
   if (!support.supported) {
-    messageKey.value = support.reason === 'insecure'
-      ? 'admin.crypto.signer.errors.cameraInsecure'
-      : 'admin.crypto.signer.errors.cameraUnsupported'
+    messageKey.value =
+      support.reason === 'insecure'
+        ? 'admin.crypto.signer.errors.cameraInsecure'
+        : 'admin.crypto.signer.errors.cameraUnsupported'
     return
   }
   messageKey.value = ''

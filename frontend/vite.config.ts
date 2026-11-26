@@ -123,7 +123,8 @@ function injectPublicSettings(backendUrl: string, devOrigin: string): Plugin {
 }
 
 // cryptoVendorPattern selects libraries owned by the on-chain payment routes.
-const cryptoVendorPattern = /\/node_modules\/(?:\.nuxt-ui|@nuxt\/ui|@iconify\/vue|@noble\/(?:ciphers|hashes)|@tanstack\/(?:vue-table|table-core)|reka-ui|vaul-vue|tailwind-variants|tailwind-merge|jsqr)\//
+const cryptoVendorPattern =
+  /\/node_modules\/(?:\.nuxt-ui|@nuxt\/ui|@iconify\/vue|@noble\/(?:ciphers|hashes)|@tanstack\/(?:vue-table|table-core)|reka-ui|vaul-vue|tailwind-variants|tailwind-merge|jsqr)\//
 
 // cryptoUiPlugins limits the Nuxt UI Tailwind transform to the crypto stylesheet.
 // The host stylesheet and Vue component styles still go through Tailwind 3.

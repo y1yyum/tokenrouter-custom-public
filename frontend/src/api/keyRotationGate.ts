@@ -59,9 +59,12 @@ export interface KeyRotationRiskAckResult {
  * the operator turned the feature off.
  */
 export async function acknowledgeKeyRotationRisk(): Promise<KeyRotationRiskAckResult> {
-  const { data } = await apiClient.post<KeyRotationRiskAckResult>('/user/security/key-rotation-risk-ack', {
-    acknowledge_risk: true,
-  })
+  const { data } = await apiClient.post<KeyRotationRiskAckResult>(
+    '/user/security/key-rotation-risk-ack',
+    {
+      acknowledge_risk: true,
+    },
+  )
   return data
 }
 

@@ -32,9 +32,14 @@
       :class="[
         disabled ? 'opacity-75' : '',
         invalid ? 'ring-error' : 'ring-accented',
-        focused && activeIndex === index - 1 ? (invalid ? 'outline-3 outline-error/25' : 'ring-2 ring-primary outline-3 outline-primary/25') : ''
+        focused && activeIndex === index - 1
+          ? invalid
+            ? 'outline-3 outline-error/25'
+            : 'ring-2 ring-primary outline-3 outline-primary/25'
+          : '',
       ]"
-    >{{ modelValue[index - 1] || '\u200b' }}</span>
+      >{{ modelValue[index - 1] || '\u200b' }}</span
+    >
   </div>
 </template>
 
@@ -44,13 +49,16 @@ import { normalizeOtpDigits } from '@/utils/otp'
 
 defineOptions({ inheritAttrs: false })
 
-const props = withDefaults(defineProps<{
-  modelValue: string
-  label: string
-  disabled?: boolean
-  invalid?: boolean
-  autofocus?: boolean
-}>(), { disabled: false, invalid: false, autofocus: true })
+const props = withDefaults(
+  defineProps<{
+    modelValue: string
+    label: string
+    disabled?: boolean
+    invalid?: boolean
+    autofocus?: boolean
+  }>(),
+  { disabled: false, invalid: false, autofocus: true },
+)
 
 const emit = defineEmits<{
   'update:modelValue': [value: string]
@@ -74,7 +82,10 @@ function focus(index?: number) {
   if (props.disabled || !input.value) return
   input.value.focus()
   const position = Math.min(index ?? props.modelValue.length, props.modelValue.length)
-  input.value.setSelectionRange(position, index === undefined ? position : Math.min(position + 1, props.modelValue.length))
+  input.value.setSelectionRange(
+    position,
+    index === undefined ? position : Math.min(position + 1, props.modelValue.length),
+  )
   syncSelection()
 }
 
@@ -114,17 +125,26 @@ function handlePointerDown(event: PointerEvent) {
   nextTick(() => {
     if (!input.value || !bounds.width) return
     if (!target) return
-    const index = Math.max(0, Math.min(5, Math.floor((event.clientX - bounds.left) / (bounds.width / 6))))
+    const index = Math.max(
+      0,
+      Math.min(5, Math.floor((event.clientX - bounds.left) / (bounds.width / 6))),
+    )
     const position = Math.min(index, props.modelValue.length)
     input.value.setSelectionRange(position, position)
     syncSelection()
   })
 }
 
-watch(() => props.modelValue, () => nextTick(syncSelection))
-watch(() => props.disabled, disabled => {
-  if (!disabled && props.autofocus) nextTick(() => focus())
-})
+watch(
+  () => props.modelValue,
+  () => nextTick(syncSelection),
+)
+watch(
+  () => props.disabled,
+  (disabled) => {
+    if (!disabled && props.autofocus) nextTick(() => focus())
+  },
+)
 onMounted(() => {
   if (props.autofocus) nextTick(() => focus())
 })

@@ -1,5 +1,11 @@
 <template>
-  <BaseDialog :panel-data="{ 'data-crypto-ui': '' }" trap-focus :show="show" :title="t('admin.crypto.signer.shareInput.scanTitle')" @close="close">
+  <BaseDialog
+    :panel-data="{ 'data-crypto-ui': '' }"
+    trap-focus
+    :show="show"
+    :title="t('admin.crypto.signer.shareInput.scanTitle')"
+    @close="close"
+  >
     <div class="space-y-3 text-sm">
       <p class="text-muted">{{ t('admin.crypto.signer.shareInput.scanHint') }}</p>
       <div class="relative aspect-square w-full overflow-hidden rounded-lg bg-black">
@@ -12,7 +18,10 @@
           autoplay
           :aria-label="t('admin.crypto.signer.shareInput.scanTitle')"
         />
-        <div v-if="state === 'starting'" class="absolute inset-0 flex items-center justify-center bg-black/60 text-white">
+        <div
+          v-if="state === 'starting'"
+          class="absolute inset-0 flex items-center justify-center bg-black/60 text-white"
+        >
           <span class="flex items-center gap-2">
             <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
             {{ t('admin.crypto.signer.shareInput.scanStarting') }}
@@ -27,7 +36,9 @@
         icon="i-lucide-triangle-alert"
         :title="t(errorKey)"
       />
-      <p v-if="state === 'scanning'" class="text-xs text-muted">{{ t('admin.crypto.signer.shareInput.scanHint') }}</p>
+      <p v-if="state === 'scanning'" class="text-xs text-muted">{{
+        t('admin.crypto.signer.shareInput.scanHint')
+      }}</p>
     </div>
     <template #footer>
       <UButton color="neutral" variant="subtle" data-testid="qr-camera-cancel" @click="close">
@@ -49,7 +60,7 @@ import {
   detectQrCameraSupport,
   openQrCamera,
   QrCameraError,
-  stopMediaStream
+  stopMediaStream,
 } from '@/utils/signer/qr'
 import { signerErrorI18nKey } from '@/utils/signer/errors'
 
@@ -90,7 +101,8 @@ async function start(): Promise<void> {
   } catch (error) {
     state.value = 'failed'
     errorKey.value = signerErrorI18nKey(error) ?? 'admin.crypto.signer.errors.cameraDenied'
-    if (!(error instanceof QrCameraError)) errorKey.value = 'admin.crypto.signer.errors.cameraUnavailable'
+    if (!(error instanceof QrCameraError))
+      errorKey.value = 'admin.crypto.signer.errors.cameraUnavailable'
     return
   }
   if (!props.show) {
@@ -131,10 +143,14 @@ function close(): void {
   emit('close')
 }
 
-watch(() => props.show, show => {
-  if (show) void start()
-  else stop()
-}, { immediate: true })
+watch(
+  () => props.show,
+  (show) => {
+    if (show) void start()
+    else stop()
+  },
+  { immediate: true },
+)
 
 onBeforeUnmount(stop)
 </script>

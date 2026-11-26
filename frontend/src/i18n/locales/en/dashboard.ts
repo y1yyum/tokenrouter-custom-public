@@ -899,7 +899,8 @@ export default {
         'After disabling, you will no longer need a verification code to log in. This may reduce your account security.',
       enterPassword: 'Enter your current password to confirm',
       confirmDisable: 'Confirm Disable',
-      disablePaymentCodeHint: 'Enter a fresh six-digit code from your authenticator app to disable payment verification.',
+      disablePaymentCodeHint:
+        'Enter a fresh six-digit code from your authenticator app to disable payment verification.',
       disableSuccess: 'Two-factor authentication disabled',
       disableFailed: 'Failed to disable, please check your password',
       loginTitle: 'Two-Factor Authentication',

@@ -30,13 +30,7 @@ export type TransactionType =
   | 'other'
 
 export type TransactionStatusColor =
-  | 'primary'
-  | 'secondary'
-  | 'success'
-  | 'info'
-  | 'warning'
-  | 'error'
-  | 'neutral'
+  'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'error' | 'neutral'
 
 export interface TransactionStatus {
   label: string
@@ -79,7 +73,7 @@ const TYPE_ICONS: Record<TransactionType, string> = {
   usage: 'i-lucide-zap',
   adjustment: 'i-lucide-wand-2',
   refund: 'i-lucide-rotate-ccw',
-  other: 'i-lucide-circle-dot'
+  other: 'i-lucide-circle-dot',
 }
 
 const TONE_AMOUNT_CLASS: Record<TransactionTone, string> = {
@@ -87,7 +81,7 @@ const TONE_AMOUNT_CLASS: Record<TransactionTone, string> = {
   negative: 'amount-negative',
   reversal: 'amount-reversal',
   pending: 'amount-pending',
-  neutral: 'amount-pending'
+  neutral: 'amount-pending',
 }
 
 const TONE_ORB_CLASS: Record<TransactionTone, string> = {
@@ -95,7 +89,7 @@ const TONE_ORB_CLASS: Record<TransactionTone, string> = {
   negative: 'icon-orb-negative',
   reversal: 'icon-orb-reversal',
   pending: 'icon-orb-pending',
-  neutral: 'icon-orb-neutral'
+  neutral: 'icon-orb-neutral',
 }
 
 const TONE_SIGN: Record<TransactionTone, '+' | '-' | ''> = {
@@ -103,7 +97,7 @@ const TONE_SIGN: Record<TransactionTone, '+' | '-' | ''> = {
   negative: '-',
   reversal: '-',
   pending: '',
-  neutral: ''
+  neutral: '',
 }
 
 export function transactionIcon(item: TransactionItem): string {
@@ -120,7 +114,10 @@ export function resolveTransactionTone(item: TransactionItem): TransactionTone {
   return 'neutral'
 }
 
-export function resolveTransactionSign(item: TransactionItem, tone: TransactionTone): '+' | '-' | '' {
+export function resolveTransactionSign(
+  item: TransactionItem,
+  tone: TransactionTone,
+): '+' | '-' | '' {
   if (item.amountSign !== undefined) return item.amountSign
   return TONE_SIGN[tone]
 }
@@ -135,9 +132,12 @@ export function formatTransactionAmount(item: TransactionItem): string | null {
 
   const tone = resolveTransactionTone(item)
   const sign = resolveTransactionSign(item, tone)
-  const value = typeof raw === 'number'
-    ? (Number.isFinite(raw) ? Math.abs(raw).toString() : '')
-    : raw.replace(/^[+-]\s*/, '').trim()
+  const value =
+    typeof raw === 'number'
+      ? Number.isFinite(raw)
+        ? Math.abs(raw).toString()
+        : ''
+      : raw.replace(/^[+-]\s*/, '').trim()
   if (!value) return null
 
   return `${sign}${item.amountPrefix ?? ''}${value}${item.amountSuffix ?? ''}`

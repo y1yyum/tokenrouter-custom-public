@@ -132,15 +132,23 @@ export async function getCryptoConfig(): Promise<CryptoConfig> {
 }
 
 // Private RPC settings require a current server-verified payment credential.
-export async function getCryptoConfigPrivate(verification: CryptoVerification): Promise<CryptoConfig> {
-  const { data } = await apiClient.get('/admin/crypto/config/private', cryptoRequestOptions(verification))
+export async function getCryptoConfigPrivate(
+  verification: CryptoVerification,
+): Promise<CryptoConfig> {
+  const { data } = await apiClient.get(
+    '/admin/crypto/config/private',
+    cryptoRequestOptions(verification),
+  )
   return data.data
 }
 
 // The backend applies a pointer patch: omitted keys keep their stored value.
 // Sending only the changed fields is what prevents a full-object write from
 // silently rewriting maps the console never rendered.
-export async function updateCryptoConfig(cfg: CryptoConfigPatch, verification?: CryptoVerification): Promise<void> {
+export async function updateCryptoConfig(
+  cfg: CryptoConfigPatch,
+  verification?: CryptoVerification,
+): Promise<void> {
   await apiClient.put('/admin/crypto/config', cfg, cryptoRequestOptions(verification))
 }
 
@@ -171,7 +179,7 @@ export interface AddressQuery {
 // totals — the operator's main view. Sorting is server-side so it covers the
 // whole set rather than the loaded page.
 export async function listAllAddresses(
-  query: AddressQuery = {}
+  query: AddressQuery = {},
 ): Promise<{ items: DepositAddress[]; total: number; summary: AdminAddressSummary }> {
   const { userId, page = 1, pageSize = 50, sortBy = 'id', sortDir = 'desc' } = query
   const { data } = await apiClient.get('/admin/crypto/addresses', {
@@ -180,8 +188,8 @@ export async function listAllAddresses(
       page_size: pageSize,
       sort_by: sortBy,
       sort_dir: sortDir,
-      ...(userId ? { user_id: userId } : {})
-    }
+      ...(userId ? { user_id: userId } : {}),
+    },
   })
   return {
     items: data.data?.items ?? [],
@@ -190,15 +198,21 @@ export async function listAllAddresses(
       address_count: 0,
       deposit_count: 0,
       credited_total: 0,
-      swept_total: 0
-    }
+      swept_total: 0,
+    },
   }
 }
 
-
-
-export async function setAddressStatus(id: number, status: string, verification?: CryptoVerification): Promise<void> {
-  await apiClient.post(`/admin/crypto/addresses/${id}/status`, { status }, cryptoRequestOptions(verification))
+export async function setAddressStatus(
+  id: number,
+  status: string,
+  verification?: CryptoVerification,
+): Promise<void> {
+  await apiClient.post(
+    `/admin/crypto/addresses/${id}/status`,
+    { status },
+    cryptoRequestOptions(verification),
+  )
 }
 
 export interface CryptoPrivateKeyExport {
@@ -214,14 +228,18 @@ export async function exportAddressPrivateKey(
   id: number,
   verification: CryptoVerification,
   signal?: AbortSignal,
-  share?: string
+  share?: string,
 ): Promise<CryptoPrivateKeyExport> {
   const request = cryptoRequestOptions(verification)
-  const { data } = await apiClient.post<CryptoPrivateKeyExport>(`/admin/crypto/addresses/${id}/export-private-key`, share ? { share } : {}, {
-    ...request,
-    signal,
-    headers: { ...request.headers, 'Cache-Control': 'no-store', Pragma: 'no-cache' }
-  })
+  const { data } = await apiClient.post<CryptoPrivateKeyExport>(
+    `/admin/crypto/addresses/${id}/export-private-key`,
+    share ? { share } : {},
+    {
+      ...request,
+      signal,
+      headers: { ...request.headers, 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+    },
+  )
   return data
 }
 
@@ -266,7 +284,7 @@ export interface SweepGate {
 
 export async function getSweepReadiness(): Promise<SweepGate> {
   const { data } = await apiClient.get('/admin/crypto/sweep/readiness', {
-    headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+    headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
   })
   return data.data
 }
@@ -274,12 +292,16 @@ export async function getSweepReadiness(): Promise<SweepGate> {
 // runSweep executes the sweep. dryRun defaults to true server-side; the
 // caller must pass dryRun=false to move funds. A vault sealed with a browser
 // data key (v3) requires a recovery share in the body.
-export async function runSweep(dryRun: boolean, verification?: CryptoVerification, share?: string): Promise<SweepSummary> {
+export async function runSweep(
+  dryRun: boolean,
+  verification?: CryptoVerification,
+  share?: string,
+): Promise<SweepSummary> {
   const { data } = await apiClient.post('/admin/crypto/sweep/run', share ? { share } : null, {
     ...cryptoRequestOptions(verification),
     // The server waits up to 90s for this operation's gas/token receipts.
     timeout: dryRun ? 30000 : 180000,
-    params: { dry_run: dryRun ? '1' : '0' }
+    params: { dry_run: dryRun ? '1' : '0' },
   })
   return data.data
 }
@@ -297,20 +319,32 @@ export interface SweepRun {
 // A 202 response means the run was accepted, not that the transfer finished.
 // `chains` reuses the existing repeated ?chain= scope of the run endpoint; an
 // empty list keeps the historical "every configured chain" behaviour.
-export async function startSweep(dryRun: boolean, verification?: CryptoVerification, chains?: string[], share?: string): Promise<SweepRun> {
-  const scope = (chains ?? []).filter(Boolean)
-    .map(chain => `chain=${encodeURIComponent(chain)}`)
+export async function startSweep(
+  dryRun: boolean,
+  verification?: CryptoVerification,
+  chains?: string[],
+  share?: string,
+): Promise<SweepRun> {
+  const scope = (chains ?? [])
+    .filter(Boolean)
+    .map((chain) => `chain=${encodeURIComponent(chain)}`)
     .join('&')
-  const { data } = await apiClient.post(`/admin/crypto/sweep/run${scope ? `?${scope}` : ''}`, share ? { share } : null, {
-    ...cryptoRequestOptions(verification),
-    timeout: 30000,
-    params: { dry_run: dryRun ? '1' : '0', async: '1' }
-  })
+  const { data } = await apiClient.post(
+    `/admin/crypto/sweep/run${scope ? `?${scope}` : ''}`,
+    share ? { share } : null,
+    {
+      ...cryptoRequestOptions(verification),
+      timeout: 30000,
+      params: { dry_run: dryRun ? '1' : '0', async: '1' },
+    },
+  )
   return data.data
 }
 
 export async function getSweepRun(id: string, signal?: AbortSignal): Promise<SweepRun> {
-  const { data } = await apiClient.get(`/admin/crypto/sweep/runs/${encodeURIComponent(id)}`, { signal })
+  const { data } = await apiClient.get(`/admin/crypto/sweep/runs/${encodeURIComponent(id)}`, {
+    signal,
+  })
   return data.data
 }
 
@@ -322,15 +356,21 @@ export async function listSweepRuns(): Promise<SweepRun[]> {
 export async function waitForSweepRun(
   initial: SweepRun,
   signal: AbortSignal,
-  update: (run: SweepRun) => void
+  update: (run: SweepRun) => void,
 ): Promise<SweepRun> {
   let run = initial
   while (!signal.aborted) {
     update(run)
     if (run.finished) return run
     await new Promise<void>((resolve, reject) => {
-      const abort = () => { clearTimeout(timer); reject(new DOMException('Polling stopped', 'AbortError')) }
-      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 2000)
+      const abort = () => {
+        clearTimeout(timer)
+        reject(new DOMException('Polling stopped', 'AbortError'))
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', abort)
+        resolve()
+      }, 2000)
       signal.addEventListener('abort', abort, { once: true })
       if (signal.aborted) abort()
     })
@@ -370,18 +410,28 @@ export interface ScanRun {
 // cursor reaches its confirmed head. A server that predates async scanning
 // ignores the flag and answers after one synchronous pass; that comes back as
 // null: the scan already ran, there is nothing to follow.
-export async function startCryptoScan(fromBlock = 0, verification?: CryptoVerification, chains?: string[]): Promise<ScanRun | null> {
-  const { data } = await apiClient.post('/admin/crypto/scan/run', { from_block: fromBlock }, {
-    ...cryptoRequestOptions(verification),
-    timeout: 30000,
-    params: { async: '1', ...(chains?.length ? { chain: chains.join(',') } : {}) }
-  })
+export async function startCryptoScan(
+  fromBlock = 0,
+  verification?: CryptoVerification,
+  chains?: string[],
+): Promise<ScanRun | null> {
+  const { data } = await apiClient.post(
+    '/admin/crypto/scan/run',
+    { from_block: fromBlock },
+    {
+      ...cryptoRequestOptions(verification),
+      timeout: 30000,
+      params: { async: '1', ...(chains?.length ? { chain: chains.join(',') } : {}) },
+    },
+  )
   const run = data?.data
   return run && typeof run.id === 'string' ? run : null
 }
 
 export async function getScanRun(id: string, signal?: AbortSignal): Promise<ScanRun> {
-  const { data } = await apiClient.get(`/admin/crypto/scan/runs/${encodeURIComponent(id)}`, { signal })
+  const { data } = await apiClient.get(`/admin/crypto/scan/runs/${encodeURIComponent(id)}`, {
+    signal,
+  })
   return data.data
 }
 
@@ -392,11 +442,18 @@ export async function listScanRuns(): Promise<ScanRun[]> {
 
 // Cancelling is a payment operation: it needs the same fresh proof as a sweep.
 // Saved progress stays saved. The run reports "cancelled" on a later poll.
-export async function cancelScanRun(id: string, verification?: CryptoVerification): Promise<ScanRun> {
-  const { data } = await apiClient.post(`/admin/crypto/scan/runs/${encodeURIComponent(id)}/cancel`, null, {
-    ...cryptoRequestOptions(verification),
-    timeout: 30000
-  })
+export async function cancelScanRun(
+  id: string,
+  verification?: CryptoVerification,
+): Promise<ScanRun> {
+  const { data } = await apiClient.post(
+    `/admin/crypto/scan/runs/${encodeURIComponent(id)}/cancel`,
+    null,
+    {
+      ...cryptoRequestOptions(verification),
+      timeout: 30000,
+    },
+  )
   return data.data
 }
 
@@ -405,15 +462,21 @@ export async function cancelScanRun(id: string, verification?: CryptoVerificatio
 export async function waitForScanRun(
   initial: ScanRun,
   signal: AbortSignal,
-  update: (run: ScanRun) => void
+  update: (run: ScanRun) => void,
 ): Promise<ScanRun> {
   let run = initial
   while (!signal.aborted) {
     update(run)
     if (run.status !== 'running') return run
     await new Promise<void>((resolve, reject) => {
-      const abort = () => { clearTimeout(timer); reject(new DOMException('Polling stopped', 'AbortError')) }
-      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve() }, 2000)
+      const abort = () => {
+        clearTimeout(timer)
+        reject(new DOMException('Polling stopped', 'AbortError'))
+      }
+      const timer = setTimeout(() => {
+        signal.removeEventListener('abort', abort)
+        resolve()
+      }, 2000)
       signal.addEventListener('abort', abort, { once: true })
       if (signal.aborted) abort()
     })
@@ -421,8 +484,6 @@ export async function waitForScanRun(
   }
   throw new DOMException('Polling stopped', 'AbortError')
 }
-
-
 
 export interface BlockedSweep {
   job_id: number
@@ -454,17 +515,24 @@ export async function listBlockedSweeps(): Promise<BlockedSweep[]> {
 
 // reconcileSweep observes the chain without signing or broadcasting. A missing
 // receipt retains the reservation and original signed bytes for safe resumption.
-export async function reconcileSweep(jobId: number, verification?: CryptoVerification): Promise<ReconcileResult> {
-  const { data } = await apiClient.post(`/admin/crypto/sweep/records/${jobId}/reconcile`, null, cryptoRequestOptions(verification))
+export async function reconcileSweep(
+  jobId: number,
+  verification?: CryptoVerification,
+): Promise<ReconcileResult> {
+  const { data } = await apiClient.post(
+    `/admin/crypto/sweep/records/${jobId}/reconcile`,
+    null,
+    cryptoRequestOptions(verification),
+  )
   return data.data
 }
 
 export async function listSweepRecords(
   chain?: string,
-  page?: { limit?: number; beforeId?: number }
+  page?: { limit?: number; beforeId?: number },
 ): Promise<SweepRecord[]> {
   const { data } = await apiClient.get('/admin/crypto/sweep/records', {
-    params: { chain, limit: page?.limit, before_id: page?.beforeId }
+    params: { chain, limit: page?.limit, before_id: page?.beforeId },
   })
   return data.data ?? []
 }
@@ -483,7 +551,7 @@ export async function getAddressOwners(addresses: string[]): Promise<Record<stri
   const { data } = await apiClient.get('/admin/crypto/address-owners', {
     params: { address: addresses },
     // address=a&address=b, the repeated form the backend reads (no brackets).
-    paramsSerializer: { indexes: null }
+    paramsSerializer: { indexes: null },
   })
   const owners = data?.data?.owners
   return owners && typeof owners === 'object' ? owners : {}
@@ -512,14 +580,22 @@ export async function listDepositsPaged(
   chain: string,
   status: string,
   page = 1,
-  pageSize = 50
+  pageSize = 50,
 ): Promise<{ items: DepositRecord[]; summary: DepositSummary }> {
   const { data } = await apiClient.get('/admin/crypto/deposits', {
-    params: { chain, status, page, page_size: pageSize }
+    params: { chain, status, page, page_size: pageSize },
   })
   return {
     items: data.data?.items ?? [],
-    summary: data.data?.summary ?? { total: 0, credited: 0, pending: 0, ignored: 0, amount: 0, provisional: 0, revoked: 0 }
+    summary: data.data?.summary ?? {
+      total: 0,
+      credited: 0,
+      pending: 0,
+      ignored: 0,
+      amount: 0,
+      provisional: 0,
+      revoked: 0,
+    },
   }
 }
 
@@ -527,7 +603,11 @@ export async function listDepositsPaged(
 // server still requires an administrator JWT session and HTTPS; no client
 // credential is accepted as a substitute for the session.
 export async function runCryptoScan(fromBlock = 0): Promise<void> {
-  await apiClient.post('/admin/crypto/scan/run', { from_block: fromBlock }, { timeout: 15 * 60 * 1000 })
+  await apiClient.post(
+    '/admin/crypto/scan/run',
+    { from_block: fromBlock },
+    { timeout: 15 * 60 * 1000 },
+  )
 }
 
 export type DepositConfirmStatus = 'credited' | 'already_credited' | 'rejected' | 'error'
@@ -552,23 +632,31 @@ export interface DepositConfirmOutcome {
 export async function confirmDeposits(
   ids: number[],
   verification: CryptoVerification,
-  note?: string
+  note?: string,
 ): Promise<DepositConfirmOutcome> {
   const trimmedNote = note?.trim()
-  const { data } = await apiClient.post('/admin/crypto/deposits/confirm', {
-    ids,
-    ...(trimmedNote ? { note: trimmedNote } : {})
-  }, {
-    ...cryptoRequestOptions(verification),
-    // The server reads one receipt per deposit before it credits.
-    timeout: 120_000
-  })
+  const { data } = await apiClient.post(
+    '/admin/crypto/deposits/confirm',
+    {
+      ids,
+      ...(trimmedNote ? { note: trimmedNote } : {}),
+    },
+    {
+      ...cryptoRequestOptions(verification),
+      // The server reads one receipt per deposit before it credits.
+      timeout: 120_000,
+    },
+  )
   const body = data?.data ?? data
   const results: DepositConfirmResult[] = Array.isArray(body?.results) ? body.results : []
   return {
     results,
-    credited: Number.isFinite(body?.credited) ? body.credited : results.filter(item => item.status === 'credited').length,
-    failed: Number.isFinite(body?.failed) ? body.failed : results.filter(item => item.status === 'rejected' || item.status === 'error').length
+    credited: Number.isFinite(body?.credited)
+      ? body.credited
+      : results.filter((item) => item.status === 'credited').length,
+    failed: Number.isFinite(body?.failed)
+      ? body.failed
+      : results.filter((item) => item.status === 'rejected' || item.status === 'error').length,
   }
 }
 
@@ -596,21 +684,27 @@ export interface WalletSecurityStatus {
 // These security endpoints use the standard envelope, unwrapped by apiClient.
 export async function getWalletSecurity(): Promise<WalletSecurityStatus> {
   const { data } = await apiClient.get<WalletSecurityStatus>('/admin/crypto/wallet/security', {
-    headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
+    headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
   })
   return data
 }
 
 // Recovery validates the full trusted snapshot server-side. It never changes
 // the channel's configured enabled flag; payment authorization remains mandatory.
-export async function recoverWalletSecurity(verification: CryptoVerification): Promise<WalletSecurityStatus> {
+export async function recoverWalletSecurity(
+  verification: CryptoVerification,
+): Promise<WalletSecurityStatus> {
   const request = cryptoRequestOptions(verification)
-  const { data } = await apiClient.post<WalletSecurityStatus>('/admin/crypto/wallet/security/recover', {
-    confirmation: 'RECOVER'
-  }, {
-    ...request,
-    headers: { ...request.headers, 'Cache-Control': 'no-store', Pragma: 'no-cache' }
-  })
+  const { data } = await apiClient.post<WalletSecurityStatus>(
+    '/admin/crypto/wallet/security/recover',
+    {
+      confirmation: 'RECOVER',
+    },
+    {
+      ...request,
+      headers: { ...request.headers, 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+    },
+  )
   return data
 }
 
@@ -623,12 +717,16 @@ export async function getWalletStatus(): Promise<WalletStatus> {
 export async function initializeWallet(
   depositMnemonic: string,
   hotMnemonic: string,
-  verification: CryptoVerification
+  verification: CryptoVerification,
 ): Promise<void> {
-  await apiClient.post('/admin/crypto/wallet/initialize', {
-    deposit_mnemonic: depositMnemonic,
-    hot_mnemonic: hotMnemonic
-  }, cryptoRequestOptions(verification))
+  await apiClient.post(
+    '/admin/crypto/wallet/initialize',
+    {
+      deposit_mnemonic: depositMnemonic,
+      hot_mnemonic: hotMnemonic,
+    },
+    cryptoRequestOptions(verification),
+  )
 }
 
 export interface PoolStatus {
@@ -676,8 +774,16 @@ export interface ChainlistCandidate {
 }
 
 // testRPCEndpoint probes one endpoint (chain id + head + latency).
-export async function testRPCEndpoint(chain: string, endpoint: string, verification?: CryptoVerification): Promise<RPCTestResult> {
-  const { data } = await apiClient.post('/admin/crypto/rpc/test', { chain, endpoint }, cryptoRequestOptions(verification))
+export async function testRPCEndpoint(
+  chain: string,
+  endpoint: string,
+  verification?: CryptoVerification,
+): Promise<RPCTestResult> {
+  const { data } = await apiClient.post(
+    '/admin/crypto/rpc/test',
+    { chain, endpoint },
+    cryptoRequestOptions(verification),
+  )
   return data.data
 }
 
@@ -698,17 +804,15 @@ export async function autoPickRPC(
   chain: string,
   exclude: string[],
   want = 3,
-  verification?: CryptoVerification
+  verification?: CryptoVerification,
 ): Promise<RPCAutoPickResult> {
   const { data } = await apiClient.post(
     '/admin/crypto/rpc/auto-pick',
     { chain, exclude, want },
-    { ...cryptoRequestOptions(verification), timeout: 60_000 }
+    { ...cryptoRequestOptions(verification), timeout: 60_000 },
   )
   return { picked: data.data?.picked ?? [], probed: data.data?.probed ?? 0 }
 }
-
-
 
 export interface RPCTestResult {
   endpoint: string
@@ -739,17 +843,22 @@ export async function getHotWalletStatus(): Promise<HotWalletStatus[]> {
 }
 
 // exportDepositsCSV downloads the deposit ledger for reconciliation.
-export async function exportDepositsCSV(chain = '', status = '', verification?: CryptoVerification): Promise<Blob> {
+export async function exportDepositsCSV(
+  chain = '',
+  status = '',
+  verification?: CryptoVerification,
+): Promise<Blob> {
   const response = await apiClient.get<Blob>('/admin/crypto/deposits.csv', {
     ...cryptoRequestOptions(verification),
     params: { chain, status },
     responseType: 'blob',
-    validateStatus: () => true
+    validateStatus: () => true,
   })
   return checkedDownload(response)
 }
 
-export type CryptoVerification = { totpCode: string; credential?: never } | { credential: string; totpCode?: never }
+export type CryptoVerification =
+  { totpCode: string; credential?: never } | { credential: string; totpCode?: never }
 
 // Attach one proof to one request. _retry prevents automatic authentication
 // refresh from replaying payment mutations or consuming the same TOTP twice.
@@ -761,9 +870,14 @@ function cryptoRequestOptions(verification?: CryptoVerification) {
 }
 
 export async function verifyCryptoSecurity(totpCode: string): Promise<CryptoGrant> {
-  const { data } = await apiClient.post('/admin/crypto/security/verify', { totp_code: totpCode }, {
-    ...cryptoRequestOptions(), headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
-  })
+  const { data } = await apiClient.post(
+    '/admin/crypto/security/verify',
+    { totp_code: totpCode },
+    {
+      ...cryptoRequestOptions(),
+      headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+    },
+  )
   return data.data
 }
 
@@ -789,15 +903,26 @@ export async function getCryptoSecurityStatus(): Promise<CryptoSecurityStatus> {
 }
 
 export async function setupCryptoSecurity(): Promise<CryptoSecuritySetup> {
-  const { data } = await apiClient.post<CryptoSecuritySetup>('/admin/crypto/security/setup', {}, cryptoRequestOptions())
+  const { data } = await apiClient.post<CryptoSecuritySetup>(
+    '/admin/crypto/security/setup',
+    {},
+    cryptoRequestOptions(),
+  )
   return data
 }
 
-export async function enableCryptoSecurity(totpCode: string, setupToken: string): Promise<{ success: true }> {
-  const { data } = await apiClient.post<{ success: true }>('/admin/crypto/security/enable', {
-    totp_code: totpCode,
-    setup_token: setupToken
-  }, cryptoRequestOptions({ totpCode }))
+export async function enableCryptoSecurity(
+  totpCode: string,
+  setupToken: string,
+): Promise<{ success: true }> {
+  const { data } = await apiClient.post<{ success: true }>(
+    '/admin/crypto/security/enable',
+    {
+      totp_code: totpCode,
+      setup_token: setupToken,
+    },
+    cryptoRequestOptions({ totpCode }),
+  )
   return data
 }
 
@@ -806,19 +931,28 @@ async function checkedDownload(response: { data: Blob; status: number }): Promis
   // Keep JSON rejection reasons for blob requests; the shared interceptor cannot
   // read a Blob and would otherwise discard expired/replayed/rate-limit errors.
   let detail: Record<string, unknown> = {}
-  try { detail = JSON.parse(await response.data.text()) } catch { /* Non-JSON error. */ }
+  try {
+    detail = JSON.parse(await response.data.text())
+  } catch {
+    /* Non-JSON error. */
+  }
   throw { ...detail, status: response.status }
 }
 
-export type WalletOperationAction = 'sweep' | 'destination_change' | 'export_mnemonics' | 'export_private_key'
+export type WalletOperationAction =
+  'sweep' | 'destination_change' | 'export_mnemonics' | 'export_private_key'
 
 // Intent notification precedes payment verification. The server sends the
 // separate verified notification itself; the client cannot assert verification.
 export async function reportWalletOperationIntent(action: WalletOperationAction): Promise<void> {
-  const { data } = await apiClient.post<{ accepted: boolean }>('/admin/crypto/security/operation-intent', { action }, {
-    ...cryptoRequestOptions(),
-    headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' }
-  })
+  const { data } = await apiClient.post<{ accepted: boolean }>(
+    '/admin/crypto/security/operation-intent',
+    { action },
+    {
+      ...cryptoRequestOptions(),
+      headers: { 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+    },
+  )
   if (data?.accepted !== true) throw new Error('Wallet operation intent was not accepted')
 }
 
@@ -829,20 +963,35 @@ export interface CryptoMnemonicExport {
 
 // Plaintext is returned only for this verified request, without browser caching.
 // A v3 (browser data key) vault additionally needs one operator-held share.
-export async function exportWalletMnemonics(verification: CryptoVerification, share?: string): Promise<CryptoMnemonicExport> {
+export async function exportWalletMnemonics(
+  verification: CryptoVerification,
+  share?: string,
+): Promise<CryptoMnemonicExport> {
   const request = cryptoRequestOptions(verification)
-  const { data } = await apiClient.post<CryptoMnemonicExport>('/admin/crypto/wallet/export-mnemonics', share ? { share } : {}, {
-    ...request,
-    headers: { ...request.headers, 'Cache-Control': 'no-store', Pragma: 'no-cache' }
-  })
+  const { data } = await apiClient.post<CryptoMnemonicExport>(
+    '/admin/crypto/wallet/export-mnemonics',
+    share ? { share } : {},
+    {
+      ...request,
+      headers: { ...request.headers, 'Cache-Control': 'no-store', Pragma: 'no-cache' },
+    },
+  )
   return data
 }
 
-export async function importHotMnemonic(hotMnemonic: string, verification?: CryptoVerification, share?: string): Promise<{ saved: true }> {
-  const { data } = await apiClient.post<{ saved: true }>('/admin/crypto/wallet/hot-mnemonic', {
-    hot_mnemonic: hotMnemonic,
-    ...(share ? { share } : {})
-  }, cryptoRequestOptions(verification))
+export async function importHotMnemonic(
+  hotMnemonic: string,
+  verification?: CryptoVerification,
+  share?: string,
+): Promise<{ saved: true }> {
+  const { data } = await apiClient.post<{ saved: true }>(
+    '/admin/crypto/wallet/hot-mnemonic',
+    {
+      hot_mnemonic: hotMnemonic,
+      ...(share ? { share } : {}),
+    },
+    cryptoRequestOptions(verification),
+  )
   return data
 }
 
@@ -851,11 +1000,13 @@ export function cryptoSecurityErrorKey(error: unknown): string | undefined {
   const e = error as { reason?: string; code?: string | number; status?: number; message?: string }
   const reason = `${e.reason ?? ''} ${e.code ?? ''} ${e.message ?? ''}`.toLowerCase()
   if (/crypto_grant_required/.test(reason)) return 'securityExpired'
-  if (/crypto_operator_required|configured payment administrator/.test(reason)) return 'securityOperatorRequired'
+  if (/crypto_operator_required|configured payment administrator/.test(reason))
+    return 'securityOperatorRequired'
   if (e.status === 429 || /rate.limit|too.many/.test(reason)) return 'securityRateLimit'
   if (/replay|already.used|code.used/.test(reason)) return 'securityReplay'
   if (/expir/.test(reason)) return 'securityExpired'
-  if (/not.configur|not.enabled|not.bound|setup.required|2fa.required|totp.required/.test(reason)) return 'securityNotConfigured'
+  if (/not.configur|not.enabled|not.bound|setup.required|2fa.required|totp.required/.test(reason))
+    return 'securityNotConfigured'
   if (/totp|2fa|verification.code/.test(reason)) return 'securityInvalid'
   return undefined
 }
@@ -865,7 +1016,14 @@ export function cryptoSecurityErrorKey(error: unknown): string | undefined {
 export type ChainState = 'disabled' | 'no_rpc' | 'error' | 'stalled' | 'catching_up' | 'synced'
 export type ChainNodeState = 'ok' | 'slow' | 'behind' | 'error' | 'wrong_chain'
 export type ChainNodeErrorKind =
-  | 'timeout' | 'connection' | 'http_429' | 'http_5xx' | 'http_4xx' | 'rpc_error' | 'bad_response' | 'wrong_chain'
+  | 'timeout'
+  | 'connection'
+  | 'http_429'
+  | 'http_5xx'
+  | 'http_4xx'
+  | 'rpc_error'
+  | 'bad_response'
+  | 'wrong_chain'
 
 export interface ChainNodeStatus {
   label: string
@@ -915,8 +1073,8 @@ export async function getChainStatus(signal?: AbortSignal): Promise<ChainStatusR
       enabled: report?.summary?.enabled ?? 0,
       lagging: report?.summary?.lagging ?? 0,
       stalled: report?.summary?.stalled ?? 0,
-      error: report?.summary?.error ?? 0
+      error: report?.summary?.error ?? 0,
     },
-    chains: Array.isArray(report?.chains) ? report.chains : []
+    chains: Array.isArray(report?.chains) ? report.chains : [],
   }
 }

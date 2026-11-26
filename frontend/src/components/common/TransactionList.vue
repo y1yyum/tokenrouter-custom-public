@@ -80,7 +80,8 @@
             :class="transactionAmountClass(item)"
             class="amount text-sm"
             data-testid="transaction-amount"
-          >{{ formatTransactionAmount(item) ?? '—' }}</span>
+            >{{ formatTransactionAmount(item) ?? '—' }}</span
+          >
           <UBadge
             v-if="item.status"
             :color="item.status.color ?? 'neutral'"
@@ -103,34 +104,37 @@ import {
   transactionIcon,
   transactionOrbClass,
   transactionToneAttribute,
-  type TransactionItem
+  type TransactionItem,
 } from './transactionList'
 
-withDefaults(defineProps<{
-  /** Rows to render, newest first. Empty array shows the empty state. */
-  items: T[]
-  loading?: boolean
-  /** Placeholder rows while loading. */
-  skeletonRows?: number
-  emptyIcon?: string
-  emptyTitle?: string
-  emptyDescription?: string
-  /** `data-testid` for the empty state, so pages keep their own selector. */
-  emptyTestId?: string
-  /** Accessible name for the skeleton list while data is in flight. */
-  loadingLabel?: string
-  /** Makes rows clickable / keyboard selectable and emits `select`. */
-  interactive?: boolean
-}>(), {
-  loading: false,
-  skeletonRows: 3,
-  emptyIcon: 'i-lucide-inbox',
-  emptyTitle: '',
-  emptyDescription: '',
-  emptyTestId: 'transaction-list-empty',
-  loadingLabel: '',
-  interactive: false
-})
+withDefaults(
+  defineProps<{
+    /** Rows to render, newest first. Empty array shows the empty state. */
+    items: T[]
+    loading?: boolean
+    /** Placeholder rows while loading. */
+    skeletonRows?: number
+    emptyIcon?: string
+    emptyTitle?: string
+    emptyDescription?: string
+    /** `data-testid` for the empty state, so pages keep their own selector. */
+    emptyTestId?: string
+    /** Accessible name for the skeleton list while data is in flight. */
+    loadingLabel?: string
+    /** Makes rows clickable / keyboard selectable and emits `select`. */
+    interactive?: boolean
+  }>(),
+  {
+    loading: false,
+    skeletonRows: 3,
+    emptyIcon: 'i-lucide-inbox',
+    emptyTitle: '',
+    emptyDescription: '',
+    emptyTestId: 'transaction-list-empty',
+    loadingLabel: '',
+    interactive: false,
+  },
+)
 
 const emit = defineEmits<{
   select: [item: T]

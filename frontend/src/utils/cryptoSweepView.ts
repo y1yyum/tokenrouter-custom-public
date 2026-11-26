@@ -9,15 +9,21 @@ export const SWEEP_FILTER_ALL = '__all__'
 export type SweepStatusFilter = typeof SWEEP_FILTER_ALL | 'swept' | 'running' | 'failed' | 'pending'
 
 /** Which raw statuses each filter entry covers. */
-export const SWEEP_STATUS_GROUPS: Readonly<Record<Exclude<SweepStatusFilter, typeof SWEEP_FILTER_ALL>, readonly string[]>> = {
+export const SWEEP_STATUS_GROUPS: Readonly<
+  Record<Exclude<SweepStatusFilter, typeof SWEEP_FILTER_ALL>, readonly string[]>
+> = {
   swept: ['swept'],
   running: ['gas_pending', 'gas_confirmed', 'sweep_pending', 'token_pending'],
   failed: ['failed'],
-  pending: ['planned', 'manual_review']
+  pending: ['planned', 'manual_review'],
 }
 
 export function sweepStatusMatches(filter: string, status: string): boolean {
-  if (filter === SWEEP_FILTER_ALL || !Object.prototype.hasOwnProperty.call(SWEEP_STATUS_GROUPS, filter)) return true
+  if (
+    filter === SWEEP_FILTER_ALL ||
+    !Object.prototype.hasOwnProperty.call(SWEEP_STATUS_GROUPS, filter)
+  )
+    return true
   return SWEEP_STATUS_GROUPS[filter as keyof typeof SWEEP_STATUS_GROUPS].includes(status)
 }
 
@@ -30,30 +36,49 @@ const STATUS_LABEL_KEYS: Readonly<Record<string, string>> = {
   gas_confirmed: 'admin.crypto.statusGasConfirmed',
   sweep_pending: 'admin.crypto.statusTokenPending',
   token_pending: 'admin.crypto.statusTokenPending',
-  manual_review: 'admin.crypto.statusManualReview'
+  manual_review: 'admin.crypto.statusManualReview',
 }
 
 /** i18n key for a status, or '' when unknown (the caller shows the raw value). */
 export function sweepStatusLabelKey(status: string): string {
-  return Object.prototype.hasOwnProperty.call(STATUS_LABEL_KEYS, status) ? STATUS_LABEL_KEYS[status] : ''
+  return Object.prototype.hasOwnProperty.call(STATUS_LABEL_KEYS, status)
+    ? STATUS_LABEL_KEYS[status]
+    : ''
 }
 
 export function sweepStatusColor(status: string): 'success' | 'warning' | 'error' | 'neutral' {
   if (status === 'swept') return 'success'
   if (status === 'failed') return 'error'
-  if (['planned', 'gas_pending', 'gas_confirmed', 'sweep_pending', 'token_pending', 'manual_review'].includes(status)) return 'warning'
+  if (
+    [
+      'planned',
+      'gas_pending',
+      'gas_confirmed',
+      'sweep_pending',
+      'token_pending',
+      'manual_review',
+    ].includes(status)
+  )
+    return 'warning'
   return 'neutral'
 }
 
 /** Active work: the row is waiting on the chain, not on a human. */
-const ACTIVE_STATUSES = ['planned', 'gas_pending', 'gas_confirmed', 'sweep_pending', 'token_pending']
+const ACTIVE_STATUSES = [
+  'planned',
+  'gas_pending',
+  'gas_confirmed',
+  'sweep_pending',
+  'token_pending',
+]
 /** A failed row a person can still act on in this console. */
 const ACTIONABLE_FAILED_STATUSES = ['failed', 'manual_review']
 
 export const SWEEP_GROUP_CURRENT = 'current'
 export const SWEEP_GROUP_FAILED = 'failed'
 export const SWEEP_GROUP_ARCHIVED = 'archived'
-export type SweepGroup = typeof SWEEP_GROUP_CURRENT | typeof SWEEP_GROUP_FAILED | typeof SWEEP_GROUP_ARCHIVED
+export type SweepGroup =
+  typeof SWEEP_GROUP_CURRENT | typeof SWEEP_GROUP_FAILED | typeof SWEEP_GROUP_ARCHIVED
 
 /**
  * job_version 0 is a record written before durable jobs (or handled by hand
@@ -73,14 +98,21 @@ export function sweepGroupOf(record: SweepRecord): SweepGroup {
 export function sweepCanReconcile(record: SweepRecord): boolean {
   if ((record.job_version ?? 1) < 1) return false
   if (record.status === 'swept' || record.status === 'planned') return false
-  return Boolean(record.gas_tx_hash || record.sweep_tx_hash) || ACTIVE_STATUSES.includes(record.status)
+  return (
+    Boolean(record.gas_tx_hash || record.sweep_tx_hash) || ACTIVE_STATUSES.includes(record.status)
+  )
 }
 
 /** A failed row the sweeper itself released after proving the tx was dead. */
 export const SWEEP_RELEASED_PREFIX = 'stale pending released:'
 
 export function sweepIsReleasedFailure(record: SweepRecord): boolean {
-  return record.status === 'failed' && String(record.error ?? '').trim().startsWith(SWEEP_RELEASED_PREFIX)
+  return (
+    record.status === 'failed' &&
+    String(record.error ?? '')
+      .trim()
+      .startsWith(SWEEP_RELEASED_PREFIX)
+  )
 }
 
 /** First readable sentence of an error, for the collapsed row. */
@@ -96,7 +128,9 @@ export function sweepErrorDetail(message: string | null | undefined): string {
   return redactSweepError(message)
 }
 
-export const SWEEP_STATUS_LABEL_KEYS: readonly string[] = [...new Set(Object.values(STATUS_LABEL_KEYS))]
+export const SWEEP_STATUS_LABEL_KEYS: readonly string[] = [
+  ...new Set(Object.values(STATUS_LABEL_KEYS)),
+]
 
 const ERROR_LINE_MAX = 300
 
@@ -108,7 +142,10 @@ const ERROR_LINE_MAX = 300
 export function redactSweepError(message: string | null | undefined): string {
   const text = String(message ?? '')
     .replace(/[a-z][a-z0-9+.-]*:\/\/\S+/gi, '[url]')
-    .replace(/\b(api[_-]?key|access[_-]?token|token|secret|password|passwd|authorization|key)\b\s*[=:]\s*\S+/gi, '$1=[hidden]')
+    .replace(
+      /\b(api[_-]?key|access[_-]?token|token|secret|password|passwd|authorization|key)\b\s*[=:]\s*\S+/gi,
+      '$1=[hidden]',
+    )
     .replace(/\b(?:0x)?[0-9a-fA-F]{64}\b/g, '[hex]')
     .trim()
   return text.length > ERROR_LINE_MAX ? `${text.slice(0, ERROR_LINE_MAX)}…` : text
@@ -117,7 +154,11 @@ export function redactSweepError(message: string | null | undefined): string {
 const YEAR_MS = 365 * 24 * 60 * 60 * 1000
 
 /** "11/05 08:00" for anything under a year old, with the year after that. */
-export function formatSweepTime(value: string | null | undefined, locale?: string, now: number = Date.now()): string {
+export function formatSweepTime(
+  value: string | null | undefined,
+  locale?: string,
+  now: number = Date.now(),
+): string {
   if (!value) return '—'
   const date = new Date(value)
   if (Number.isNaN(date.getTime())) return '—'
@@ -129,7 +170,7 @@ export function formatSweepTime(value: string | null | undefined, locale?: strin
       day: '2-digit',
       hour: '2-digit',
       minute: '2-digit',
-      hourCycle: 'h23'
+      hourCycle: 'h23',
     }).format(date)
   } catch {
     return date.toLocaleString()
@@ -148,13 +189,22 @@ export function formatSweepFullTime(value: string | null | undefined): string {
  * address, either transaction hash, or the record id. The id only matches
  * whole (a leading # is allowed) so "12" does not light up every record 120-129.
  */
-export function sweepRecordMatches(record: SweepRecord, owner: AddressOwner | null | undefined, query: string): boolean {
+export function sweepRecordMatches(
+  record: SweepRecord,
+  owner: AddressOwner | null | undefined,
+  query: string,
+): boolean {
   const q = query.trim().toLowerCase()
   if (!q) return true
   const idQuery = q.replace(/^#/, '')
   if (/^\d+$/.test(idQuery) && String(record.id) === idQuery) return true
-  return [owner?.username, owner?.email, record.from_address, record.sweep_tx_hash, record.gas_tx_hash]
-    .some(value => typeof value === 'string' && value !== '' && value.toLowerCase().includes(q))
+  return [
+    owner?.username,
+    owner?.email,
+    record.from_address,
+    record.sweep_tx_hash,
+    record.gas_tx_hash,
+  ].some((value) => typeof value === 'string' && value !== '' && value.toLowerCase().includes(q))
 }
 
 /** Shortens long values the way the rest of the page does. */

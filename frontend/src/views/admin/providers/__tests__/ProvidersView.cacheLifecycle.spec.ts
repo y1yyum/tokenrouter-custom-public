@@ -321,7 +321,10 @@ describe('provider cache and incremental refresh lifecycle', () => {
     ])
     expect(wrapper.getComponent(DataTableStub).props('data')[0]).toBe(row)
     expect(getBatchTodayStats.mock.calls).toEqual([[[1]], [[1]], [[1]]])
-    expect(listWithEtag.mock.calls.map((call) => call[2].include_scheduler_score)).toEqual(['1', '1'])
+    expect(listWithEtag.mock.calls.map((call) => call[2].include_scheduler_score)).toEqual([
+      '1',
+      '1',
+    ])
     wrapper.unmount()
   })
 })

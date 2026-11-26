@@ -30,33 +30,43 @@ export default {
     },
     // Instant-credit chains credit first and roll back on failure; the user must
     // know the balance can be withdrawn.
-    instantCreditNotice: 'Credited as soon as the transfer is detected. If the transaction ultimately fails, the credit is rolled back automatically; the final confirmation is authoritative.',
-    instantCreditRule: 'Instant credit: the balance is updated as soon as the transfer is detected. If the transaction ultimately fails, is reorganized, or is rolled back, that credit is withdrawn automatically.',
+    instantCreditNotice:
+      'Credited as soon as the transfer is detected. If the transaction ultimately fails, the credit is rolled back automatically; the final confirmation is authoritative.',
+    instantCreditRule:
+      'Instant credit: the balance is updated as soon as the transfer is detected. If the transaction ultimately fails, is reorganized, or is rolled back, that credit is withdrawn automatically.',
     networkStatusHint: {
       slow: '{network} is confirming transfers slower than usual, so crediting may take a little longer. You can check your deposit history below.',
-      delayed: 'Deposit scanning for {network} is behind, so crediting will be late. You can check your deposit history below.',
-      paused: 'New deposits on {network} are paused. Choose another network or check your existing deposits below.',
-      stalled: 'Deposit scanning for {network} is temporarily unavailable. You can check your deposit history below and try again later or switch to another network.',
+      delayed:
+        'Deposit scanning for {network} is behind, so crediting will be late. You can check your deposit history below.',
+      paused:
+        'New deposits on {network} are paused. Choose another network or check your existing deposits below.',
+      stalled:
+        'Deposit scanning for {network} is temporarily unavailable. You can check your deposit history below and try again later or switch to another network.',
     },
     refreshNetworkStatus: 'Refresh network status',
     chooseAsset: 'Choose a currency',
     // Amount pre-check: validate what the user is about to send before the
     // money leaves the wallet; an out-of-range transfer is never credited.
     amountCheckTitle: 'Credit amount pre-check',
-    amountCheckHint: 'Optional. The amount is validated as you type; out-of-range transfers are not credited.',
+    amountCheckHint:
+      'Optional. The amount is validated as you type; out-of-range transfers are not credited.',
     amountFieldLabel: 'Amount you will send',
     amountPlaceholder: 'e.g. 10',
     amountInvalid: 'Enter a number greater than 0',
-    amountBelowMin: 'Below the minimum credit amount of {min} {unit}. This transfer will not be credited.',
-    amountAboveMax: 'Above the per-transfer credit limit of {max} {unit}. This transfer will not be credited.',
+    amountBelowMin:
+      'Below the minimum credit amount of {min} {unit}. This transfer will not be credited.',
+    amountAboveMax:
+      'Above the per-transfer credit limit of {max} {unit}. This transfer will not be credited.',
     amountHintRange: 'Credit range {min}–{max} {unit}',
     amountHintMin: 'Minimum credit amount {min} {unit}',
     amountHintMax: 'Per-transfer credit limit {max} {unit}',
     amountNoLimit: 'No amount range is configured, so no pre-check is applied',
     amountWithinRange: 'The amount is inside the credit range',
     amountEstimateCredit: 'About +{credit} balance units at the current rate',
-    amountEstimateMarket: 'About {usd} USD at the reference price, settled at the credit-time market price',
-    amountUnverifiable: 'No market price is available, so the USD range cannot be predicted; this coin settles at the credit-time market price',
+    amountEstimateMarket:
+      'About {usd} USD at the reference price, settled at the credit-time market price',
+    amountUnverifiable:
+      'No market price is available, so the USD range cannot be predicted; this coin settles at the credit-time market price',
     copyBlockedByAmount: 'The amount is outside the credit range. Fix or clear it first.',
     transferToAddress: 'Transfer to your address',
     qrLabel: 'QR code for your deposit address',
@@ -64,8 +74,10 @@ export default {
     copyAddress: 'Copy deposit address',
     copyFailed: 'Could not copy. Select or press and hold the address to copy it.',
     qrFailed: 'QR code unavailable. Copy the address instead.',
-    networkNotice: 'Send {tokens} using {network}. Check both the network and token in your wallet.',
-    nativeNotice: 'Send {asset}, the native mainnet coin of {network}. Check both the network and the currency in your wallet.',
+    networkNotice:
+      'Send {tokens} using {network}. Check both the network and token in your wallet.',
+    nativeNotice:
+      'Send {asset}, the native mainnet coin of {network}. Check both the network and the currency in your wallet.',
     creditDetails: 'Credit details',
     creditDetailsHint: 'Check the amount and credit rules before sending',
     rateLabel: 'Credit rate',
@@ -80,7 +92,8 @@ export default {
     maxLabelUsd: 'Automatic credit limit per transfer (in USD)',
     referencePrice: 'About {price} per coin right now. For reference only.',
     autoCredit: 'Credited after confirmation',
-    confirmationHint: 'Follow the transfer below. Your balance updates once chain confirmations and credit limits are satisfied.',
+    confirmationHint:
+      'Follow the transfer below. Your balance updates once chain confirmations and credit limits are satisfied.',
     autoRefresh: 'Updates every 5 seconds. You can also refresh manually.',
     autoRefreshPending: 'A deposit is confirming. Updates every 5 seconds.',
     pendingSummary: 'Deposits confirming: {n}',
@@ -98,7 +111,8 @@ export default {
     noHistoryHint: 'Your transfer appears after the chain scanner detects it.',
     loadFailed: 'Deposit information is unavailable',
     loadFailedHint: 'Try again shortly. Verify the network and address before sending.',
-    historyFailed: 'Could not update deposits. Refresh shortly; this does not mean your transfer failed.',
+    historyFailed:
+      'Could not update deposits. Refresh shortly; this does not mean your transfer failed.',
     disabledHint: 'Deposit addresses are currently unavailable. Please check back later.',
     noNetworks: 'No network is available. Please check back later.',
     title: 'USDT Deposit',
@@ -109,9 +123,12 @@ export default {
     yourAddress: 'Your exclusive address',
     copy: 'Copy',
     copied: 'Copied',
-    exclusiveNotice: 'This address belongs to your account. Keep the full address and verify it before sending.',
-    rateNotice: 'Credit rate: 1 USDT = {rate} balance units for stablecoins. Native coins such as ETH and BNB settle at the market price when the deposit is credited.',
-    minNotice: 'Minimum credit: {min} USDT for stablecoins, or the equivalent {min} USD for native coins.',
+    exclusiveNotice:
+      'This address belongs to your account. Keep the full address and verify it before sending.',
+    rateNotice:
+      'Credit rate: 1 USDT = {rate} balance units for stablecoins. Native coins such as ETH and BNB settle at the market price when the deposit is credited.',
+    minNotice:
+      'Minimum credit: {min} USDT for stablecoins, or the equivalent {min} USD for native coins.',
     history: 'Your deposits',
     // Row title: what happened + on which network; the amount lives in its own column.
     historyRowDeposit: 'On-chain deposit',
@@ -119,31 +136,38 @@ export default {
     amount: 'Amount',
     credited: 'Credited',
     creditUnknown: 'Amount under review',
-    creditUnknownHint: 'The transfer is recorded, but its original credited amount is not verified. This does not mean zero credit. Do not pay again.',
+    creditUnknownHint:
+      'The transfer is recorded, but its original credited amount is not verified. This does not mean zero credit. Do not pay again.',
     statusReconciliation: 'Credit under review',
     time: 'Time',
     txHash: 'Transaction hash',
     copyTxHash: 'Copy full transaction hash',
     viewTransaction: 'View transaction {hash} on the block explorer',
     reasonBelowMin: 'Below the minimum of {min} USDT — not credited',
-    reasonAboveMax: 'Above the maximum of {max} USDT for one deposit — not credited, contact the operator',
-    reasonBelowMinUsd: 'Below the minimum of {min} USD at the credit-time market price — not credited',
-    reasonAboveMaxUsd: 'Above the maximum of {max} USD at the credit-time market price for one deposit — not credited, contact the operator',
+    reasonAboveMax:
+      'Above the maximum of {max} USDT for one deposit — not credited, contact the operator',
+    reasonBelowMinUsd:
+      'Below the minimum of {min} USD at the credit-time market price — not credited',
+    reasonAboveMaxUsd:
+      'Above the maximum of {max} USD at the credit-time market price for one deposit — not credited, contact the operator',
     reasonUnassigned: 'This address is not bound to a user — not credited',
     reasonUnknown: 'This address is not a deposit address',
     reasonOther: 'Not credited (reason code: {code})',
     reasonRevoked: 'Provisional credit rolled back (reason code: {code})',
     // Revocation reasons are machine codes in the ledger; translate them for users.
-    revokeReasonReorgNoncanonical: 'The block containing this transfer was reorganized away before final confirmation',
+    revokeReasonReorgNoncanonical:
+      'The block containing this transfer was reorganized away before final confirmation',
     revokeReasonReceiptMissing: 'The transaction receipt disappeared before final confirmation',
     revokeReasonReceiptReverted: 'The transaction reverted on-chain and was rolled back',
     revokeReasonGeneric: 'Not finally confirmed (reason code: {code})',
-    provisionalHint: 'The transfer was detected and credited provisionally; the credit can be rolled back until it is finally confirmed.',
+    provisionalHint:
+      'The transfer was detected and credited provisionally; the credit can be rolled back until it is finally confirmed.',
     // Follow-up action for a rolled-back row: the support entry reuses the
     // site-wide contact info and degrades to plain copy when none is configured.
     revokedHint: 'This transfer was not finally confirmed and its credit was reversed.',
     revokedSupportAction: 'Contact support about this transfer',
-    supportUnavailable: 'If you were charged, contact the operator through the contact details published on this site.',
+    supportUnavailable:
+      'If you were charged, contact the operator through the contact details published on this site.',
     supportCopied: 'Support contact copied',
     // Deposit history filters: local only, the list is never re-read.
     filterStatusLabel: 'Status',
@@ -160,7 +184,8 @@ export default {
     filterResult: 'Showing {n} of {total}',
     historyLimitHint: 'Showing the most recent {n} deposits; filters apply to these only.',
     noFilteredHistory: 'No deposits match these filters',
-    noFilteredHistoryHint: 'Try another status or time range, or reset the filters to see everything.',
+    noFilteredHistoryHint:
+      'Try another status or time range, or reset the filters to see everything.',
     resetFilters: 'Reset filters',
     statusCredited: 'Credited',
     statusPending: 'Pending',
@@ -170,6 +195,6 @@ export default {
     statusRevoked: 'Rolled back',
     statusIgnored: 'Ignored',
     statusReverted: 'Transaction needs review',
-    statusOther: 'Status: {code}'
-  }
+    statusOther: 'Status: {code}',
+  },
 }

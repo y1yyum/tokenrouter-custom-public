@@ -26,9 +26,12 @@ export const SHARE_HEADER_BYTES = 5
 export const MAX_SHARE_DATA = 255
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567'
-const BASE32_LOOKUP = new Map<string, number>(Array.from(BASE32_ALPHABET, (char, index) => [char, index]))
+const BASE32_LOOKUP = new Map<string, number>(
+  Array.from(BASE32_ALPHABET, (char, index) => [char, index]),
+)
 
-export type ShareErrorCode = 'format' | 'version' | 'checksum' | 'parameters' | 'threshold' | 'duplicate'
+export type ShareErrorCode =
+  'format' | 'version' | 'checksum' | 'parameters' | 'threshold' | 'duplicate'
 
 export class ShareFormatError extends Error {
   readonly code: ShareErrorCode
@@ -78,7 +81,8 @@ function base32Decode(text: string): Uint8Array {
   if (!text) throw new ShareFormatError('format', 'empty')
   // RFC 4648: lengths 1, 3 and 6 mod 8 cannot encode whole bytes.
   const remainder = text.length % 8
-  if (remainder === 1 || remainder === 3 || remainder === 6) throw new ShareFormatError('format', 'length')
+  if (remainder === 1 || remainder === 3 || remainder === 6)
+    throw new ShareFormatError('format', 'length')
   const out = new Uint8Array(Math.floor((text.length * 5) / 8))
   let buffer = 0
   let bits = 0
@@ -135,7 +139,8 @@ export async function parseShare(raw: string, crypto: SignerCrypto): Promise<Sha
   const normalized = normalizeShareText(raw)
   if (!normalized.startsWith(SHARE_PREFIX)) throw new ShareFormatError('format', 'prefix')
   const payload = base32Decode(normalized.slice(SHARE_PREFIX.length))
-  if (payload.length < SHARE_HEADER_BYTES + 1 + SHARE_CHECKSUM_BYTES) throw new ShareFormatError('format', 'short')
+  if (payload.length < SHARE_HEADER_BYTES + 1 + SHARE_CHECKSUM_BYTES)
+    throw new ShareFormatError('format', 'short')
   const bodyLength = payload.length - SHARE_CHECKSUM_BYTES
   const body = payload.slice(0, bodyLength)
   const checksum = payload.slice(bodyLength)
@@ -146,15 +151,20 @@ export async function parseShare(raw: string, crypto: SignerCrypto): Promise<Sha
   const total = body[2]
   const index = body[3]
   const dataLength = body[4]
-  const parametersValid = threshold >= 2 && total >= threshold && index >= 1 && index <= total &&
-    dataLength >= 1 && bodyLength === SHARE_HEADER_BYTES + dataLength
+  const parametersValid =
+    threshold >= 2 &&
+    total >= threshold &&
+    index >= 1 &&
+    index <= total &&
+    dataLength >= 1 &&
+    bodyLength === SHARE_HEADER_BYTES + dataLength
   if (!parametersValid) throw new ShareFormatError('parameters')
   return {
     version: body[0],
     threshold,
     total,
     index,
-    data: body.slice(SHARE_HEADER_BYTES)
+    data: body.slice(SHARE_HEADER_BYTES),
   }
 }
 
@@ -166,7 +176,9 @@ export async function formatShare(share: ShardShare, crypto: SignerCrypto): Prom
   payload[3] = share.index
   payload[4] = share.data.length
   payload.set(share.data, SHARE_HEADER_BYTES)
-  const checksum = (await crypto.sha256(payload.slice(0, SHARE_HEADER_BYTES + share.data.length))).slice(0, SHARE_CHECKSUM_BYTES)
+  const checksum = (
+    await crypto.sha256(payload.slice(0, SHARE_HEADER_BYTES + share.data.length))
+  ).slice(0, SHARE_CHECKSUM_BYTES)
   payload.set(checksum, SHARE_HEADER_BYTES + share.data.length)
   const encoded = base32Encode(payload)
   const groups: string[] = []
@@ -182,19 +194,20 @@ export async function formatShare(share: ShardShare, crypto: SignerCrypto): Prom
 export async function splitSecret(
   secret: Uint8Array,
   options: SplitOptions,
-  crypto: SignerCrypto
+  crypto: SignerCrypto,
 ): Promise<ShardShare[]> {
   const threshold = options.threshold ?? SHARD_THRESHOLD
   const total = options.total ?? SHARD_TOTAL
   if (secret.length < 1 || secret.length > MAX_SHARE_DATA) throw new ShareFormatError('parameters')
-  if (threshold < 2 || total < threshold || total > 255 || threshold > 255) throw new ShareFormatError('parameters')
+  if (threshold < 2 || total < threshold || total > 255 || threshold > 255)
+    throw new ShareFormatError('parameters')
   const random = options.random ?? ((length: number) => crypto.randomBytes(length))
   const shares: ShardShare[] = Array.from({ length: total }, (_, offset) => ({
     version: SHARD_VERSION,
     threshold,
     total,
     index: offset + 1,
-    data: new Uint8Array(secret.length)
+    data: new Uint8Array(secret.length),
   }))
   const coefficients = new Uint8Array(threshold)
   for (let byteIndex = 0; byteIndex < secret.length; byteIndex += 1) {
@@ -214,10 +227,16 @@ export function combineShares(shares: ShardShare[]): Uint8Array {
   if (shares.length < SHARD_THRESHOLD) throw new ShareFormatError('threshold')
   const { version, threshold, total } = shares[0]
   const length = shares[0].data.length
-  if (version !== SHARD_VERSION || threshold < 2 || total < threshold || length === 0) throw new ShareFormatError('parameters')
+  if (version !== SHARD_VERSION || threshold < 2 || total < threshold || length === 0)
+    throw new ShareFormatError('parameters')
   const seen = new Set<number>()
   for (const share of shares) {
-    if (share.version !== version || share.threshold !== threshold || share.total !== total || share.data.length !== length) {
+    if (
+      share.version !== version ||
+      share.threshold !== threshold ||
+      share.total !== total ||
+      share.data.length !== length
+    ) {
       throw new ShareFormatError('parameters')
     }
     if (share.index < 1 || share.index > total) throw new ShareFormatError('parameters')
@@ -260,7 +279,7 @@ export async function commitmentBase64(crypto: SignerCrypto, dataKey: Uint8Array
 export async function verifySharesOpenWallet(
   texts: string[],
   commitment: string,
-  crypto: SignerCrypto
+  crypto: SignerCrypto,
 ): Promise<{ ok: true; dataKey: Uint8Array } | { ok: false; reason: 'shares' | 'commitment' }> {
   let dataKey: Uint8Array
   try {

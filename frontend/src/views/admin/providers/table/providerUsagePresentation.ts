@@ -711,7 +711,6 @@ export function buildLocalQuotaBar(
   return { utilization, resetsAt }
 }
 
-
 // resolveUpstreamUsageResult prefers a manual observation, then accepts a validated
 // saved CN usage monitor snapshot for the platforms that publish it.
 export function resolveUpstreamUsageResult(
@@ -729,7 +728,8 @@ export function resolveUpstreamUsageResult(
     typeof snapshot.adapter !== 'string' ||
     typeof snapshot.observed_at !== 'string' ||
     !Number.isFinite(Date.parse(snapshot.observed_at))
-  ) return null
+  )
+    return null
 
   return {
     provider_id: provider.id,
@@ -750,17 +750,19 @@ export function resolveUpstreamUsageResult(
 // normalizeUpstreamUsageResult adapts older flat observations to the nested response shape.
 export function normalizeUpstreamUsageResult(result: UpstreamUsageQueryResult | null) {
   if (!result) return null
-  return result.usage ?? {
-    provider: result.provider || '',
-    mode: result.mode || '',
-    unit: result.unit,
-    balance: result.balance,
-    balances: result.balances,
-    available: result.available,
-    limits: result.limits,
-    subscription: result.subscription,
-    expires_at: result.expires_at,
-  }
+  return (
+    result.usage ?? {
+      provider: result.provider || '',
+      mode: result.mode || '',
+      unit: result.unit,
+      balance: result.balance,
+      balances: result.balances,
+      available: result.available,
+      limits: result.limits,
+      subscription: result.subscription,
+      expires_at: result.expires_at,
+    }
+  )
 }
 
 // upstreamUsageLimits shows provider-wide windows before any separate subscription windows.

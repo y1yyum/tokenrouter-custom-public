@@ -22,7 +22,12 @@ export function clearCryptoGrant() {
 }
 
 export function getCryptoGrant(): string | undefined {
-  if (!credential || !ownerToken || currentCryptoSession() !== ownerToken || Date.now() >= cryptoGrantExpiresAt.value) {
+  if (
+    !credential ||
+    !ownerToken ||
+    currentCryptoSession() !== ownerToken ||
+    Date.now() >= cryptoGrantExpiresAt.value
+  ) {
     clearCryptoGrant()
     return undefined
   }
@@ -32,9 +37,20 @@ export function getCryptoGrant(): string | undefined {
 export function retainCryptoGrant(grant: CryptoGrant, session: string, startedAt: number): string {
   // Cap the client lifetime at the original request start, without sliding it
   // when reused. The backend independently enforces its signed expiry.
-  const expiresAt = Math.min(Date.parse(grant.expires_at), startedAt + Math.min(grant.expires_in, 300) * 1000)
-  if (!session || session !== currentCryptoSession() || typeof grant.credential !== 'string' || grant.credential.length < 32 ||
-      !Number.isFinite(expiresAt) || expiresAt <= Date.now() || !Number.isFinite(grant.expires_in) || grant.expires_in <= 0) {
+  const expiresAt = Math.min(
+    Date.parse(grant.expires_at),
+    startedAt + Math.min(grant.expires_in, 300) * 1000,
+  )
+  if (
+    !session ||
+    session !== currentCryptoSession() ||
+    typeof grant.credential !== 'string' ||
+    grant.credential.length < 32 ||
+    !Number.isFinite(expiresAt) ||
+    expiresAt <= Date.now() ||
+    !Number.isFinite(grant.expires_in) ||
+    grant.expires_in <= 0
+  ) {
     clearCryptoGrant()
     throw new Error('Payment verification expired; verify again')
   }
@@ -57,5 +73,8 @@ if (typeof window !== 'undefined') {
 export function isCryptoGrantRejected(error: unknown): boolean {
   if (!error || typeof error !== 'object') return false
   const value = error as { status?: number; reason?: string; code?: string | number }
-  return value.status === 403 && (value.reason === 'CRYPTO_GRANT_REQUIRED' || value.code === 'CRYPTO_GRANT_REQUIRED')
+  return (
+    value.status === 403 &&
+    (value.reason === 'CRYPTO_GRANT_REQUIRED' || value.code === 'CRYPTO_GRANT_REQUIRED')
+  )
 }

@@ -23,7 +23,9 @@
     <div v-if="compact">
       <ProviderCellDetails :label="t('admin.providers.compact.capacityDetails')">
         <template #trigger>
-          <span v-if="metrics.length > visibleMetrics.length">+{{ metrics.length - visibleMetrics.length }}</span>
+          <span v-if="metrics.length > visibleMetrics.length"
+            >+{{ metrics.length - visibleMetrics.length }}</span
+          >
           <Icon v-else name="more" size="xs" />
         </template>
         <dl class="space-y-2">
@@ -40,9 +42,13 @@
             </dd>
             <dd v-else>
               <QuotaBadge :used="metric.used" :limit="metric.limit" :label="metric.label" />
-              <p class="mt-0.5">{{ t(metric.used >= metric.limit
-                ? 'admin.providers.capacity.quota.exceeded'
-                : 'admin.providers.capacity.quota.normal') }}</p>
+              <p class="mt-0.5">{{
+                t(
+                  metric.used >= metric.limit
+                    ? 'admin.providers.capacity.quota.exceeded'
+                    : 'admin.providers.capacity.quota.normal',
+                )
+              }}</p>
             </dd>
           </div>
         </dl>
@@ -292,37 +298,39 @@ const showTotalQuota = computed(
 // CapacityMetric preserves the existing badge inputs alongside a readable detail label.
 type CapacityMetric =
   | {
-    kind: 'capacity'
-    key: string
-    title: string
-    icon: 'grid' | 'dollar' | 'users' | 'clock'
-    colorClass: string
-    current: string | number
-    max: string | number
-    suffix?: string
-    tooltip?: string
-  }
+      kind: 'capacity'
+      key: string
+      title: string
+      icon: 'grid' | 'dollar' | 'users' | 'clock'
+      colorClass: string
+      current: string | number
+      max: string | number
+      suffix?: string
+      tooltip?: string
+    }
   | {
-    kind: 'quota'
-    key: string
-    title: string
-    used: number
-    limit: number
-    label?: string
-  }
+      kind: 'quota'
+      key: string
+      title: string
+      used: number
+      limit: number
+      label?: string
+    }
 
 // metrics uses the same eligibility and observations for inline and expanded values.
 const metrics = computed<CapacityMetric[]>(() => {
   const provider = props.provider
-  const items: CapacityMetric[] = [{
-    kind: 'capacity',
-    key: 'concurrency',
-    title: t('admin.providers.concurrency'),
-    icon: 'grid',
-    colorClass: concurrencyClass.value,
-    current: currentConcurrency.value,
-    max: provider.concurrency,
-  }]
+  const items: CapacityMetric[] = [
+    {
+      kind: 'capacity',
+      key: 'concurrency',
+      title: t('admin.providers.concurrency'),
+      icon: 'grid',
+      colorClass: concurrencyClass.value,
+      current: currentConcurrency.value,
+      max: provider.concurrency,
+    },
+  ]
   if (showWindowCost.value) {
     items.push({
       kind: 'capacity',
@@ -362,10 +370,33 @@ const metrics = computed<CapacityMetric[]>(() => {
   }
 
   const quotas = [
-    { key: 'daily', used: provider.quota_daily_used, limit: provider.quota_daily_limit, label: 'D', enabled: showDailyQuota.value },
-    { key: 'weekly', used: provider.quota_weekly_used, limit: provider.quota_weekly_limit, label: 'W', enabled: showWeeklyQuota.value },
-    { key: 'monthly', used: provider.quota_monthly_used, limit: provider.quota_monthly_limit, label: 'M', enabled: showMonthlyQuota.value },
-    { key: 'total', used: provider.quota_used, limit: provider.quota_limit, enabled: showTotalQuota.value },
+    {
+      key: 'daily',
+      used: provider.quota_daily_used,
+      limit: provider.quota_daily_limit,
+      label: 'D',
+      enabled: showDailyQuota.value,
+    },
+    {
+      key: 'weekly',
+      used: provider.quota_weekly_used,
+      limit: provider.quota_weekly_limit,
+      label: 'W',
+      enabled: showWeeklyQuota.value,
+    },
+    {
+      key: 'monthly',
+      used: provider.quota_monthly_used,
+      limit: provider.quota_monthly_limit,
+      label: 'M',
+      enabled: showMonthlyQuota.value,
+    },
+    {
+      key: 'total',
+      used: provider.quota_used,
+      limit: provider.quota_limit,
+      enabled: showTotalQuota.value,
+    },
   ]
   for (const quota of quotas) {
     if (!quota.enabled || quota.limit == null) continue
@@ -381,7 +412,7 @@ const metrics = computed<CapacityMetric[]>(() => {
   return items
 })
 
-const visibleMetrics = computed(() => props.compact ? metrics.value.slice(0, 3) : metrics.value)
+const visibleMetrics = computed(() => (props.compact ? metrics.value.slice(0, 3) : metrics.value))
 </script>
 
 <style scoped>

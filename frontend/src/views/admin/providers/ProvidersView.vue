@@ -348,11 +348,14 @@
                       rel="noopener noreferrer"
                       class="block min-w-0 truncate font-medium text-link"
                       :title="row.name"
-                    >{{ row.name }}</a>
+                      >{{ row.name }}</a
+                    >
                   </template>
                 </HelpTooltip>
                 <ProviderCellDetails v-else :label="row.name">
-                  <template #trigger><span class="truncate font-medium">{{ row.name }}</span></template>
+                  <template #trigger
+                    ><span class="truncate font-medium">{{ row.name }}</span></template
+                  >
                   <p class="whitespace-pre-wrap break-words">{{ row.name }}</p>
                 </ProviderCellDetails>
                 <div class="flex min-w-0 items-center gap-1 text-gray-500 dark:text-gray-400">
@@ -363,20 +366,30 @@
                     :aria-label="t('admin.providers.compact.copyId', { id: row.id })"
                     :title="t('admin.providers.compact.copyId', { id: row.id })"
                     @click="copyToClipboard(String(row.id))"
-                  ><Icon name="copy" size="xs" /></button>
+                    ><Icon name="copy" size="xs"
+                  /></button>
                 </div>
                 <div v-if="providerDisplayEmail(row)" class="min-w-0">
                   <ProviderCellDetails :label="providerDisplayEmail(row)">
-                    <template #trigger><span class="truncate text-gray-500 dark:text-gray-400">{{ providerDisplayEmail(row) }}</span></template>
+                    <template #trigger
+                      ><span class="truncate text-gray-500 dark:text-gray-400">{{
+                        providerDisplayEmail(row)
+                      }}</span></template
+                    >
                     <p class="break-all">{{ providerDisplayEmail(row) }}</p>
-                    <p v-if="row.parent_chatgpt_account_id" class="break-all">{{ row.parent_chatgpt_account_id }}</p>
+                    <p v-if="row.parent_chatgpt_account_id" class="break-all">{{
+                      row.parent_chatgpt_account_id
+                    }}</p>
                   </ProviderCellDetails>
                 </div>
                 <div v-if="row.notes" class="min-w-0">
                   <ProviderCellDetails :label="t('admin.providers.columns.notes')">
                     <template #trigger>
-                      <span class="break-all text-left text-gray-600 dark:text-gray-300"
-                        :class="providerDisplayEmail(row) ? 'line-clamp-1' : 'line-clamp-2'">{{ row.notes }}</span>
+                      <span
+                        class="break-all text-left text-gray-600 dark:text-gray-300"
+                        :class="providerDisplayEmail(row) ? 'line-clamp-1' : 'line-clamp-2'"
+                        >{{ row.notes }}</span
+                      >
                     </template>
                     <p class="whitespace-pre-wrap break-words">{{ row.notes }}</p>
                   </ProviderCellDetails>
@@ -392,16 +405,25 @@
                   :auth-mode="getOpenAIAuthMode(row)"
                   :plan-type="getProviderPlanType(row)"
                   :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
-                  :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at"
+                  :subscription-expires-at="
+                    row.credentials?.subscription_expires_at || row.parent_subscription_expires_at
+                  "
                 />
                 <div class="flex min-w-0 items-center gap-1">
-                  <span class="min-w-0 truncate" :title="row.proxy?.name">{{ row.proxy?.name || t('admin.providers.compact.direct') }}</span>
-                  <span v-if="row.proxy?.country_code" class="shrink-0 text-gray-500">{{ row.proxy.country_code }}</span>
-                  <span v-if="row.proxy?.expires_at" class="min-w-0 truncate rounded-compact px-1"
-                    :class="proxyExpiryBadge(row.proxy)" :title="proxyExpiryText(row.proxy)">{{ proxyExpiryText(row.proxy) }}</span>
-                  <ProviderCellDetails
-                    :label="t('admin.providers.compact.connectionDetails')"
+                  <span class="min-w-0 truncate" :title="row.proxy?.name">{{
+                    row.proxy?.name || t('admin.providers.compact.direct')
+                  }}</span>
+                  <span v-if="row.proxy?.country_code" class="shrink-0 text-gray-500">{{
+                    row.proxy.country_code
+                  }}</span>
+                  <span
+                    v-if="row.proxy?.expires_at"
+                    class="min-w-0 truncate rounded-compact px-1"
+                    :class="proxyExpiryBadge(row.proxy)"
+                    :title="proxyExpiryText(row.proxy)"
+                    >{{ proxyExpiryText(row.proxy) }}</span
                   >
+                  <ProviderCellDetails :label="t('admin.providers.compact.connectionDetails')">
                     <template #trigger><Icon name="more" size="xs" /></template>
                     <div class="space-y-2">
                       <PlatformTypeBadge
@@ -410,53 +432,97 @@
                         :auth-mode="getOpenAIAuthMode(row)"
                         :plan-type="getProviderPlanType(row)"
                         :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
-                        :subscription-expires-at="row.credentials?.subscription_expires_at || row.parent_subscription_expires_at"
+                        :subscription-expires-at="
+                          row.credentials?.subscription_expires_at ||
+                          row.parent_subscription_expires_at
+                        "
                       />
                       <div v-if="row.proxy" class="break-words">
                         {{ row.proxy.name }}
                         <span v-if="row.proxy.country_code"> · {{ row.proxy.country_code }}</span>
-                        <p v-if="row.proxy.expires_at">{{ proxyExpiryText(row.proxy) }} · {{ formatDateTime(row.proxy.expires_at) }}</p>
+                        <p v-if="row.proxy.expires_at"
+                          >{{ proxyExpiryText(row.proxy) }} ·
+                          {{ formatDateTime(row.proxy.expires_at) }}</p
+                        >
                       </div>
                       <p v-else>{{ t('admin.providers.compact.direct') }}</p>
-                      <p v-if="row.proxy_fallback_origin_id" class="break-words">{{ fallbackOriginText(row) }}</p>
+                      <p v-if="row.proxy_fallback_origin_id" class="break-words">{{
+                        fallbackOriginText(row)
+                      }}</p>
                     </div>
                   </ProviderCellDetails>
                 </div>
                 <div v-if="row.proxy_fallback_origin_id" class="flex min-w-0 items-center gap-1">
-                  <span class="truncate rounded-compact bg-amber-100 px-1 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300" :title="fallbackOriginText(row)">{{ t('admin.providers.fallbackActive') }}</span>
-                  <button type="button" class="shrink-0 whitespace-nowrap rounded-compact px-1 text-link" @click="onRevertFallback(row)">{{ t('admin.providers.revertProxy') }}</button>
+                  <span
+                    class="truncate rounded-compact bg-amber-100 px-1 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                    :title="fallbackOriginText(row)"
+                    >{{ t('admin.providers.fallbackActive') }}</span
+                  >
+                  <button
+                    type="button"
+                    class="shrink-0 whitespace-nowrap rounded-compact px-1 text-link"
+                    @click="onRevertFallback(row)"
+                    >{{ t('admin.providers.revertProxy') }}</button
+                  >
                 </div>
               </div>
             </template>
             <template #header-status_schedule="{ column }">
               <div class="flex items-center">
                 <span>{{ column.label }}</span>
-                <HelpTooltip :content="t('admin.providers.schedulerScore.hint')" width-class="w-80" />
+                <HelpTooltip
+                  :content="t('admin.providers.schedulerScore.hint')"
+                  width-class="w-80"
+                />
               </div>
             </template>
             <template #cell-status_schedule="{ row }">
-              <ProviderStatusIndicator compact :provider="row" @show-temp-unsched="handleShowTempUnsched">
+              <ProviderStatusIndicator
+                compact
+                :provider="row"
+                @show-temp-unsched="handleShowTempUnsched"
+              >
                 <template #controls>
-                  <div class="flex min-w-0 items-center gap-1 text-xs" :data-test="'scheduler-score-' + row.id">
+                  <div
+                    class="flex min-w-0 items-center gap-1 text-xs"
+                    :data-test="'scheduler-score-' + row.id"
+                  >
                     <Toggle
                       :model-value="row.schedulable"
                       size="sm"
                       :disabled="togglingSchedulable === row.id"
                       off-tone="soft"
                       :aria-label="t('admin.providers.columns.schedulable')"
-                      :title="row.schedulable ? t('admin.providers.schedulableEnabled') : t('admin.providers.schedulableDisabled')"
+                      :title="
+                        row.schedulable
+                          ? t('admin.providers.schedulableEnabled')
+                          : t('admin.providers.schedulableDisabled')
+                      "
                       @update:model-value="handleToggleSchedulable(row)"
                     />
                     <template v-if="getSchedulerScoreRows(row).length">
-                      <span class="min-w-0 truncate font-mono" :title="formatSchedulerScoreRow(getSchedulerScoreRows(row)[0])">{{ formatSchedulerScoreRow(getSchedulerScoreRows(row)[0]) }}</span>
+                      <span
+                        class="min-w-0 truncate font-mono"
+                        :title="formatSchedulerScoreRow(getSchedulerScoreRows(row)[0])"
+                        >{{ formatSchedulerScoreRow(getSchedulerScoreRows(row)[0]) }}</span
+                      >
                       <ProviderCellDetails :label="t('admin.providers.columns.schedulerScore')">
                         <template #trigger>
-                          <span v-if="getSchedulerScoreRows(row).length > 1">+{{ getSchedulerScoreRows(row).length - 1 }}</span>
+                          <span v-if="getSchedulerScoreRows(row).length > 1"
+                            >+{{ getSchedulerScoreRows(row).length - 1 }}</span
+                          >
                           <Icon v-else name="more" size="xs" />
                         </template>
-                        <div class="mb-1 text-gray-500 dark:text-gray-400">{{ t('admin.providers.schedulerScore.baseShort') }} / {{ t('admin.providers.schedulerScore.stickyShort') }}</div>
+                        <div class="mb-1 text-gray-500 dark:text-gray-400"
+                          >{{ t('admin.providers.schedulerScore.baseShort') }} /
+                          {{ t('admin.providers.schedulerScore.stickyShort') }}</div
+                        >
                         <ul class="space-y-1 break-words font-mono">
-                          <li v-for="score in getSchedulerScoreRows(row)" :key="String(score.group_id)">{{ formatSchedulerScoreRow(score) }}</li>
+                          <li
+                            v-for="score in getSchedulerScoreRows(row)"
+                            :key="String(score.group_id)"
+                            >{{ formatSchedulerScoreRow(score) }}</li
+                          >
                         </ul>
                       </ProviderCellDetails>
                     </template>
@@ -498,21 +564,52 @@
               <div class="min-w-0 space-y-0.5 text-xs leading-4">
                 <ProviderGroupsCell compact :groups="row.groups" />
                 <div class="flex min-w-0 items-center gap-2 tabular-nums">
-                  <span class="truncate" :title="t('admin.providers.columns.priority') + ' ' + row.priority">{{ t('admin.providers.compact.priority', { value: row.priority }) }}</span>
-                  <span class="truncate" :title="t('admin.providers.columns.billingRateMultiplier')">{{ t('admin.providers.compact.rate', { value: (row.rate_multiplier ?? 1).toFixed(2) }) }}</span>
+                  <span
+                    class="truncate"
+                    :title="t('admin.providers.columns.priority') + ' ' + row.priority"
+                    >{{ t('admin.providers.compact.priority', { value: row.priority }) }}</span
+                  >
+                  <span
+                    class="truncate"
+                    :title="t('admin.providers.columns.billingRateMultiplier')"
+                    >{{
+                      t('admin.providers.compact.rate', {
+                        value: (row.rate_multiplier ?? 1).toFixed(2),
+                      })
+                    }}</span
+                  >
                 </div>
               </div>
             </template>
             <template #cell-timestamps="{ row }">
               <div class="min-w-0 text-xs leading-4">
-                <div v-for="entry in providerTimestamps(row)" :key="entry.key" class="flex min-w-0 items-center gap-1">
-                  <span class="min-w-0 shrink truncate text-gray-500 dark:text-gray-400">{{ entry.label }}</span>
-                  <span class="min-w-0 truncate tabular-nums" :title="entry.full">{{ entry.summary || '—' }}</span>
+                <div
+                  v-for="entry in providerTimestamps(row)"
+                  :key="entry.key"
+                  class="flex min-w-0 items-center gap-1"
+                >
+                  <span class="min-w-0 shrink truncate text-gray-500 dark:text-gray-400">{{
+                    entry.label
+                  }}</span>
+                  <span class="min-w-0 truncate tabular-nums" :title="entry.full">{{
+                    entry.summary || '—'
+                  }}</span>
                 </div>
-                <div v-if="row.last_used_at || row.created_at || row.expires_at" class="flex min-w-0 items-center gap-1">
-                  <span v-if="isExpired(row.expires_at)" class="truncate text-amber-700 dark:text-amber-300">{{ t('admin.providers.expired') }}</span>
-                  <span v-if="row.auto_pause_on_expired && row.expires_at"
-                    class="truncate text-emerald-700 dark:text-emerald-300" :title="t('admin.providers.autoPauseOnExpired')">{{ t('admin.providers.compact.autoPause') }}</span>
+                <div
+                  v-if="row.last_used_at || row.created_at || row.expires_at"
+                  class="flex min-w-0 items-center gap-1"
+                >
+                  <span
+                    v-if="isExpired(row.expires_at)"
+                    class="truncate text-amber-700 dark:text-amber-300"
+                    >{{ t('admin.providers.expired') }}</span
+                  >
+                  <span
+                    v-if="row.auto_pause_on_expired && row.expires_at"
+                    class="truncate text-emerald-700 dark:text-emerald-300"
+                    :title="t('admin.providers.autoPauseOnExpired')"
+                    >{{ t('admin.providers.compact.autoPause') }}</span
+                  >
                   <ProviderCellDetails :label="t('admin.providers.compact.timestamps')">
                     <template #trigger><Icon name="more" size="xs" /></template>
                     <dl class="space-y-1">
@@ -521,7 +618,9 @@
                         <dd class="tabular-nums">{{ entry.full || '—' }}</dd>
                       </div>
                     </dl>
-                    <p v-if="row.auto_pause_on_expired && row.expires_at">{{ t('admin.providers.autoPauseOnExpired') }}</p>
+                    <p v-if="row.auto_pause_on_expired && row.expires_at">{{
+                      t('admin.providers.autoPauseOnExpired')
+                    }}</p>
                   </ProviderCellDetails>
                 </div>
               </div>
@@ -958,8 +1057,8 @@ const toggleableColumns = computed(() =>
   allColumns.value.filter((column) => !['select', 'identity', 'actions'].includes(column.key)),
 )
 const cols = computed(() => allColumns.value.filter((column) => isColumnVisible(column.key)))
-const visibleSortKeys = computed(() =>
-  new Set(cols.value.flatMap((column) => getColumnSortOptions(column).map(({ key }) => key))),
+const visibleSortKeys = computed(
+  () => new Set(cols.value.flatMap((column) => getColumnSortOptions(column).map(({ key }) => key))),
 )
 
 // Auto refresh settings
@@ -2382,7 +2481,9 @@ const handleTempUnschedReset = async (updated: Provider) => {
 function providerTimestamps(row: Provider) {
   const lastUsed = formatCompactDateTimeParts(row.last_used_at)
   const created = formatCompactDateTimeParts(row.created_at)
-  const expires = formatCompactDateTimeParts(row.expires_at ? new Date(row.expires_at * 1000) : null)
+  const expires = formatCompactDateTimeParts(
+    row.expires_at ? new Date(row.expires_at * 1000) : null,
+  )
   return [
     {
       key: 'last_used_at',
@@ -2501,7 +2602,6 @@ onUnmounted(() => {
   @apply inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-control;
 }
 </style>
-
 
 <style scoped>
 .provider-platform-summary :deep(div > span) {

@@ -5,8 +5,14 @@
     data-testid="key-rotation-gate-notice"
   >
     <div class="flex items-start gap-4">
-      <div class="flex size-11 shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-400/20">
-        <UIcon name="i-lucide-shield-alert" class="size-6 text-amber-600 dark:text-amber-300" aria-hidden="true" />
+      <div
+        class="flex size-11 shrink-0 items-center justify-center rounded-full bg-amber-100 dark:bg-amber-400/20"
+      >
+        <UIcon
+          name="i-lucide-shield-alert"
+          class="size-6 text-amber-600 dark:text-amber-300"
+          aria-hidden="true"
+        />
       </div>
       <div class="min-w-0 space-y-3">
         <div class="space-y-1">
@@ -16,11 +22,15 @@
 
         <dl class="flex flex-wrap gap-x-8 gap-y-2 text-xs">
           <div v-if="activeCount >= 0">
-            <dt class="font-medium text-amber-700 dark:text-amber-200">{{ t('keyRotationGate.activeKeysLabel') }}</dt>
+            <dt class="font-medium text-amber-700 dark:text-amber-200">{{
+              t('keyRotationGate.activeKeysLabel')
+            }}</dt>
             <dd class="mt-0.5 tabular-nums">{{ activeCount }}</dd>
           </div>
           <div v-if="pendingCount > 0">
-            <dt class="font-medium text-amber-700 dark:text-amber-200">{{ t('keyRotationGate.pendingKeysLabel') }}</dt>
+            <dt class="font-medium text-amber-700 dark:text-amber-200">{{
+              t('keyRotationGate.pendingKeysLabel')
+            }}</dt>
             <dd class="mt-0.5 tabular-nums">{{ pendingCount }}</dd>
           </div>
         </dl>
@@ -50,11 +60,18 @@
             data-testid="key-rotation-gate-risk-ack-action"
             @click="acknowledgeRisk"
           >
-            {{ submitting ? t('keyRotationGate.riskAckLoading') : t('keyRotationGate.riskAckAction') }}
+            {{
+              submitting ? t('keyRotationGate.riskAckLoading') : t('keyRotationGate.riskAckAction')
+            }}
           </UButton>
         </div>
 
-        <p v-if="riskAckError" class="text-xs leading-5 text-red-700 dark:text-red-300" role="alert" data-testid="key-rotation-gate-risk-ack-error">
+        <p
+          v-if="riskAckError"
+          class="text-xs leading-5 text-red-700 dark:text-red-300"
+          role="alert"
+          data-testid="key-rotation-gate-risk-ack-error"
+        >
           {{ riskAckError }}
         </p>
       </div>
@@ -79,7 +96,9 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-const remediationPath = computed(() => props.status?.remediation_path || KEY_ROTATION_REMEDIATION_PATH)
+const remediationPath = computed(
+  () => props.status?.remediation_path || KEY_ROTATION_REMEDIATION_PATH,
+)
 
 const activeCount = computed(() => props.status?.active_key_count ?? -1)
 const pendingCount = computed(() => props.status?.pending_key_count ?? 0)
@@ -101,7 +120,7 @@ async function acknowledgeRisk(): Promise<void> {
     message: t('keyRotationGate.riskAckConfirmMessage'),
     confirmText: t('keyRotationGate.riskAckConfirm'),
     cancelText: t('keyRotationGate.riskAckCancel'),
-    danger: true
+    danger: true,
   })
   if (!confirmed) return
 

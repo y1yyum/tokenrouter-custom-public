@@ -7,6 +7,6 @@
  */
 export function normalizeOtpDigits(value: string): string {
   return value
-    .replace(/[０-９]/g, digit => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
+    .replace(/[０-９]/g, (digit) => String.fromCharCode(digit.charCodeAt(0) - 0xfee0))
     .replace(/[^0-9]/g, '')
 }

@@ -39,11 +39,14 @@ export function useSweepRecords(fetchPage: PageFetcher, pageSize: number = SWEEP
     const mine = epoch
     loadingMore.value = true
     try {
-      const cursor = records.value.reduce((lowest, record) => Math.min(lowest, record.id), Number.POSITIVE_INFINITY)
+      const cursor = records.value.reduce(
+        (lowest, record) => Math.min(lowest, record.id),
+        Number.POSITIVE_INFINITY,
+      )
       const page = await fetchPage({ limit: pageSize, beforeId: cursor })
       if (mine !== epoch) return
-      const known = new Set(records.value.map(record => record.id))
-      const fresh = page.filter(record => !known.has(record.id))
+      const known = new Set(records.value.map((record) => record.id))
+      const fresh = page.filter((record) => !known.has(record.id))
       records.value = [...records.value, ...fresh]
       // A short page is the end. So is a full page with nothing new in it, which
       // is what a backend that ignores `before_id` keeps answering.

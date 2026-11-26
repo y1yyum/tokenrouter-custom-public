@@ -22,13 +22,15 @@ export default {
     walletSecurityRecoveryHint: '请先核查异常和资金，再进行人工恢复。普通渠道开关不能解除安全锁。',
     walletSecurityRecoverAction: '核查后人工恢复',
     walletSecurityRecoveryTitle: '验证并恢复钱包安全状态',
-    walletSecurityRecoveryWarning: '恢复前请确认地址、资金和签名器均可信。平台锁无法阻止持有泄漏私钥的人在平台外签名；如私钥疑似泄漏，请先处置资产。恢复会重新核验并建立可信快照，只解除安全暂停，不会打开原本关闭的充值渠道。',
+    walletSecurityRecoveryWarning:
+      '恢复前请确认地址、资金和签名器均可信。平台锁无法阻止持有泄漏私钥的人在平台外签名；如私钥疑似泄漏，请先处置资产。恢复会重新核验并建立可信快照，只解除安全暂停，不会打开原本关闭的充值渠道。',
     walletSecurityRecoveryConfirmation: '输入 RECOVER 确认已核查异常，随后完成一次新的 2FA 验证',
     walletSecurityVerifyRecovery: '继续 2FA 验证',
     walletSecurityRecoveryStillLocked: '服务器仍报告安全锁定，恢复未完成，请重新核查。',
     walletSecurityRecovered: '钱包安全检查通过，安全锁已解除；充值渠道保留原配置。',
     walletNeedsConfig: '种子已就绪 · 待配置归集',
-    walletNotReady: '种子已就绪，可派生 Gas 地址和读取余额。执行归集前，请启用充值渠道并保存有效的归集接收地址。',
+    walletNotReady:
+      '种子已就绪，可派生 Gas 地址和读取余额。执行归集前，请启用充值渠道并保存有效的归集接收地址。',
     walletUnavailable: '钱包暂不可用',
     channelActive: '收款已开启',
     channelPaused: '收款已暂停',
@@ -63,7 +65,7 @@ export default {
       walletAction: '去配置钱包',
       securityAction: '去处理',
       signerAction: '去解锁',
-      viewAddresses: '查看充值地址'
+      viewAddresses: '查看充值地址',
     },
     walletSetupStepsTitle: '完成钱包初始化只需三步',
     walletSetupStep1: '导入充值种子：决定用户充值地址的派生，务必离线备份。',
@@ -166,21 +168,24 @@ export default {
     rpcFetching: '测试中…',
     rpcFetchDone: '已探测 {probed} 个节点，填入 {count} 个通过扫链检查的最快节点',
     rpcFetchEmpty: '已探测 {probed} 个节点，没有可用的新节点',
-    rpcCandidatesHint: '以下是 chainlist.org 收录的公共节点，点击即可添加；公共节点可能限流，生产环境建议用自己的付费节点',
-        globalThreshold: '归集全局阈值（USDT）',
+    rpcCandidatesHint:
+      '以下是 chainlist.org 收录的公共节点，点击即可添加；公共节点可能限流，生产环境建议用自己的付费节点',
+    globalThreshold: '归集全局阈值（USDT）',
     creditMin: '最小入账金额（USDT）',
     creditMinHint: '低于该金额的转账不会入账，用户会看到未入账原因',
     creditMax: '单笔最大入账金额（USDT）',
     creditMaxHint: '超过该金额的单笔转账不会自动入账，需人工处理',
     nativePriceUrl: '原生币行情地址',
-    nativePriceUrlHint: '出于安全考虑不回显（可能配置了私有镜像地址）。留空表示保持已保存的行情地址（默认使用 Binance 公共接口）；填写新地址后保存需要二次验证。行情获取失败或价格超过 10 分钟未更新时，该笔充值保持待处理，不会按过期价入账。',
+    nativePriceUrlHint:
+      '出于安全考虑不回显（可能配置了私有镜像地址）。留空表示保持已保存的行情地址（默认使用 Binance 公共接口）；填写新地址后保存需要二次验证。行情获取失败或价格超过 10 分钟未更新时，该笔充值保持待处理，不会按过期价入账。',
     nativePrice: '结算价格（USD）',
     nativePriceAt: '取价时间',
     hotWalletEvm: '归集接收地址（EVM）',
     sweepDestinationHint: '保存后用作归集接收地址，请核对地址无误。Gas 钱包独立支付手续费。',
     hotWalletSolana: '归集热钱包（Solana）',
     hotIndex: '热钱包派生索引',
-    hotIndexHint: 'Gas 钱包派生索引固定为 0，后台不可修改。Gas 地址与归集接收地址分开，请向 Gas 钱包补充手续费。',
+    hotIndexHint:
+      'Gas 钱包派生索引固定为 0，后台不可修改。Gas 地址与归集接收地址分开，请向 Gas 钱包补充手续费。',
     sweepAuto: '自动归集',
     sweepAutoHint: '开启后每小时检查一次阈值并自动归集，关闭时只能手动执行',
     userId: '用户 ID',
@@ -225,15 +230,19 @@ export default {
     sweepBlockedHint: '请先设置归集热钱包（接收地址）',
     sweepConfirmTitle: '确认执行归集',
     sweepConfirmAction: '确认归集',
-    sweepConfirmMessage: '当前预览为 {count} 个地址、合计 {total} USDT，归集到 {hot}。实际按代币签名前最新已入账余额执行，试运行不会锁定金额。链上转账不可撤销，请确认地址无误。',
+    sweepConfirmMessage:
+      '当前预览为 {count} 个地址、合计 {total} USDT，归集到 {hot}。实际按代币签名前最新已入账余额执行，试运行不会锁定金额。链上转账不可撤销，请确认地址无误。',
     channelConfirmTitle: '确认切换渠道开关',
-    channelConfirmMessage: '即将把充值渠道切换为「{state}」。关闭后停止扫链与入账，正在进行的归集不受影响；重新开启后从当前块继续。',
+    channelConfirmMessage:
+      '即将把充值渠道切换为「{state}」。关闭后停止扫链与入账，正在进行的归集不受影响；重新开启后从当前块继续。',
     channelConfirmAction: '确认切换',
     sweepAutoConfirmTitle: '确认切换自动归集',
-    sweepAutoConfirmMessage: '即将把自动归集切换为「{state}」。开启后每小时检查阈值并自动把子地址资金转到归集接收地址，链上转账不可撤销。',
+    sweepAutoConfirmMessage:
+      '即将把自动归集切换为「{state}」。开启后每小时检查阈值并自动把子地址资金转到归集接收地址，链上转账不可撤销。',
     sweepAutoConfirmAction: '确认切换',
     addressConfirmTitle: '确认修改充值地址状态',
-    addressConfirmMessage: '即将对地址 {address} 执行「{action}」。停用后仍监听该地址，但新转账不再自动入账，需人工处理。',
+    addressConfirmMessage:
+      '即将对地址 {address} 执行「{action}」。停用后仍监听该地址，但新转账不再自动入账，需人工处理。',
     addressConfirmAction: '确认修改',
     saveConfirmTitle: '确认保存配置变更',
     saveConfirmMessage: '检测到 {count} 项影响资金流向的改动，链上操作不可撤销，请核对后保存：',
@@ -242,7 +251,8 @@ export default {
     disabled: '关闭',
     sweepDryRun: '试运行归集',
     blockedTitle: '有交易卡住了归集',
-    blockedHint: '这些任务保留着已签名交易，同链新归集会等待。点「对账」只查链，不签名也不广播；暂时查不到回执时仍保留地址，后续只复用原交易字节。交易回滚或数据不完整时转人工复核。',
+    blockedHint:
+      '这些任务保留着已签名交易，同链新归集会等待。点「对账」只查链，不签名也不广播；暂时查不到回执时仍保留地址，后续只复用原交易字节。交易回滚或数据不完整时转人工复核。',
     blockedAge: '卡住时长',
     reconcileLegacy: '旧记录，人工处置过，不能在这里对账',
     reconcile: '对账',
@@ -269,24 +279,28 @@ export default {
       copyAddress: '复制充值地址',
       openAddress: '在区块浏览器中打开地址',
       timeTitle: '记录 #{id} · 创建于 {time}',
-      loadMoreFailed: '加载更多失败，请稍后重试'
+      loadMoreFailed: '加载更多失败，请稍后重试',
     },
     sweepRun: '执行归集',
     sweepRunning: '归集任务正在后台处理',
-    sweepRunningHint: '验证已通过。离开页面不会取消任务，请勿重复提交；完成情况以归集记录和链上确认结果为准。',
+    sweepRunningHint:
+      '验证已通过。离开页面不会取消任务，请勿重复提交；完成情况以归集记录和链上确认结果为准。',
     sweepCompleted: '归集任务处理完成，请查看各笔确认结果',
-    sweepStatusUnavailable: '暂时无法读取任务进度，任务可能仍在运行。请刷新归集记录核对，不要重复提交。',
+    sweepStatusUnavailable:
+      '暂时无法读取任务进度，任务可能仍在运行。请刷新归集记录核对，不要重复提交。',
     // 归集可用性由后端 /sweep/readiness 统一判定，前端只负责按原因码给文案。
     sweepGate: {
       blockedTitle: '暂时不能执行归集',
       walletUnavailable: '钱包状态读取失败，暂时不能归集；请刷新或重新登录后再试。',
       destinationMissing: '归集目标地址未锁定：先到「设置 → 归集」保存并锁定归集接收地址。',
-      destinationMismatch: '当前归集目标地址与锁定值不一致（可能被直接改库），已拒绝归集。请用「修改归集目标地址」重新验证 2FA 和风险短语。',
+      destinationMismatch:
+        '当前归集目标地址与锁定值不一致（可能被直接改库），已拒绝归集。请用「修改归集目标地址」重新验证 2FA 和风险短语。',
       destinationInvalid: '归集目标地址格式无效，请重新保存一个有效的 0x 地址。',
       channelDisabled: '充值渠道未启用：先在加密设置里打开渠道，再执行归集。',
       securityLocked: '钱包安全锁已暂停出账：先在安全面板完成恢复，再执行归集。',
-      signerLocked: '签名器未解锁：验证分片只证明分片有效，不会保留解密密钥。请点「验证并解锁签名器」取得 15 分钟窗口后再归集。',
-      walletNotReady: '钱包尚未就绪，暂时不能归集；请先导入钱包种子并确认钱包状态。'
+      signerLocked:
+        '签名器未解锁：验证分片只证明分片有效，不会保留解密密钥。请点「验证并解锁签名器」取得 15 分钟窗口后再归集。',
+      walletNotReady: '钱包尚未就绪，暂时不能归集；请先导入钱包种子并确认钱包状态。',
     },
     sweepUnlockCta: '解锁签名器',
     sweepUnlockWindow: '签名器已解锁，剩余 {time}',
@@ -298,32 +312,38 @@ export default {
     groupChannel: '渠道',
     groupChannelDesc: '启用渠道并选择要监听的链',
     enabledHint: '关闭后不扫链、不入账、不归集',
-    chainsHint: '勾选收款网络后，为每条网络配置并测试主网 RPC，再保存。EVM 网络共用一个专属地址；仅支持标明的稳定币，不支持直接转入 ETH 等原生币，暂不开放 Solana 充值。',
+    chainsHint:
+      '勾选收款网络后，为每条网络配置并测试主网 RPC，再保存。EVM 网络共用一个专属地址；仅支持标明的稳定币，不支持直接转入 ETH 等原生币，暂不开放 Solana 充值。',
     groupRpc: 'RPC 节点',
     groupRpcDesc: '未填写时自动从 Chainlist 筛选可用节点；自定义节点优先，多节点故障轮换',
     groupSweep: '归集',
     groupSweepDesc: '归集阈值与收款热钱包',
     globalThresholdHint: '自动归集合计达到该值才触发；手动归集不受此门槛限制',
-    walletManagedHint: '无需额外口令或手动解锁。首次导入两份独立助记词后即可使用；请离线备份助记词。',
+    walletManagedHint:
+      '无需额外口令或手动解锁。首次导入两份独立助记词后即可使用；请离线备份助记词。',
     walletNotConfigured: '尚未导入种子',
     walletInitializeAction: '验证并导入钱包种子',
     walletInitializeDone: '钱包种子已加密保存，可立即使用',
     walletLockTitle: '钱包管理',
-    walletLockDesc: '充值与 Gas 种子由服务器加密保存，重启后自动加载。导入、导出及归集地址修改均须后端两步验证。',
+    walletLockDesc:
+      '充值与 Gas 种子由服务器加密保存，重启后自动加载。导入、导出及归集地址修改均须后端两步验证。',
     healthTitle: '运行健康',
-    healthDesc: '查看未分配的充值地址数量和各链 Gas 余额。地址池为空会阻止新用户领取地址；Gas 余额不足会影响归集。',
+    healthDesc:
+      '查看未分配的充值地址数量和各链 Gas 余额。地址池为空会阻止新用户领取地址；Gas 余额不足会影响归集。',
     poolFree: '地址池剩余',
     hotWalletUnreachable: '读取失败',
     hotGasWallet: 'Gas 钱包',
     hotGasWalletHint: '这是支付 gas 的热种子地址，请给它充主网币；归集接收地址可以是指定的其他地址',
     gasFundingTitle: '给 Gas 钱包补充手续费',
-    gasFundingHint: '这是实际支付归集手续费的钱包地址，与归集接收地址分开。查看和复制地址无需额外验证。',
+    gasFundingHint:
+      '这是实际支付归集手续费的钱包地址，与归集接收地址分开。查看和复制地址无需额外验证。',
     gasFundingUnavailable: '请先完成钱包初始化，钱包就绪后会自动显示 Gas 地址和二维码。',
     gasFundingNoNetworks: '请先保存至少一条支持的充值链，再选择网络补充 Gas。',
     gasFundingNetwork: '补充手续费的网络',
     gasFundingAddress: 'Gas 钱包完整地址',
     gasFundingCopy: '复制 Gas 地址',
-    gasFundingWarning: '请在 {network} 网络向此地址转入原生币 {symbol}。USDT、USDC 不能支付 Gas；相同地址在不同链上的余额互不通用。',
+    gasFundingWarning:
+      '请在 {network} 网络向此地址转入原生币 {symbol}。USDT、USDC 不能支付 Gas；相同地址在不同链上的余额互不通用。',
     gasFundingBalance: '此链可用手续费余额',
     gasFundingLowBalance: '余额不足以支付一次归集的估算手续费，归集前请先补充原生币。',
     gasFundingQrAlt: '{network} Gas 钱包收款地址二维码',
@@ -347,7 +367,8 @@ export default {
     scanRunDeadline: '补扫已停止：超过总时限，进度已保留，可再次补扫继续',
     scanDeposits: '补扫并刷新记录',
     scanDepositsRunning: '正在扫描链上记录',
-    scanDepositsRunningHint: '持续追到已确认区块，只从当前扫描游标继续。已记录交易自动去重，确认后的充值按原入账规则处理。离开页面不会取消任务，请勿重复提交。',
+    scanDepositsRunningHint:
+      '持续追到已确认区块，只从当前扫描游标继续。已记录交易自动去重，确认后的充值按原入账规则处理。离开页面不会取消任务，请勿重复提交。',
     scanDepositsDone: '扫描完成，到账记录已刷新',
     scanDepositsFailed: '扫描未确认完成，请刷新记录核对后再重试',
     depositSelectAll: '全选本页待确认记录',
@@ -357,10 +378,12 @@ export default {
     depositConfirmCount: '笔数',
     depositConfirmTotal: '合计金额',
     depositConfirmChains: '涉及的链',
-    depositConfirmWarning: '将跳过区块确认数和出账安全扫描，只核对链上收据；确认后立即给用户加余额，不可撤销。',
+    depositConfirmWarning:
+      '将跳过区块确认数和出账安全扫描，只核对链上收据；确认后立即给用户加余额，不可撤销。',
     depositConfirmNote: '备注（可选）',
     depositConfirmSubmit: '继续并验证',
-    depositConfirmVerify: '手动确认入账：{count} 笔，合计 {total}，链：{chains}。跳过区块确认数和出账安全扫描，立即给用户加余额，不可撤销。',
+    depositConfirmVerify:
+      '手动确认入账：{count} 笔，合计 {total}，链：{chains}。跳过区块确认数和出账安全扫描，立即给用户加余额，不可撤销。',
     depositResultTitle: '入账结果',
     depositResultSummary: '成功 {credited} 笔，失败 {failed} 笔',
     depositResultCredited: '入账成功',
@@ -369,26 +392,34 @@ export default {
     depositResultError: '出错',
     depositResultOrder: '订单 #{id}',
     securityTitle: '链上资金操作验证',
-    securityPerRequest: '验证成功后，服务器签发仅限当前管理员会话使用的 5 分钟支付凭证。期间无需重复输入验证码，操作确认与安全通知仍逐次执行。',
+    securityPerRequest:
+      '验证成功后，服务器签发仅限当前管理员会话使用的 5 分钟支付凭证。期间无需重复输入验证码，操作确认与安全通知仍逐次执行。',
     securityGrantActive: '支付操作已验证 · 剩余 {minutes} 分钟',
-    securitySetupIntro: '尚未绑定两步验证。生成二维码后用验证器扫描，并输入当前 6 位验证码完成绑定。',
+    securitySetupIntro:
+      '尚未绑定两步验证。生成二维码后用验证器扫描，并输入当前 6 位验证码完成绑定。',
     securityConfigRead: '查看或修改 RPC 节点地址及凭据',
     securityConfigLocked: '支付配置尚未读取。完成两步验证后才能查看；取消或首次绑定后可重新发起。',
     securityConfigReadAction: '验证并读取配置',
-    securityReadOnly: '此测试实例共用生产账户且为只读；请先在正式管理端绑定两步验证，再回到此处查看。此操作未执行。',
+    securityReadOnly:
+      '此测试实例共用生产账户且为只读；请先在正式管理端绑定两步验证，再回到此处查看。此操作未执行。',
     securitySetupAction: '生成绑定密钥',
-    securityScan: '安装 Google Authenticator、Microsoft Authenticator 或兼容验证器，扫描下方二维码。二维码在本机生成。',
+    securityScan:
+      '安装 Google Authenticator、Microsoft Authenticator 或兼容验证器，扫描下方二维码。二维码在本机生成。',
     securityQrAlt: '本地生成的验证器绑定二维码',
     securityQrFailed: '二维码生成失败，可在验证器中手动输入下方密钥。',
     securityOfflineKey: '绑定密钥（请离线保管）',
-    securityKeyHint: '离线保存该密钥以便恢复验证器，不要发送给他人。关闭窗口后不再显示，也不会自动复制。',
+    securityKeyHint:
+      '离线保存该密钥以便恢复验证器，不要发送给他人。关闭窗口后不再显示，也不会自动复制。',
     securityCountdown: '本次绑定剩余 {seconds} 秒',
     securityCode: '6 位验证码',
-    securityFreshCode: '输入验证器当前的新 6 位数字。验证码仅用于签发本次 5 分钟凭证，不能重复签发。',
+    securityFreshCode:
+      '输入验证器当前的新 6 位数字。验证码仅用于签发本次 5 分钟凭证，不能重复签发。',
     securityBindAction: '绑定验证器',
     securityVerifyAction: '验证并执行本次操作',
-    securityBound: '绑定成功。绑定码已使用，请等待验证器生成下一枚新码，再重新发起刚才的操作；本窗口不会自动执行原操作。',
-    securityUnavailable: '当前无法配置或使用链上操作两步验证，请检查服务端功能开关及账号绑定条件；本次操作未执行。',
+    securityBound:
+      '绑定成功。绑定码已使用，请等待验证器生成下一枚新码，再重新发起刚才的操作；本窗口不会自动执行原操作。',
+    securityUnavailable:
+      '当前无法配置或使用链上操作两步验证，请检查服务端功能开关及账号绑定条件；本次操作未执行。',
     securityOperatorRequired: '此账号尚未获准管理支付钱包，请联系部署管理员授权；本次操作未执行。',
     securitySetupExpired: '本次绑定已过期，请关闭窗口后重新生成密钥。原操作未执行。',
     securityNotConfigured: '服务器要求先配置两步验证。请关闭窗口，重新发起操作并完成绑定。',
@@ -401,17 +432,24 @@ export default {
     rpcAutoVerify: '探测并自动选择 {chain} RPC 节点。节点会填入当前表单，保存配置后生效。',
     csvVerify: '导出当前筛选条件下的充值 CSV，包含充值地址与账目，请妥善保管。',
     walletInitTitle: '首次导入钱包种子',
-    walletInitWarning: '高风险：充值种子决定所有用户充值地址，更换会改变全部充值地址。此处仅可首次导入两份有效且不同的助记词，已有种子禁止覆盖；Gas 种子独立用于手续费。服务器会验证当次 2FA。',
+    walletInitWarning:
+      '高风险：充值种子决定所有用户充值地址，更换会改变全部充值地址。此处仅可首次导入两份有效且不同的助记词，已有种子禁止覆盖；Gas 种子独立用于手续费。服务器会验证当次 2FA。',
     depositMnemonic: 'Deposit 助记词（首次初始化必填）',
-    depositMnemonicImpact: '充值地址种子：决定所有用户的充值地址。更换后所有用户派生地址都会改变；已有地址仍可能收到转账。',
-    hotMnemonicScope: 'Gas 种子：只决定 Gas 钱包地址，用于支付手续费，不会更换用户充值地址或归集目的地址。',
+    depositMnemonicImpact:
+      '充值地址种子：决定所有用户的充值地址。更换后所有用户派生地址都会改变；已有地址仍可能收到转账。',
+    hotMnemonicScope:
+      'Gas 种子：只决定 Gas 钱包地址，用于支付手续费，不会更换用户充值地址或归集目的地址。',
     hotMnemonic: 'Gas 钱包 hot 助记词',
-    walletToolsHint: '验证 2FA 后，当前会话可在 5 分钟内操作。种子由服务器加密保存，导出仅在当前页面短暂显示。',
+    walletToolsHint:
+      '验证 2FA 后，当前会话可在 5 分钟内操作。种子由服务器加密保存，导出仅在当前页面短暂显示。',
     walletBarkTitle: '钱包安全通知 · Bark',
-    walletBarkDescription: '可选。启用后，归集、改归集地址、导出助记词会在发起和 2FA 通过时通知主管理员；通知失败会停止操作。未启用时仍需 2FA。',
-    walletOperationNotifyFailed: 'Bark 安全通知未送达，本次操作已停止。请检查上方 Bark 配置和网络后重试。',
+    walletBarkDescription:
+      '可选。启用后，归集、改归集地址、导出助记词会在发起和 2FA 通过时通知主管理员；通知失败会停止操作。未启用时仍需 2FA。',
+    walletOperationNotifyFailed:
+      'Bark 安全通知未送达，本次操作已停止。请检查上方 Bark 配置和网络后重试。',
     hotImportAction: '导入 Gas 钱包助记词',
-    hotImportWarning: '高风险：这会更换 Gas 钱包地址，旧 Gas 余额须自行转出。用户充值种子及充值地址保持不变；有未完成归集时服务器拒绝更换。通过 2FA 后立即生效。',
+    hotImportWarning:
+      '高风险：这会更换 Gas 钱包地址，旧 Gas 余额须自行转出。用户充值种子及充值地址保持不变；有未完成归集时服务器拒绝更换。通过 2FA 后立即生效。',
     hotImportDone: 'Gas 钱包种子已更新并立即生效',
     walletContinue: '继续并验证本次操作',
     sweepMinPerAddress: '单地址归集阈值',
@@ -419,20 +457,27 @@ export default {
     confirmations: '确认数',
     scanRange: '扫链范围',
     scanConcurrency: '扫链并发',
-    scanConcurrencyHint: '0 为自动（每节点最多 4、总计最多 8）；1–64 覆盖该链并发，同时用于日志和完整区块读取，仍受 RPC 请求间隔限制。付费节点可先设 32。',
+    scanConcurrencyHint:
+      '0 为自动（每节点最多 4、总计最多 8）；1–64 覆盖该链并发，同时用于日志和完整区块读取，仍受 RPC 请求间隔限制。付费节点可先设 32。',
     mnemonicsTitle: '导出钱包助记词',
     mnemonicsSensitive: '极敏感操作 · 将在本页短暂显示明文',
-    mnemonicsWarning: '需要当次 6 位两步验证码。服务器仅为本次导出解密，助记词不会写入浏览器存储或自动复制。',
+    mnemonicsWarning:
+      '需要当次 6 位两步验证码。服务器仅为本次导出解密，助记词不会写入浏览器存储或自动复制。',
     mnemonicsScope: '种子用途与影响范围',
     mnemonicsAutoClear: '明文将在 {seconds} 秒后从页面清除',
     mnemonicsExpired: '明文已自动清除。重新通过 2FA 验证后可再次导出。',
     mnemonicsCopiedAction: '已复制',
-    mnemonicsDepositWarning: 'deposit 助记词决定所有用户派生的充值地址。它一旦更改会改变充值地址；旧地址仍可能收到转账。测试实例只处理专用测试种子，不要把生产助记词粘贴或导入。',
-    mnemonicsHotWarning: 'hot 助记词是独立的 Gas 钱包种子。它只决定 Gas 钱包地址，不会替换 deposit 用户充值种子。旧 Gas 余额需人工迁移。',
-    mnemonicsProductionConfirm: '已确认明文风险，只由本人离线保存；测试实例仅导出专用测试种子，绝不拷贝生产种子。',
-    mnemonicsRiskOperation: '从主服务的加密钱包中解密并在当前页面显示 deposit 与 hot 两种明文助记词。请确认屏幕无人旁观。',
+    mnemonicsDepositWarning:
+      'deposit 助记词决定所有用户派生的充值地址。它一旦更改会改变充值地址；旧地址仍可能收到转账。测试实例只处理专用测试种子，不要把生产助记词粘贴或导入。',
+    mnemonicsHotWarning:
+      'hot 助记词是独立的 Gas 钱包种子。它只决定 Gas 钱包地址，不会替换 deposit 用户充值种子。旧 Gas 余额需人工迁移。',
+    mnemonicsProductionConfirm:
+      '已确认明文风险，只由本人离线保存；测试实例仅导出专用测试种子，绝不拷贝生产种子。',
+    mnemonicsRiskOperation:
+      '从主服务的加密钱包中解密并在当前页面显示 deposit 与 hot 两种明文助记词。请确认屏幕无人旁观。',
     mnemonicsExportAction: '导出钱包助记词',
-    mnemonicsResultHint: '每个钱包的助记词分为两段，按顺序分别复制并离线保存。默认掩码；不要发给他人或粘贴到聊天、工单。关闭窗口会清除页面内容，但不会改写剪贴板。',
+    mnemonicsResultHint:
+      '每个钱包的助记词分为两段，按顺序分别复制并离线保存。默认掩码；不要发给他人或粘贴到聊天、工单。关闭窗口会清除页面内容，但不会改写剪贴板。',
     mnemonicsAllUsers: '影响所有用户充值地址',
     mnemonicsGasOnly: '仅 Gas 钱包',
     mnemonicsShow: '显示此钱包',
@@ -451,11 +496,13 @@ export default {
     mnemonicsInvalidResponse: '钱包返回的数据不完整，助记词未显示。请检查服务端导出响应。',
     signer: {
       title: '签名分片（Shamir 2-of-3）',
-      description: '归集签名使用的数据密钥在浏览器生成并拆成三份：服务器只保存 A，B、C 只展示一次。',
+      description:
+        '归集签名使用的数据密钥在浏览器生成并拆成三份：服务器只保存 A，B、C 只展示一次。',
       loading: '正在读取分片状态…',
       loadFailed: '分片状态读取失败',
       notConfiguredTitle: '尚未启用分片',
-      notConfiguredHint: '当前 vault 仍由服务器安装密钥加密。生成分片后，即使数据库或服务器失守，也无法单独解开钱包。',
+      notConfiguredHint:
+        '当前 vault 仍由服务器安装密钥加密。生成分片后，即使数据库或服务器失守，也无法单独解开钱包。',
       configuredTitle: '已启用分片',
       configuredHint: '服务器只持有分片 A；归集、导出助记词等签名操作需要 B 或 C。',
       locked: '签名器已锁定',
@@ -464,7 +511,8 @@ export default {
       windowExpiredToast: '解锁窗口已过期，请重新解锁',
       unlockWindowEnding: '不足 1 分钟，请尽快执行归集',
       unlocked: '签名器已解锁',
-      lockedHint: '验证分片只证明分片有效，不会保留解密密钥；归集前请先「验证并解锁签名器」，解锁窗口 15 分钟。',
+      lockedHint:
+        '验证分片只证明分片有效，不会保留解密密钥；归集前请先「验证并解锁签名器」，解锁窗口 15 分钟。',
       advanced: '高级信息',
       setupStepsTitle: '启用签名分片只需三步',
       setupStep1: '确认当前页面为 HTTPS（或 localhost），并准备 6 位动态验证码。',
@@ -489,10 +537,12 @@ export default {
       webcrypto: '浏览器 WebCrypto',
       noble: 'noble 纯 JS 兜底',
       backendLabel: '密码学后端',
-      noStorageNotice: '分片、数据密钥与派生密钥不会写入 localStorage / sessionStorage / IndexedDB / Cookie 或 URL。',
+      noStorageNotice:
+        '分片、数据密钥与派生密钥不会写入 localStorage / sessionStorage / IndexedDB / Cookie 或 URL。',
       insecureTitle: '当前页面无法安全生成分片',
       insecureContext: '非安全上下文（http）已禁用分片功能，请通过 HTTPS 或 localhost 打开后台。',
-      noCsprng: '浏览器缺少安全随机数（crypto.getRandomValues），已禁用分片功能；不会使用弱随机兜底。',
+      noCsprng:
+        '浏览器缺少安全随机数（crypto.getRandomValues），已禁用分片功能；不会使用弱随机兜底。',
       noAes: '浏览器缺少 WebCrypto 且纯 JS 兜底不可用，已禁用分片功能。',
       testReadOnly: '测试实例为只读模式，禁止初始化分片。',
       cryptoDisabled: '本实例未启用加密支付通道。',
@@ -511,7 +561,8 @@ export default {
         authRequired: '请输入 6 位验证码',
         authAction: '下一步',
         recoverTitle: '先合并现有的两份分片',
-        recoverHint: '重新拆分必须还原同一个数据密钥：输入现有分片 B 和 C（或任意两份），本地合成后不会上传。',
+        recoverHint:
+          '重新拆分必须还原同一个数据密钥：输入现有分片 B 和 C（或任意两份），本地合成后不会上传。',
         recoverShareB: '现有分片 B',
         recoverShareC: '现有分片 C',
         recoverAction: '合并并校验',
@@ -520,7 +571,8 @@ export default {
         riskTitle: '风险确认（阻断式）',
         riskHint: '请逐条阅读并手动输入下方短语。按钮禁用只是前端提示，服务器会再次校验。',
         riskPointFallback1: '分片 B 和 C 只显示这一次，关闭页面后无法再次查看。',
-        riskPointFallback2: '两份分片全部丢失后，即使服务器管理员也无法恢复，网站所有收款地址的母钱包将永久无法动用。',
+        riskPointFallback2:
+          '两份分片全部丢失后，即使服务器管理员也无法恢复，网站所有收款地址的母钱包将永久无法动用。',
         riskPointFallback3: '不要截图、不要通过聊天工具传输；请离线抄写或打印后分开保存。',
         riskPhraseLabel: '输入确认短语',
         riskPhrasePlaceholder: '逐字输入上方短语',
@@ -529,7 +581,8 @@ export default {
         riskConfirm: '我已知晓，继续生成',
         riskCancel: '取消',
         generatedTitle: '数据密钥已在浏览器生成',
-        generatedHint: '接下来只会把分片 A、一次性数据密钥和公开承诺值提交给服务器；B、C 永远不会离开本机。',
+        generatedHint:
+          '接下来只会把分片 A、一次性数据密钥和公开承诺值提交给服务器；B、C 永远不会离开本机。',
         generateAction: '生成分片并继续',
         generating: '正在生成…',
         revealTitle: '立即抄写分片 B 和 C（只显示这一次）',
@@ -550,7 +603,8 @@ export default {
         revealPrintFailed: '打印窗口被拦截，请允许弹窗或改用下载。',
         revealQrAlt: '分片二维码',
         printTitle: 'sub2api 钱包恢复分片',
-        printWarning: '此分片是恢复钱包的两份必需材料之一。不要拍照上传，不要通过聊天工具发送；请离线保存。',
+        printWarning:
+          '此分片是恢复钱包的两份必需材料之一。不要拍照上传，不要通过聊天工具发送；请离线保存。',
         printShareLabel: '分片',
         printRecoveryTitle: '恢复方法（任意两份分片）',
         printStep1: '取任意两份分片，按 S2V1 格式核对完整性。',
@@ -562,10 +616,12 @@ export default {
         revealAckRequired: '请先确认已抄写两份分片',
         revealNext: '我已抄完，去回填校验',
         confirmTitle: '回填其中一份分片',
-        confirmHint: '粘贴分片 B 或 C，校验通过后才能启用新 vault；服务器也会用它和分片 A 合成密钥。',
+        confirmHint:
+          '粘贴分片 B 或 C，校验通过后才能启用新 vault；服务器也会用它和分片 A 合成密钥。',
         confirmAction: '校验并提交',
         submitTotpLabel: '提交前再输入一次当前验证码',
-        submitTotpHint: '抄写两份分片通常超过验证码 30 秒有效期；提交时会再次校验当前验证码，第一步的验证码只用于开始生成。',
+        submitTotpHint:
+          '抄写两份分片通常超过验证码 30 秒有效期；提交时会再次校验当前验证码，第一步的验证码只用于开始生成。',
         confirmMismatch: '与刚才显示的分片不一致，请重新粘贴。',
         confirmSuccess: '回填校验通过。',
         submitting: '正在提交并迁移 vault…',
@@ -579,7 +635,7 @@ export default {
         closeStay: '继续抄写',
         closeConfirm: '放弃并关闭',
         insecure: '当前环境无法生成分片',
-        resplitNotice: '重新拆分会让旧分片全部作废，并清除自动归集分片。'
+        resplitNotice: '重新拆分会让旧分片全部作废，并清除自动归集分片。',
       },
       unlock: {
         titleSweep: '解锁签名器并立即归集',
@@ -593,7 +649,8 @@ export default {
         submitVerify: '验证并解锁',
         unlocking: '正在解锁并执行…',
         verifying: '正在验证并解锁…',
-        lockedNotice: '签名器当前已锁定：归集、导出助记词与私钥都需要一份分片。验证成功后解锁窗口为 15 分钟。',
+        lockedNotice:
+          '签名器当前已锁定：归集、导出助记词与私钥都需要一份分片。验证成功后解锁窗口为 15 分钟。',
         rateLimited: '分片连续失败次数过多，签名器已锁定 15 分钟，请稍后再试。',
         auditTitle: '归集审计信息',
         auditAddresses: '地址数',
@@ -606,7 +663,7 @@ export default {
         auditClose: '关闭',
         verifySuccess: '分片有效，签名器已解锁：15 分钟内可直接执行归集。',
         verifyFailed: '分片无法解开本钱包。',
-        failed: '操作失败'
+        failed: '操作失败',
       },
       shareInput: {
         label: '分片内容',
@@ -625,7 +682,7 @@ export default {
         uploadFailed: '图片二维码识别失败，请手动粘贴分片。',
         uploaded: '已从图片读取分片。',
         parsed: '第 {index} / {total} 份 · 阈值 {threshold} · 数据 {length} 字节',
-        invalid: '分片无效，请检查是否完整。'
+        invalid: '分片无效，请检查是否完整。',
       },
       errors: {
         shareRequired: '需要一份恢复分片才能继续。',
@@ -655,8 +712,8 @@ export default {
         cameraUnsupported: '当前浏览器不支持相机扫码。',
         cameraDenied: '相机权限被拒绝。',
         cameraUnavailable: '相机不可用。',
-        generic: '操作失败，请稍后重试。'
-      }
+        generic: '操作失败，请稍后重试。',
+      },
     },
     saveTitle: '渠道配置',
     walletStatusLabel: '钱包状态',
@@ -666,5 +723,5 @@ export default {
     pageSummary: '第 {page} / {pages} 页 · 共 {total} 条',
     poolLow: '偏低',
     gasInsufficient: '余额不足',
-  }
+  },
 }

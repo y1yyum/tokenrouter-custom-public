@@ -1,18 +1,49 @@
 <template>
   <div class="deposit-amount" :class="{ 'deposit-amount--error': check.blocked }">
-    <label class="deposit-amount__label" for="deposit-amount-input">{{ t('deposit.amountFieldLabel') }}</label>
+    <label class="deposit-amount__label" for="deposit-amount-input">{{
+      t('deposit.amountFieldLabel')
+    }}</label>
     <div class="deposit-amount__field">
-      <input id="deposit-amount-input" class="deposit-amount__input" type="text" inputmode="decimal"
-        autocomplete="off" :value="modelValue" :disabled="disabled" :aria-invalid="check.blocked"
-        aria-describedby="deposit-amount-message" :placeholder="t('deposit.amountPlaceholder')"
-        data-testid="deposit-amount-input" @input="onInput" />
+      <input
+        id="deposit-amount-input"
+        class="deposit-amount__input"
+        type="text"
+        inputmode="decimal"
+        autocomplete="off"
+        :value="modelValue"
+        :disabled="disabled"
+        :aria-invalid="check.blocked"
+        aria-describedby="deposit-amount-message"
+        :placeholder="t('deposit.amountPlaceholder')"
+        data-testid="deposit-amount-input"
+        @input="onInput"
+      />
       <span v-if="unit" class="deposit-amount__unit">{{ unit }}</span>
     </div>
-    <p v-if="check.blocked" id="deposit-amount-message" class="deposit-amount__message deposit-amount__message--error"
-      role="alert" data-testid="deposit-amount-error">{{ errorText }}</p>
-    <p v-else id="deposit-amount-message" class="deposit-amount__message" data-testid="deposit-amount-hint">{{ hintText }}</p>
-    <p v-if="estimateText" class="deposit-amount__estimate" data-testid="deposit-amount-credit">{{ estimateText }}</p>
-    <p v-else-if="notionalText" class="deposit-amount__estimate" data-testid="deposit-amount-notional">{{ notionalText }}</p>
+    <p
+      v-if="check.blocked"
+      id="deposit-amount-message"
+      class="deposit-amount__message deposit-amount__message--error"
+      role="alert"
+      data-testid="deposit-amount-error"
+      >{{ errorText }}</p
+    >
+    <p
+      v-else
+      id="deposit-amount-message"
+      class="deposit-amount__message"
+      data-testid="deposit-amount-hint"
+      >{{ hintText }}</p
+    >
+    <p v-if="estimateText" class="deposit-amount__estimate" data-testid="deposit-amount-credit">{{
+      estimateText
+    }}</p>
+    <p
+      v-else-if="notionalText"
+      class="deposit-amount__estimate"
+      data-testid="deposit-amount-notional"
+      >{{ notionalText }}</p
+    >
   </div>
 </template>
 
@@ -72,10 +103,16 @@ const hintText = computed(() => {
   const { limits, state } = props.check
   if (state === 'empty') {
     if (limits.min !== null && limits.max !== null) {
-      return t('deposit.amountHintRange', { min: fmt(limits.min), max: fmt(limits.max), unit: unitOfLimits.value })
+      return t('deposit.amountHintRange', {
+        min: fmt(limits.min),
+        max: fmt(limits.max),
+        unit: unitOfLimits.value,
+      })
     }
-    if (limits.min !== null) return t('deposit.amountHintMin', { min: fmt(limits.min), unit: unitOfLimits.value })
-    if (limits.max !== null) return t('deposit.amountHintMax', { max: fmt(limits.max), unit: unitOfLimits.value })
+    if (limits.min !== null)
+      return t('deposit.amountHintMin', { min: fmt(limits.min), unit: unitOfLimits.value })
+    if (limits.max !== null)
+      return t('deposit.amountHintMax', { max: fmt(limits.max), unit: unitOfLimits.value })
     // No thresholds on this deployment: say so instead of inventing a range.
     return t('deposit.amountNoLimit')
   }
@@ -100,22 +137,61 @@ const notionalText = computed(() => {
 </script>
 
 <style scoped>
-.deposit-amount { display: grid; gap: .4rem; max-width: 24rem; margin-top: 1rem; }
-.deposit-amount__label { font-size: .75rem; color: var(--signal-muted, #8c99a6); }
-.deposit-amount__field { position: relative; display: flex; align-items: center; }
+.deposit-amount {
+  display: grid;
+  gap: 0.4rem;
+  max-width: 24rem;
+  margin-top: 1rem;
+}
+.deposit-amount__label {
+  font-size: 0.75rem;
+  color: var(--signal-muted, #8c99a6);
+}
+.deposit-amount__field {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
 .deposit-amount__input {
-  width: 100%; min-height: 2.75rem; padding: .55rem 3.5rem .55rem .75rem;
-  border: 1px solid var(--ui-border-accented); border-radius: 6px;
-  background: var(--ui-bg, transparent); color: inherit;
-  font-size: .9375rem; font-variant-numeric: tabular-nums;
+  width: 100%;
+  min-height: 2.75rem;
+  padding: 0.55rem 3.5rem 0.55rem 0.75rem;
+  border: 1px solid var(--ui-border-accented);
+  border-radius: 6px;
+  background: var(--ui-bg, transparent);
+  color: inherit;
+  font-size: 0.9375rem;
+  font-variant-numeric: tabular-nums;
 }
-.deposit-amount__input:focus-visible { outline: 2px solid var(--signal-accent, #0891b2); outline-offset: 1px; }
-.deposit-amount--error .deposit-amount__input { border-color: #dc2626; }
+.deposit-amount__input:focus-visible {
+  outline: 2px solid var(--signal-accent, #0891b2);
+  outline-offset: 1px;
+}
+.deposit-amount--error .deposit-amount__input {
+  border-color: #dc2626;
+}
 .deposit-amount__unit {
-  position: absolute; inset-inline-end: .75rem; pointer-events: none;
-  color: var(--signal-muted, #8c99a6); font-size: .75rem; font-weight: 600;
+  position: absolute;
+  inset-inline-end: 0.75rem;
+  pointer-events: none;
+  color: var(--signal-muted, #8c99a6);
+  font-size: 0.75rem;
+  font-weight: 600;
 }
-.deposit-amount__message { margin: 0; font-size: .75rem; line-height: 1.6; color: var(--signal-muted, #8c99a6); }
-.deposit-amount__message--error { color: #dc2626; }
-.deposit-amount__estimate { margin: 0; font-size: .75rem; line-height: 1.6; color: #10b981; font-variant-numeric: tabular-nums; }
+.deposit-amount__message {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: var(--signal-muted, #8c99a6);
+}
+.deposit-amount__message--error {
+  color: #dc2626;
+}
+.deposit-amount__estimate {
+  margin: 0;
+  font-size: 0.75rem;
+  line-height: 1.6;
+  color: #10b981;
+  font-variant-numeric: tabular-nums;
+}
 </style>

@@ -8,7 +8,12 @@
   <UCard
     :data-testid="testId"
     class="shadow-xs dark:shadow-none"
-    :ui="{ root: 'transaction-list-card', header: 'p-4 sm:p-5', body: 'p-0', footer: 'px-4 py-3 sm:px-5' }"
+    :ui="{
+      root: 'transaction-list-card',
+      header: 'p-4 sm:p-5',
+      body: 'p-0',
+      footer: 'px-4 py-3 sm:px-5',
+    }"
   >
     <template #header>
       <div class="flex flex-wrap items-start justify-between gap-3">
@@ -56,32 +61,35 @@
 import TransactionList from './TransactionList.vue'
 import type { TransactionItem } from './transactionList'
 
-withDefaults(defineProps<{
-  title: string
-  subtitle?: string
-  items: T[]
-  loading?: boolean
-  skeletonRows?: number
-  emptyIcon?: string
-  emptyTitle?: string
-  emptyDescription?: string
-  emptyTestId?: string
-  loadingLabel?: string
-  /** Makes rows clickable / keyboard selectable and emits `select`. */
-  interactive?: boolean
-  /** `data-testid` for the card root, used by page specs. */
-  testId?: string
-}>(), {
-  loading: false,
-  skeletonRows: 3,
-  emptyIcon: 'i-lucide-inbox',
-  emptyTitle: '',
-  emptyDescription: '',
-  emptyTestId: 'transaction-list-empty',
-  loadingLabel: '',
-  interactive: false,
-  testId: 'transaction-list-card'
-})
+withDefaults(
+  defineProps<{
+    title: string
+    subtitle?: string
+    items: T[]
+    loading?: boolean
+    skeletonRows?: number
+    emptyIcon?: string
+    emptyTitle?: string
+    emptyDescription?: string
+    emptyTestId?: string
+    loadingLabel?: string
+    /** Makes rows clickable / keyboard selectable and emits `select`. */
+    interactive?: boolean
+    /** `data-testid` for the card root, used by page specs. */
+    testId?: string
+  }>(),
+  {
+    loading: false,
+    skeletonRows: 3,
+    emptyIcon: 'i-lucide-inbox',
+    emptyTitle: '',
+    emptyDescription: '',
+    emptyTestId: 'transaction-list-empty',
+    loadingLabel: '',
+    interactive: false,
+    testId: 'transaction-list-card',
+  },
+)
 
 const emit = defineEmits<{
   select: [item: T]

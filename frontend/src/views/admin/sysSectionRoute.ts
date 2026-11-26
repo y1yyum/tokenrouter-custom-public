@@ -10,7 +10,8 @@ import type { Router } from 'vue-router'
  */
 export function useSectionRoute<S extends string>(fallback: S, names: Record<S, string>) {
   // Read the router without useRouter(): its missing-injection warning would flood router-less specs.
-  const router = getCurrentInstance()?.appContext.config.globalProperties.$router as Router | undefined
+  const router = getCurrentInstance()?.appContext.config.globalProperties.$router as
+    Router | undefined
   const local = ref(fallback) as Ref<S>
   const ownNames = Object.values(names) as string[]
   let last: S = fallback
@@ -25,9 +26,12 @@ export function useSectionRoute<S extends string>(fallback: S, names: Record<S, 
       return last
     },
     set: (value: S) => {
-      if (!router) { local.value = value; return }
+      if (!router) {
+        local.value = value
+        return
+      }
       void router.push({ name: names[value] })
-    }
+    },
   })
   return { section, routed: !!router, to: (value: S) => ({ name: names[value] }) }
 }

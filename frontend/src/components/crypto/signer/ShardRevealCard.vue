@@ -1,14 +1,21 @@
 <template>
-  <section class="shard-reveal rounded-lg p-4 ring ring-default" :class="`shard-reveal--${shardSlot.toLowerCase()}`">
+  <section
+    class="shard-reveal rounded-lg p-4 ring ring-default"
+    :class="`shard-reveal--${shardSlot.toLowerCase()}`"
+  >
     <div class="flex items-start justify-between gap-3 max-sm:flex-col">
       <div class="flex min-w-0 items-start gap-3">
-        <UBadge color="warning" variant="outline" class="mt-0.5 h-6 shrink-0 font-mono">{{ shardSlot }}</UBadge>
+        <UBadge color="warning" variant="outline" class="mt-0.5 h-6 shrink-0 font-mono">{{
+          shardSlot
+        }}</UBadge>
         <div class="min-w-0">
           <h4 class="font-semibold text-highlighted">{{ title }}</h4>
           <p class="mt-1 text-xs leading-relaxed text-muted">{{ description }}</p>
         </div>
       </div>
-      <UBadge color="error" variant="subtle" class="shrink-0">{{ t('admin.crypto.signer.wizard.revealOnce') }}</UBadge>
+      <UBadge color="error" variant="subtle" class="shrink-0">{{
+        t('admin.crypto.signer.wizard.revealOnce')
+      }}</UBadge>
     </div>
 
     <div v-if="!revealed" class="mt-3 flex flex-wrap items-center gap-2">
@@ -19,26 +26,77 @@
         icon="i-lucide-eye"
         data-testid="shard-reveal-toggle"
         @click="reveal"
-      >{{ t('admin.crypto.signer.wizard.revealShow') }}</UButton>
+        >{{ t('admin.crypto.signer.wizard.revealShow') }}</UButton
+      >
       <span class="font-mono text-xs text-muted">{{ masked }}</span>
     </div>
 
     <div v-else class="mt-3 space-y-3" data-testid="shard-reveal-body">
-      <p class="shard-reveal__text rounded-md bg-elevated/60 p-3 font-mono text-sm leading-relaxed break-all text-highlighted">{{ shareText }}</p>
+      <p
+        class="shard-reveal__text rounded-md bg-elevated/60 p-3 font-mono text-sm leading-relaxed break-all text-highlighted"
+        >{{ shareText }}</p
+      >
 
       <div class="flex flex-wrap items-center gap-2">
-        <UButton color="neutral" variant="outline" size="sm" icon="i-lucide-copy" data-testid="shard-copy" @click="copy">{{ t('admin.crypto.signer.wizard.revealCopy') }}</UButton>
-        <UButton color="neutral" variant="outline" size="sm" icon="i-lucide-download" data-testid="shard-download" @click="download">{{ t('admin.crypto.signer.wizard.revealDownload') }}</UButton>
-        <UButton color="neutral" variant="outline" size="sm" icon="i-lucide-printer" data-testid="shard-print" @click="print">{{ t('admin.crypto.signer.wizard.revealPrint') }}</UButton>
-        <UButton color="neutral" variant="ghost" size="sm" icon="i-lucide-eye-off" data-testid="shard-hide" @click="hide">{{ t('admin.crypto.signer.wizard.revealHide') }}</UButton>
+        <UButton
+          color="neutral"
+          variant="outline"
+          size="sm"
+          icon="i-lucide-copy"
+          data-testid="shard-copy"
+          @click="copy"
+          >{{ t('admin.crypto.signer.wizard.revealCopy') }}</UButton
+        >
+        <UButton
+          color="neutral"
+          variant="outline"
+          size="sm"
+          icon="i-lucide-download"
+          data-testid="shard-download"
+          @click="download"
+          >{{ t('admin.crypto.signer.wizard.revealDownload') }}</UButton
+        >
+        <UButton
+          color="neutral"
+          variant="outline"
+          size="sm"
+          icon="i-lucide-printer"
+          data-testid="shard-print"
+          @click="print"
+          >{{ t('admin.crypto.signer.wizard.revealPrint') }}</UButton
+        >
+        <UButton
+          color="neutral"
+          variant="ghost"
+          size="sm"
+          icon="i-lucide-eye-off"
+          data-testid="shard-hide"
+          @click="hide"
+          >{{ t('admin.crypto.signer.wizard.revealHide') }}</UButton
+        >
       </div>
 
       <div class="shard-reveal__qr flex flex-col items-center gap-2 rounded-md bg-white p-3">
-        <img v-if="qrDataUrl" :src="qrDataUrl" :alt="t('admin.crypto.signer.wizard.revealQrAlt')" width="208" height="208" class="size-52" />
-        <span class="text-[11px] text-gray-500">{{ t('admin.crypto.signer.wizard.revealQrAlt') }}</span>
+        <img
+          v-if="qrDataUrl"
+          :src="qrDataUrl"
+          :alt="t('admin.crypto.signer.wizard.revealQrAlt')"
+          width="208"
+          height="208"
+          class="size-52"
+        />
+        <span class="text-[11px] text-gray-500">{{
+          t('admin.crypto.signer.wizard.revealQrAlt')
+        }}</span>
       </div>
 
-      <p v-if="statusKey" role="status" class="text-xs" :class="statusError ? 'text-error' : 'text-success'">{{ t(statusKey) }}</p>
+      <p
+        v-if="statusKey"
+        role="status"
+        class="text-xs"
+        :class="statusError ? 'text-error' : 'text-success'"
+        >{{ t(statusKey) }}</p
+      >
     </div>
   </section>
 </template>
@@ -49,7 +107,12 @@ import UButton from '@nuxt/ui/components/Button.vue'
 import { computed, onBeforeUnmount, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { copySensitiveText } from '@/utils/signer/clipboard'
-import { buildShareSheetHtml, downloadTextFile, openSharePrintWindow, shareFileName } from '@/utils/signer/download'
+import {
+  buildShareSheetHtml,
+  downloadTextFile,
+  openSharePrintWindow,
+  shareFileName,
+} from '@/utils/signer/download'
 import { shareQrDataUrl } from '@/utils/signer/qr'
 
 const props = defineProps<{
@@ -121,10 +184,10 @@ function print(): void {
         t('admin.crypto.signer.wizard.printStep1'),
         t('admin.crypto.signer.wizard.printStep2'),
         t('admin.crypto.signer.wizard.printStep3'),
-        t('admin.crypto.signer.wizard.printStep4')
+        t('admin.crypto.signer.wizard.printStep4'),
       ],
-      footer: t('admin.crypto.signer.wizard.printFooter')
-    }
+      footer: t('admin.crypto.signer.wizard.printFooter'),
+    },
   })
   const ok = openSharePrintWindow(html)
   statusError.value = !ok

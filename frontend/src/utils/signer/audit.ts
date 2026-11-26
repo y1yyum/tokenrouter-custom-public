@@ -62,6 +62,6 @@ export function buildSweepAuditInfo(input: {
     amountUsd,
     txHashes,
     status,
-    dryRun: summary?.dry_run === true
+    dryRun: summary?.dry_run === true,
   }
 }

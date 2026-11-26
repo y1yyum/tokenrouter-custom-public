@@ -40,16 +40,22 @@ const ETA_MAX_MINUTES = 30
 // Seconds until credit from backend evidence. Non-positive, non-numeric and
 // absent values mean "no estimate", never "0 seconds".
 export function parseEtaSeconds(value: unknown): number | null {
-  const n = typeof value === 'number'
-    ? value
-    : typeof value === 'string' && value.trim() !== '' ? Number(value) : Number.NaN
+  const n =
+    typeof value === 'number'
+      ? value
+      : typeof value === 'string' && value.trim() !== ''
+        ? Number(value)
+        : Number.NaN
   if (!Number.isFinite(n) || n <= 0) return null
   return n
 }
 
 // Friendly duration only ("35 秒", "3 分钟", "30+ 分钟"); the surrounding copy
 // adds "约" / "预计". Null means no estimate should be shown at all.
-export function formatEtaDuration(seconds: number | null | undefined, t: DepositTranslate): string | null {
+export function formatEtaDuration(
+  seconds: number | null | undefined,
+  t: DepositTranslate,
+): string | null {
   const value = parseEtaSeconds(seconds)
   if (value === null) return null
   if (value < ETA_SECONDS_BELOW_MINUTES) return t('deposit.eta.seconds', { n: Math.round(value) })
@@ -70,7 +76,7 @@ export interface PrunedNetworkStatuses {
 // age would be stale evidence dressed up as fresh.
 export function pruneNetworkStatuses(
   rows: readonly DepositNetworkStatus[],
-  now: number
+  now: number,
 ): PrunedNetworkStatuses {
   let nextExpiry: number | null = null
   const kept: DepositNetworkStatus[] = []
@@ -93,7 +99,7 @@ export function pruneNetworkStatuses(
 // "checking", not "available" and not "delayed".
 export function networkStateOf(
   rows: ReadonlyMap<string, DepositNetworkStatus>,
-  chain: string
+  chain: string,
 ): DepositNetworkState {
   return rows.get(chain)?.status ?? 'unknown'
 }
@@ -105,14 +111,24 @@ export function networkBadge(view: DepositNetworkView, t: DepositTranslate): Dep
   const eta = formatEtaDuration(view.etaSeconds, t)
   switch (state) {
     case 'available':
-      if (instantCredit) return { color: 'success', text: t('deposit.networkStatusDetail.availableInstant') }
-      if (eta) return { color: 'success', text: t('deposit.networkStatusDetail.availableEta', { time: eta }) }
+      if (instantCredit)
+        return { color: 'success', text: t('deposit.networkStatusDetail.availableInstant') }
+      if (eta)
+        return {
+          color: 'success',
+          text: t('deposit.networkStatusDetail.availableEta', { time: eta }),
+        }
       return { color: 'success', text: t('deposit.networkStatus.available') }
     case 'slow':
-      if (eta) return { color: 'neutral', text: t('deposit.networkStatusDetail.slowEta', { time: eta }) }
+      if (eta)
+        return { color: 'neutral', text: t('deposit.networkStatusDetail.slowEta', { time: eta }) }
       return { color: 'neutral', text: t('deposit.networkStatus.slow') }
     case 'delayed':
-      if (eta) return { color: 'warning', text: t('deposit.networkStatusDetail.delayedEta', { time: eta }) }
+      if (eta)
+        return {
+          color: 'warning',
+          text: t('deposit.networkStatusDetail.delayedEta', { time: eta }),
+        }
       return { color: 'warning', text: t('deposit.networkStatus.delayed') }
     case 'paused':
       return { color: 'warning', text: t('deposit.networkStatus.paused') }

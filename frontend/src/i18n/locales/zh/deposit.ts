@@ -30,12 +30,14 @@ export default {
     },
     // 即时入账的链：先入账、失败回滚。必须让用户知道余额可能被撤回。
     instantCreditNotice: '检测到转账后立即入账；若交易最终失败会自动回滚，请以完成确认为准。',
-    instantCreditRule: '即时入账：扫链识别到转账后立即计入余额；若交易最终失败、被重组或回滚，该笔入账会自动撤销。',
+    instantCreditRule:
+      '即时入账：扫链识别到转账后立即计入余额；若交易最终失败、被重组或回滚，该笔入账会自动撤销。',
     networkStatusHint: {
       slow: '{network} 网络确认较慢，到账时间会比平时稍长。已转账可在下方查看充值记录。',
       delayed: '{network} 的充值扫描暂时落后，到账会延迟。已转账可在下方查看充值记录。',
       paused: '{network} 暂停接收新转账。你可以切换其他网络，或在下方查看历史充值记录。',
-      stalled: '{network} 的充值扫描暂时异常。已转账可在下方查看充值记录，请稍后再试或切换其他网络。',
+      stalled:
+        '{network} 的充值扫描暂时异常。已转账可在下方查看充值记录，请稍后再试或切换其他网络。',
     },
     refreshNetworkStatus: '刷新网络状态',
     chooseAsset: '选择充值币种',
@@ -63,7 +65,8 @@ export default {
     copyFailed: '复制失败，请长按或选中上方地址复制。',
     qrFailed: '二维码暂不可用，请复制地址。',
     networkNotice: '请通过 {network} 网络转入 {tokens}，并核对钱包中的网络与代币。',
-    nativeNotice: '请通过 {network} 网络转入 {asset}（该网络的原生主网币），并核对钱包中的网络与币种。',
+    nativeNotice:
+      '请通过 {network} 网络转入 {asset}（该网络的原生主网币），并核对钱包中的网络与币种。',
     creditDetails: '到账说明',
     creditDetailsHint: '转账前核对金额与入账规则',
     rateLabel: '入账汇率',
@@ -107,7 +110,8 @@ export default {
     copy: '复制',
     copied: '已复制',
     exclusiveNotice: '此地址仅用于你的账户，请保留完整地址并核对后转账。',
-    rateNotice: '入账汇率：稳定币按 1 USDT = {rate} 余额单位；ETH、BNB 等原生币按到账时刻市价结算。',
+    rateNotice:
+      '入账汇率：稳定币按 1 USDT = {rate} 余额单位；ETH、BNB 等原生币按到账时刻市价结算。',
     minNotice: '最小入账金额：稳定币为 {min} USDT；原生币按等值美元（{min} USD）计算。',
     history: '我的充值记录',
     // 记录行标题：一行只讲「哪类事 + 哪个网络」，金额在右侧单独成列。
@@ -166,6 +170,6 @@ export default {
     statusRevoked: '已回滚',
     statusIgnored: '未入账',
     statusReverted: '交易异常',
-    statusOther: '状态：{code}'
-  }
+    statusOther: '状态：{code}',
+  },
 }

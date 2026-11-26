@@ -239,38 +239,43 @@ export function useProviderList(options: ProviderListOptions) {
   // The shared loader still owns ordinary request cancellation and row publication.
   // Check the signal and request identity so even an abort-ignoring transport
   // cannot publish an obsolete page or its former projection.
-  const { items: providers, loading, params, pagination, load: baseLoad } =
-    useTableLoader<Provider, ProviderListParams>({
-      fetchFn: async (page, size, requestParams, fetchOptions) => {
-        const request = activeListRequest
-        const filters = firstListRequest ? { ...requestParams, lite: '1' } : { ...requestParams }
-        firstListRequest = false
-        try {
-          const result = await adminAPI.providers.list(page, size, filters, fetchOptions)
-          if (!request || request !== activeListRequest || fetchOptions?.signal?.aborted) {
-            throw new DOMException('Superseded provider list query', 'AbortError')
-          }
-          request.receivedPage = true
-          return result
-        } catch (error) {
-          if (request !== activeListRequest || fetchOptions?.signal?.aborted) {
-            throw new DOMException('Superseded provider list query', 'AbortError')
-          }
-          throw error
+  const {
+    items: providers,
+    loading,
+    params,
+    pagination,
+    load: baseLoad,
+  } = useTableLoader<Provider, ProviderListParams>({
+    fetchFn: async (page, size, requestParams, fetchOptions) => {
+      const request = activeListRequest
+      const filters = firstListRequest ? { ...requestParams, lite: '1' } : { ...requestParams }
+      firstListRequest = false
+      try {
+        const result = await adminAPI.providers.list(page, size, filters, fetchOptions)
+        if (!request || request !== activeListRequest || fetchOptions?.signal?.aborted) {
+          throw new DOMException('Superseded provider list query', 'AbortError')
         }
-      },
-      initialParams: {
-        platform: '',
-        type: '',
-        status: '',
-        privacy_mode: '',
-        group: '',
-        search: '',
-        include_scheduler_score: options.includeSchedulerScore() ? '1' : '0',
-        sort_by: sortState.sort_by,
-        sort_order: sortState.sort_order,
-      },
-    })
+        request.receivedPage = true
+        return result
+      } catch (error) {
+        if (request !== activeListRequest || fetchOptions?.signal?.aborted) {
+          throw new DOMException('Superseded provider list query', 'AbortError')
+        }
+        throw error
+      }
+    },
+    initialParams: {
+      platform: '',
+      type: '',
+      status: '',
+      privacy_mode: '',
+      group: '',
+      search: '',
+      include_scheduler_score: options.includeSchedulerScore() ? '1' : '0',
+      sort_by: sortState.sort_by,
+      sort_order: sortState.sort_order,
+    },
+  })
 
   // cancelFilterReload removes a pending search when an immediate action consumes its filters.
   const cancelFilterReload = () => {
@@ -298,7 +303,10 @@ export function useProviderList(options: ProviderListOptions) {
 
   // runListRequest releases ownership once. A successful page refreshes stats as usual.
   // A failed page refreshes the retained rows only for a pending column reveal.
-  const runListRequest = async (request: ProviderListRequest, fetchPage: () => Promise<boolean>) => {
+  const runListRequest = async (
+    request: ProviderListRequest,
+    fetchPage: () => Promise<boolean>,
+  ) => {
     let accepted = false
     try {
       accepted = await fetchPage()
@@ -347,7 +355,9 @@ export function useProviderList(options: ProviderListOptions) {
     filterTimer = setTimeout(() => {
       filterTimer = null
       pagination.page = 1
-      void loadRequestedPage(request).catch((error) => console.error('Failed to reload providers:', error))
+      void loadRequestedPage(request).catch((error) =>
+        console.error('Failed to reload providers:', error),
+      )
     }, SEARCH_DEBOUNCE_MS)
   }
 

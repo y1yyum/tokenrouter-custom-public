@@ -37,10 +37,11 @@ export async function sealWalletVaultV3(
   crypto: SignerCrypto,
   dataKey: Uint8Array,
   contents: WalletVaultContents | string,
-  nonce?: Uint8Array
+  nonce?: Uint8Array,
 ): Promise<string> {
   assertDataKey(dataKey)
-  const plaintext = typeof contents === 'string' ? utf8Bytes(contents) : utf8Bytes(JSON.stringify(contents))
+  const plaintext =
+    typeof contents === 'string' ? utf8Bytes(contents) : utf8Bytes(JSON.stringify(contents))
   const iv = nonce ? nonce.slice() : crypto.randomBytes(VAULT_NONCE_BYTES)
   if (iv.length !== VAULT_NONCE_BYTES) throw new Error('vault v3 nonce must be 12 bytes')
   const sealed = await crypto.aesGcmSeal(dataKey, iv, plaintext, VAULT_AAD_BYTES)
@@ -54,12 +55,13 @@ export async function sealWalletVaultV3(
 export async function openWalletVaultV3(
   crypto: SignerCrypto,
   dataKey: Uint8Array,
-  raw: string
+  raw: string,
 ): Promise<WalletVaultContents> {
   assertDataKey(dataKey)
   if (!isWalletVaultV3(raw)) throw new Error('not a sub2api-wallet:v3 ciphertext')
   const payload = base64ToBytes(raw.slice(VAULT_V3_PREFIX.length))
-  if (payload.length <= VAULT_NONCE_BYTES + VAULT_TAG_BYTES) throw new Error('vault v3 ciphertext is truncated')
+  if (payload.length <= VAULT_NONCE_BYTES + VAULT_TAG_BYTES)
+    throw new Error('vault v3 ciphertext is truncated')
   const nonce = payload.slice(0, VAULT_NONCE_BYTES)
   const sealed = payload.slice(VAULT_NONCE_BYTES)
   const plaintext = await crypto.aesGcmOpen(dataKey, nonce, sealed, VAULT_AAD_BYTES)
@@ -92,7 +94,10 @@ export function vaultNonceFromCiphertext(raw: string): Uint8Array | null {
 export function vaultCiphertextEquals(a: string, b: string): boolean {
   if (!isWalletVaultV3(a) || !isWalletVaultV3(b)) return false
   try {
-    return equalBytes(base64ToBytes(a.slice(VAULT_V3_PREFIX.length)), base64ToBytes(b.slice(VAULT_V3_PREFIX.length)))
+    return equalBytes(
+      base64ToBytes(a.slice(VAULT_V3_PREFIX.length)),
+      base64ToBytes(b.slice(VAULT_V3_PREFIX.length)),
+    )
   } catch {
     return false
   }

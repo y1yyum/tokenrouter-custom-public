@@ -1,7 +1,13 @@
 <template>
-  <BaseDialog :panel-data="{ 'data-crypto-ui': '' }" trap-focus
+  <BaseDialog
+    :panel-data="{ 'data-crypto-ui': '' }"
+    trap-focus
     :show="show"
-    :title="mode === 'resplit' ? t('admin.crypto.signer.wizard.titleResplit') : t('admin.crypto.signer.wizard.titleSetup')"
+    :title="
+      mode === 'resplit'
+        ? t('admin.crypto.signer.wizard.titleResplit')
+        : t('admin.crypto.signer.wizard.titleSetup')
+    "
     width="wide"
     :close-on-escape="!busy"
     :show-close-button="!busy"
@@ -9,8 +15,12 @@
   >
     <div class="signer-wizard space-y-4 text-sm" data-testid="signer-wizard">
       <div class="flex flex-wrap items-center justify-between gap-2">
-        <UBadge color="neutral" variant="subtle" data-testid="signer-wizard-step">{{ stepLabel }}</UBadge>
-        <span class="text-xs text-muted">{{ t('admin.crypto.signer.backendLabel') }}: {{ backendLabel }}</span>
+        <UBadge color="neutral" variant="subtle" data-testid="signer-wizard-step">{{
+          stepLabel
+        }}</UBadge>
+        <span class="text-xs text-muted"
+          >{{ t('admin.crypto.signer.backendLabel') }}: {{ backendLabel }}</span
+        >
       </div>
 
       <!-- Blocking: environment cannot do the crypto at all. -->
@@ -24,7 +34,12 @@
         data-testid="signer-wizard-unavailable"
       />
 
-      <p v-else-if="generating" role="status" class="flex items-center gap-2 text-muted" data-testid="signer-wizard-generating">
+      <p
+        v-else-if="generating"
+        role="status"
+        class="flex items-center gap-2 text-muted"
+        data-testid="signer-wizard-generating"
+      >
         <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
         {{ t('admin.crypto.signer.wizard.generating') }}
       </p>
@@ -33,8 +48,12 @@
         <!-- Step: re-split first needs the old data key from two operator shares. -->
         <section v-if="step === 'recover'" class="space-y-4" data-testid="signer-wizard-recover">
           <div class="space-y-1">
-            <h3 class="font-semibold text-highlighted">{{ t('admin.crypto.signer.wizard.recoverTitle') }}</h3>
-            <p class="text-xs leading-relaxed text-muted">{{ t('admin.crypto.signer.wizard.recoverHint') }}</p>
+            <h3 class="font-semibold text-highlighted">{{
+              t('admin.crypto.signer.wizard.recoverTitle')
+            }}</h3>
+            <p class="text-xs leading-relaxed text-muted">{{
+              t('admin.crypto.signer.wizard.recoverHint')
+            }}</p>
             <p class="text-xs text-error">{{ t('admin.crypto.signer.wizard.resplitNotice') }}</p>
           </div>
           <ShareInputPanel
@@ -51,9 +70,20 @@
             input-id="signer-wizard-old-c"
             :disabled="busy"
           />
-          <UAlert v-if="recoverError" role="alert" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="recoverError" />
+          <UAlert
+            v-if="recoverError"
+            role="alert"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-circle-alert"
+            :title="recoverError"
+          />
           <div class="flex justify-end">
-            <UButton :disabled="busy || !oldShareB.trim() || !oldShareC.trim()" data-testid="signer-wizard-recover-action" @click="recoverOldKey">
+            <UButton
+              :disabled="busy || !oldShareB.trim() || !oldShareC.trim()"
+              data-testid="signer-wizard-recover-action"
+              @click="recoverOldKey"
+            >
               {{ busy ? t('common.loading') : t('admin.crypto.signer.wizard.recoverAction') }}
             </UButton>
           </div>
@@ -62,8 +92,12 @@
         <!-- Step: fresh body TOTP (never the 5-minute grant). -->
         <section v-else-if="step === 'auth'" class="space-y-4" data-testid="signer-wizard-auth">
           <div class="space-y-1">
-            <h3 class="font-semibold text-highlighted">{{ t('admin.crypto.signer.wizard.authTitle') }}</h3>
-            <p class="text-xs leading-relaxed text-muted">{{ t('admin.crypto.signer.wizard.authHint') }}</p>
+            <h3 class="font-semibold text-highlighted">{{
+              t('admin.crypto.signer.wizard.authTitle')
+            }}</h3>
+            <p class="text-xs leading-relaxed text-muted">{{
+              t('admin.crypto.signer.wizard.authHint')
+            }}</p>
           </div>
           <TotpCodeInput
             id="signer-wizard-totp"
@@ -74,10 +108,28 @@
             :autofocus="false"
             @complete="onTotpComplete"
           />
-          <UAlert v-if="authError" role="alert" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="authError" />
-          <UAlert v-else-if="submitError" role="alert" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="submitError" />
+          <UAlert
+            v-if="authError"
+            role="alert"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-circle-alert"
+            :title="authError"
+          />
+          <UAlert
+            v-else-if="submitError"
+            role="alert"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-circle-alert"
+            :title="submitError"
+          />
           <div class="flex justify-end">
-            <UButton :disabled="busy || totpCode.length !== 6" data-testid="signer-wizard-auth-next" @click="openRisk">
+            <UButton
+              :disabled="busy || totpCode.length !== 6"
+              data-testid="signer-wizard-auth-next"
+              @click="openRisk"
+            >
               {{ t('admin.crypto.signer.wizard.authAction') }}
             </UButton>
           </div>
@@ -85,7 +137,13 @@
 
         <!-- Step: the one-time shares. Both are shown here and never again. -->
         <section v-else-if="step === 'reveal'" class="space-y-4" data-testid="signer-wizard-reveal">
-          <UAlert color="error" variant="subtle" icon="i-lucide-triangle-alert" :title="t('admin.crypto.signer.wizard.revealTitle')" :description="t('admin.crypto.signer.wizard.revealWarning')" />
+          <UAlert
+            color="error"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            :title="t('admin.crypto.signer.wizard.revealTitle')"
+            :description="t('admin.crypto.signer.wizard.revealWarning')"
+          />
           <ShardRevealCard
             v-if="shareB"
             :share-text="shareB"
@@ -102,17 +160,36 @@
             :description="t('admin.crypto.signer.wizard.revealWarning')"
             :created-at="generatedAt"
           />
-          <UCheckbox v-model="acknowledged" :disabled="busy" :label="t('admin.crypto.signer.wizard.revealAck')" data-testid="signer-wizard-ack" />
+          <UCheckbox
+            v-model="acknowledged"
+            :disabled="busy"
+            :label="t('admin.crypto.signer.wizard.revealAck')"
+            data-testid="signer-wizard-ack"
+          />
           <div class="flex justify-end">
-            <UButton :disabled="busy || !acknowledged" data-testid="signer-wizard-reveal-next" @click="goConfirm">
+            <UButton
+              :disabled="busy || !acknowledged"
+              data-testid="signer-wizard-reveal-next"
+              @click="goConfirm"
+            >
               {{ t('admin.crypto.signer.wizard.revealNext') }}
             </UButton>
           </div>
         </section>
 
         <!-- Step: type one share back; submission only happens after it matches. -->
-        <section v-else-if="step === 'confirm'" class="space-y-4" data-testid="signer-wizard-confirm">
-          <UAlert color="warning" variant="subtle" icon="i-lucide-clipboard-check" :title="t('admin.crypto.signer.wizard.confirmTitle')" :description="t('admin.crypto.signer.wizard.confirmHint')" />
+        <section
+          v-else-if="step === 'confirm'"
+          class="space-y-4"
+          data-testid="signer-wizard-confirm"
+        >
+          <UAlert
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-clipboard-check"
+            :title="t('admin.crypto.signer.wizard.confirmTitle')"
+            :description="t('admin.crypto.signer.wizard.confirmHint')"
+          />
           <ShareInputPanel
             v-model="backfillText"
             :crypto="crypto"
@@ -121,7 +198,9 @@
             :disabled="busy"
           />
           <div class="space-y-2">
-            <label for="signer-wizard-submit-totp" class="block font-medium text-default">{{ t('admin.crypto.signer.wizard.submitTotpLabel') }}</label>
+            <label for="signer-wizard-submit-totp" class="block font-medium text-default">{{
+              t('admin.crypto.signer.wizard.submitTotpLabel')
+            }}</label>
             <TotpCodeInput
               id="signer-wizard-submit-totp"
               v-model="submitTotpCode"
@@ -131,28 +210,55 @@
             />
             <p class="text-xs text-muted">{{ t('admin.crypto.signer.wizard.submitTotpHint') }}</p>
           </div>
-          <UAlert v-if="submitError" role="alert" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="submitError" />
+          <UAlert
+            v-if="submitError"
+            role="alert"
+            color="error"
+            variant="subtle"
+            icon="i-lucide-circle-alert"
+            :title="submitError"
+          />
           <div class="flex justify-end">
-            <UButton :disabled="busy || !backfillText.trim() || submitTotpCode.length !== 6" data-testid="signer-wizard-submit" @click="submit">
-              {{ busy ? t('admin.crypto.signer.wizard.submitting') : t('admin.crypto.signer.wizard.confirmAction') }}
+            <UButton
+              :disabled="busy || !backfillText.trim() || submitTotpCode.length !== 6"
+              data-testid="signer-wizard-submit"
+              @click="submit"
+            >
+              {{
+                busy
+                  ? t('admin.crypto.signer.wizard.submitting')
+                  : t('admin.crypto.signer.wizard.confirmAction')
+              }}
             </UButton>
           </div>
         </section>
 
         <!-- Step: done; the shares are already wiped. -->
         <section v-else-if="step === 'done'" class="space-y-4" data-testid="signer-wizard-done">
-          <UAlert color="success" variant="subtle" icon="i-lucide-circle-check" :title="t('admin.crypto.signer.wizard.doneTitle')" :description="t('admin.crypto.signer.wizard.doneHint')" />
+          <UAlert
+            color="success"
+            variant="subtle"
+            icon="i-lucide-circle-check"
+            :title="t('admin.crypto.signer.wizard.doneTitle')"
+            :description="t('admin.crypto.signer.wizard.doneHint')"
+          />
           <dl class="grid gap-2 text-sm sm:grid-cols-[10rem_minmax(0,1fr)]">
             <dt class="text-muted">{{ t('admin.crypto.signer.vaultVersion') }}</dt>
             <dd class="text-default">{{ doneStatus?.vault_version ?? '—' }}</dd>
             <dt class="text-muted">{{ t('admin.crypto.signer.scheme') }}</dt>
-            <dd class="text-default">{{ doneStatus?.scheme ?? 'shamir-gf256' }} · {{ doneStatus?.threshold ?? 2 }}-of-{{ doneStatus?.total ?? 3 }}</dd>
+            <dd class="text-default"
+              >{{ doneStatus?.scheme ?? 'shamir-gf256' }} · {{ doneStatus?.threshold ?? 2 }}-of-{{
+                doneStatus?.total ?? 3
+              }}</dd
+            >
             <dt class="text-muted">{{ t('admin.crypto.signer.createdAt') }}</dt>
             <dd class="text-default">{{ doneStatus?.created_at ?? generatedAt }}</dd>
           </dl>
           <p class="text-xs text-muted">{{ t('admin.crypto.signer.wizard.doneNotice') }}</p>
           <div class="flex justify-end">
-            <UButton data-testid="signer-wizard-done-close" @click="closeNow">{{ t('admin.crypto.signer.wizard.doneClose') }}</UButton>
+            <UButton data-testid="signer-wizard-done-close" @click="closeNow">{{
+              t('admin.crypto.signer.wizard.doneClose')
+            }}</UButton>
           </div>
         </section>
       </template>
@@ -168,11 +274,30 @@
     @close="riskOpen = false"
   />
 
-  <BaseDialog :panel-data="{ 'data-crypto-ui': '' }" trap-focus :show="discardOpen" :title="t('admin.crypto.signer.wizard.closeTitle')" @close="discardOpen = false">
-    <UAlert color="warning" variant="subtle" icon="i-lucide-triangle-alert" :description="t('admin.crypto.signer.wizard.closeWarning')" />
+  <BaseDialog
+    :panel-data="{ 'data-crypto-ui': '' }"
+    trap-focus
+    :show="discardOpen"
+    :title="t('admin.crypto.signer.wizard.closeTitle')"
+    @close="discardOpen = false"
+  >
+    <UAlert
+      color="warning"
+      variant="subtle"
+      icon="i-lucide-triangle-alert"
+      :description="t('admin.crypto.signer.wizard.closeWarning')"
+    />
     <template #footer>
-      <UButton color="neutral" variant="subtle" data-testid="signer-wizard-stay" @click="discardOpen = false">{{ t('admin.crypto.signer.wizard.closeStay') }}</UButton>
-      <UButton color="error" data-testid="signer-wizard-discard" @click="discardAndClose">{{ t('admin.crypto.signer.wizard.closeConfirm') }}</UButton>
+      <UButton
+        color="neutral"
+        variant="subtle"
+        data-testid="signer-wizard-stay"
+        @click="discardOpen = false"
+        >{{ t('admin.crypto.signer.wizard.closeStay') }}</UButton
+      >
+      <UButton color="error" data-testid="signer-wizard-discard" @click="discardAndClose">{{
+        t('admin.crypto.signer.wizard.closeConfirm')
+      }}</UButton>
     </template>
   </BaseDialog>
 </template>
@@ -197,7 +322,7 @@ import {
   recoverDataKeyFromShares,
   shareTextForSlot,
   wipeSignerShardSet,
-  type SignerShardSet
+  type SignerShardSet,
 } from '@/utils/signer/material'
 import { signerErrorI18nKey } from '@/utils/signer/errors'
 import type { SignerCrypto, SignerCryptoUnavailableCode } from '@/utils/signer/cryptoProvider'
@@ -206,25 +331,28 @@ import { resplitSignerShards, setupSignerShards } from '@/api/admin/cryptoSigner
 
 const RISK_PHRASE_FALLBACK = {
   zh: '我已离线保存分片，丢失无法找回',
-  en: 'I have saved my shards and understand they cannot be recovered'
+  en: 'I have saved my shards and understand they cannot be recovered',
 }
 
 type WizardStep = 'recover' | 'auth' | 'reveal' | 'confirm' | 'done'
 
-const props = withDefaults(defineProps<{
-  show: boolean
-  mode?: 'setup' | 'resplit'
-  notice?: SignerRiskNotice | null
-  status?: SignerShardStatus | null
-  crypto?: SignerCrypto | null
-  cryptoUnavailable?: SignerCryptoUnavailableCode | null
-}>(), {
-  mode: 'setup',
-  notice: null,
-  status: null,
-  crypto: null,
-  cryptoUnavailable: null
-})
+const props = withDefaults(
+  defineProps<{
+    show: boolean
+    mode?: 'setup' | 'resplit'
+    notice?: SignerRiskNotice | null
+    status?: SignerShardStatus | null
+    crypto?: SignerCrypto | null
+    cryptoUnavailable?: SignerCryptoUnavailableCode | null
+  }>(),
+  {
+    mode: 'setup',
+    notice: null,
+    status: null,
+    crypto: null,
+    cryptoUnavailable: null,
+  },
+)
 
 const emit = defineEmits<{
   (event: 'close'): void
@@ -237,7 +365,11 @@ const { t, locale } = useI18n()
 function currentLanguage(): 'zh' | 'en' {
   const raw = locale as unknown
   const value = typeof raw === 'string' ? raw : (raw as { value?: unknown } | null)?.value
-  return String(value ?? '').toLowerCase().startsWith('en') ? 'en' : 'zh'
+  return String(value ?? '')
+    .toLowerCase()
+    .startsWith('en')
+    ? 'en'
+    : 'zh'
 }
 const step = ref<WizardStep>('auth')
 const totpCode = ref('')
@@ -273,9 +405,11 @@ const cryptoUnavailableKey = computed(() => {
       : 'admin.crypto.signer.noAes'
 })
 
-const backendLabel = computed(() => (props.crypto?.backend === 'noble'
-  ? t('admin.crypto.signer.noble')
-  : t('admin.crypto.signer.webcrypto')))
+const backendLabel = computed(() =>
+  props.crypto?.backend === 'noble'
+    ? t('admin.crypto.signer.noble')
+    : t('admin.crypto.signer.webcrypto'),
+)
 
 const phraseFromNotice = computed(() => props.notice?.phrases?.[language.value] ?? '')
 const riskPhrase = computed(() => phraseFromNotice.value || RISK_PHRASE_FALLBACK[language.value])
@@ -287,15 +421,17 @@ const riskPoints = computed(() => {
 const shareB = computed(() => (shardSet.value ? shareTextForSlot(shardSet.value, 'B') : ''))
 const shareC = computed(() => (shardSet.value ? shareTextForSlot(shardSet.value, 'C') : ''))
 
-const stepOrder = computed<WizardStep[]>(() => (props.mode === 'resplit'
-  ? ['recover', 'auth', 'reveal', 'confirm', 'done']
-  : ['auth', 'reveal', 'confirm', 'done']))
+const stepOrder = computed<WizardStep[]>(() =>
+  props.mode === 'resplit'
+    ? ['recover', 'auth', 'reveal', 'confirm', 'done']
+    : ['auth', 'reveal', 'confirm', 'done'],
+)
 
 const stepLabel = computed(() => {
   const order = stepOrder.value
   return t('admin.crypto.signer.wizard.progress', {
     current: Math.max(1, order.indexOf(step.value) + 1),
-    total: order.length
+    total: order.length,
   })
 })
 
@@ -324,9 +460,13 @@ function resetState(): void {
   recoveredKey.value = null
 }
 
-watch(() => props.show, show => {
-  if (show) resetState()
-}, { immediate: true })
+watch(
+  () => props.show,
+  (show) => {
+    if (show) resetState()
+  },
+  { immediate: true },
+)
 
 function onTotpComplete(): void {
   totpInvalid.value = false
@@ -349,7 +489,10 @@ async function onRiskConfirmed(phrase: string): Promise<void> {
   if (!props.crypto) return
   generating.value = true
   try {
-    shardSet.value = await generateSignerShardSet(props.crypto, recoveredKey.value ? { dataKey: recoveredKey.value } : {})
+    shardSet.value = await generateSignerShardSet(
+      props.crypto,
+      recoveredKey.value ? { dataKey: recoveredKey.value } : {},
+    )
     generatedAt.value = new Date().toLocaleString()
     step.value = 'reveal'
   } catch (error) {
@@ -384,11 +527,12 @@ async function submit(): Promise<void> {
       confirmShare: typed,
       commitment: shardSet.value.commitment,
       totpCode: submitTotpCode.value,
-      riskPhrase: confirmedPhrase.value || riskPhrase.value
+      riskPhrase: confirmedPhrase.value || riskPhrase.value,
     })
-    const status = props.mode === 'resplit'
-      ? await resplitSignerShards(payload)
-      : await setupSignerShards(payload)
+    const status =
+      props.mode === 'resplit'
+        ? await resplitSignerShards(payload)
+        : await setupSignerShards(payload)
     doneStatus.value = status
     step.value = 'done'
     succeeded = true
@@ -424,12 +568,17 @@ async function recoverOldKey(): Promise<void> {
   }
   busy.value = true
   try {
-    recoveredKey.value = await recoverDataKeyFromShares(props.crypto, [oldShareB.value, oldShareC.value], commitment)
+    recoveredKey.value = await recoverDataKeyFromShares(
+      props.crypto,
+      [oldShareB.value, oldShareC.value],
+      commitment,
+    )
     step.value = 'auth'
     oldShareB.value = ''
     oldShareC.value = ''
   } catch (error) {
-    recoverError.value = signerErrorI18nKey(error) ?? t('admin.crypto.signer.wizard.recoverMismatch')
+    recoverError.value =
+      signerErrorI18nKey(error) ?? t('admin.crypto.signer.wizard.recoverMismatch')
     recoveredKey.value = null
   } finally {
     busy.value = false
@@ -471,5 +620,14 @@ onBeforeUnmount(() => {
   if (recoveredKey.value) recoveredKey.value.fill(0)
 })
 
-defineExpose({ step, submit, recoverOldKey, requestClose, totpCode, submitTotpCode, backfillText, acknowledged })
+defineExpose({
+  step,
+  submit,
+  recoverOldKey,
+  requestClose,
+  totpCode,
+  submitTotpCode,
+  backfillText,
+  acknowledged,
+})
 </script>

@@ -389,7 +389,9 @@ describe('admin ProvidersView — 提供商行展示', () => {
 
     expect(wrapper.text()).toContain('parent@example.com')
     await wrapper.get('button[aria-label="parent@example.com"]').trigger('click')
-    expect(document.querySelector('[role="dialog"][aria-label="parent@example.com"]')?.textContent).toContain('chatgpt-abc123')
+    expect(
+      document.querySelector('[role="dialog"][aria-label="parent@example.com"]')?.textContent,
+    ).toContain('chatgpt-abc123')
 
     const badge = wrapper.findComponent(PlatformTypeBadge)
     expect(badge.exists()).toBe(true)

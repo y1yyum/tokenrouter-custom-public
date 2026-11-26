@@ -9,7 +9,13 @@ import type { DepositRecord } from '@/api/crypto'
  * pure makes every combination testable without mounting the page.
  */
 
-export const DEPOSIT_STATUS_FILTERS = ['all', 'credited', 'provisional', 'revoked', 'ignored'] as const
+export const DEPOSIT_STATUS_FILTERS = [
+  'all',
+  'credited',
+  'provisional',
+  'revoked',
+  'ignored',
+] as const
 export type DepositStatusFilter = (typeof DEPOSIT_STATUS_FILTERS)[number]
 
 export const DEPOSIT_TIME_RANGES = ['all', '7d', '30d', '90d'] as const
@@ -20,15 +26,15 @@ const DAY_MS = 24 * 60 * 60 * 1000
 const RANGE_MS: Record<Exclude<DepositTimeRange, 'all'>, number> = {
   '7d': 7 * DAY_MS,
   '30d': 30 * DAY_MS,
-  '90d': 90 * DAY_MS
+  '90d': 90 * DAY_MS,
 }
 
 export function isDepositStatusFilter(value: unknown): value is DepositStatusFilter {
-  return DEPOSIT_STATUS_FILTERS.some(option => option === value)
+  return DEPOSIT_STATUS_FILTERS.some((option) => option === value)
 }
 
 export function isDepositTimeRange(value: unknown): value is DepositTimeRange {
-  return DEPOSIT_TIME_RANGES.some(option => option === value)
+  return DEPOSIT_TIME_RANGES.some((option) => option === value)
 }
 
 /**
@@ -36,7 +42,10 @@ export function isDepositTimeRange(value: unknown): value is DepositTimeRange {
  * visible under "all"; the list has no dedicated "confirming" bucket on purpose
  * (the live progress line above the table already covers an in-flight transfer).
  */
-export function matchesDepositStatus(row: Pick<DepositRecord, 'status'>, status: DepositStatusFilter): boolean {
+export function matchesDepositStatus(
+  row: Pick<DepositRecord, 'status'>,
+  status: DepositStatusFilter,
+): boolean {
   return status === 'all' || row.status === status
 }
 
@@ -48,7 +57,7 @@ export function matchesDepositStatus(row: Pick<DepositRecord, 'status'>, status:
 export function matchesDepositTimeRange(
   row: Pick<DepositRecord, 'created_at'>,
   range: DepositTimeRange,
-  now: number = Date.now()
+  now: number = Date.now(),
 ): boolean {
   if (range === 'all') return true
   const created = Date.parse(row.created_at)
@@ -60,12 +69,17 @@ export function filterDepositHistory(
   rows: readonly DepositRecord[],
   status: DepositStatusFilter,
   range: DepositTimeRange,
-  now: number = Date.now()
+  now: number = Date.now(),
 ): DepositRecord[] {
-  return rows.filter(row => matchesDepositStatus(row, status) && matchesDepositTimeRange(row, range, now))
+  return rows.filter(
+    (row) => matchesDepositStatus(row, status) && matchesDepositTimeRange(row, range, now),
+  )
 }
 
 /** True when the user has narrowed the list, so the page can show the count. */
-export function isDepositFilterActive(status: DepositStatusFilter, range: DepositTimeRange): boolean {
+export function isDepositFilterActive(
+  status: DepositStatusFilter,
+  range: DepositTimeRange,
+): boolean {
   return status !== 'all' || range !== 'all'
 }

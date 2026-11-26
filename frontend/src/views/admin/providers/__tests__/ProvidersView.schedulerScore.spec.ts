@@ -272,7 +272,9 @@ describe('admin ProvidersView scheduler score column', () => {
     expect(listProviders.mock.calls[0]?.[2]).toEqual(
       expect.objectContaining({ include_scheduler_score: '1' }),
     )
-    expect(JSON.parse(localStorage.getItem('provider-hidden-columns') || '[]')).toEqual(['today_stats'])
+    expect(JSON.parse(localStorage.getItem('provider-hidden-columns') || '[]')).toEqual([
+      'today_stats',
+    ])
   })
 
   // A current preference version leaves scheduler_score visible. The provider

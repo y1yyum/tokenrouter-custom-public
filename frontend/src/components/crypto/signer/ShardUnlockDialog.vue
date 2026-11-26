@@ -1,7 +1,13 @@
 <template>
-  <BaseDialog :panel-data="{ 'data-crypto-ui': '' }" trap-focus
+  <BaseDialog
+    :panel-data="{ 'data-crypto-ui': '' }"
+    trap-focus
     :show="show"
-    :title="mode === 'verify' ? t('admin.crypto.signer.unlock.titleVerify') : t('admin.crypto.signer.unlock.titleSweep')"
+    :title="
+      mode === 'verify'
+        ? t('admin.crypto.signer.unlock.titleVerify')
+        : t('admin.crypto.signer.unlock.titleSweep')
+    "
     :close-on-escape="!running"
     :show-close-button="!running"
     @close="requestClose"
@@ -28,7 +34,9 @@
           @parsed="parsedShare = $event"
         />
         <div class="space-y-2">
-          <label for="shard-unlock-totp" class="block font-medium text-default">{{ t('admin.crypto.signer.unlock.totpLabel') }}</label>
+          <label for="shard-unlock-totp" class="block font-medium text-default">{{
+            t('admin.crypto.signer.unlock.totpLabel')
+          }}</label>
           <TotpCodeInput
             id="shard-unlock-totp"
             v-model="totpCode"
@@ -39,13 +47,36 @@
           />
           <p class="text-xs text-muted">{{ t('admin.crypto.signer.unlock.totpHint') }}</p>
         </div>
-        <UAlert v-if="rateLimited" role="alert" color="error" variant="subtle" icon="i-lucide-timer-off" :title="t('admin.crypto.signer.unlock.rateLimited')" />
-        <UAlert v-else-if="errorMessage" role="alert" color="error" variant="subtle" icon="i-lucide-circle-alert" :title="errorMessage" />
+        <UAlert
+          v-if="rateLimited"
+          role="alert"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-timer-off"
+          :title="t('admin.crypto.signer.unlock.rateLimited')"
+        />
+        <UAlert
+          v-else-if="errorMessage"
+          role="alert"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-circle-alert"
+          :title="errorMessage"
+        />
       </template>
 
-      <p v-else-if="stage === 'running'" role="status" class="flex items-center gap-2 text-muted" data-testid="shard-unlock-running">
+      <p
+        v-else-if="stage === 'running'"
+        role="status"
+        class="flex items-center gap-2 text-muted"
+        data-testid="shard-unlock-running"
+      >
         <UIcon name="i-lucide-loader-circle" class="size-4 animate-spin" />
-        {{ mode === 'verify' ? t('admin.crypto.signer.unlock.verifying') : t('admin.crypto.signer.unlock.unlocking') }}
+        {{
+          mode === 'verify'
+            ? t('admin.crypto.signer.unlock.verifying')
+            : t('admin.crypto.signer.unlock.unlocking')
+        }}
       </p>
 
       <template v-else-if="stage === 'audit'">
@@ -69,17 +100,27 @@
             <dt class="text-muted">{{ t('admin.crypto.signer.unlock.auditAddresses') }}</dt>
             <dd class="text-default">{{ audit?.swept ?? 0 }} / {{ audit?.planned ?? 0 }}</dd>
             <dt class="text-muted">{{ t('admin.crypto.signer.unlock.auditAmount') }}</dt>
-            <dd class="text-default">{{ audit?.amountUsd == null ? '—' : audit.amountUsd.toFixed(2) }}</dd>
+            <dd class="text-default">{{
+              audit?.amountUsd == null ? '—' : audit.amountUsd.toFixed(2)
+            }}</dd>
             <dt class="text-muted">{{ t('admin.crypto.signer.unlock.auditStatus') }}</dt>
-            <dd class="text-default">{{ audit?.status ?? '—' }}<span v-if="(audit?.failed ?? 0) > 0" class="text-error"> · failed {{ audit?.failed }}</span></dd>
+            <dd class="text-default"
+              >{{ audit?.status ?? '—'
+              }}<span v-if="(audit?.failed ?? 0) > 0" class="text-error">
+                · failed {{ audit?.failed }}</span
+              ></dd
+            >
             <dt class="text-muted">{{ t('admin.crypto.signer.unlock.auditTx') }}</dt>
             <dd class="min-w-0 space-y-1">
-              <p v-if="!audit?.txHashes.length" class="text-muted">{{ t('admin.crypto.signer.unlock.auditNoTx') }}</p>
+              <p v-if="!audit?.txHashes.length" class="text-muted">{{
+                t('admin.crypto.signer.unlock.auditNoTx')
+              }}</p>
               <p
                 v-for="hash in audit?.txHashes.slice(0, 12)"
                 :key="hash"
                 class="font-mono text-xs break-all text-default"
-              >{{ hash }}</p>
+                >{{ hash }}</p
+              >
             </dd>
           </dl>
         </template>
@@ -94,13 +135,19 @@
           :disabled="running"
           data-testid="shard-unlock-cancel"
           @click="requestClose"
-        >{{ t('common.cancel') }}</UButton>
+          >{{ t('common.cancel') }}</UButton
+        >
         <UButton
           v-if="stage === 'input'"
           :disabled="running || !parsedShare || totpCode.length !== 6"
           data-testid="shard-unlock-submit"
           @click="submit"
-        >{{ mode === 'verify' ? t('admin.crypto.signer.unlock.submitVerify') : t('admin.crypto.signer.unlock.submitSweep') }}</UButton>
+          >{{
+            mode === 'verify'
+              ? t('admin.crypto.signer.unlock.submitVerify')
+              : t('admin.crypto.signer.unlock.submitSweep')
+          }}</UButton
+        >
         <UButton v-if="stage === 'audit'" data-testid="shard-unlock-audit-close" @click="closeNow">
           {{ t('admin.crypto.signer.unlock.auditClose') }}
         </UButton>
@@ -124,18 +171,21 @@ import { isRateLimitedError, signerErrorI18nKey } from '@/utils/signer/errors'
 import { unlockSignerWithShare, type SignerShardStatus } from '@/api/admin/cryptoSigner'
 import type { SweepAuditInfo } from '@/utils/signer/audit'
 
-const props = withDefaults(defineProps<{
-  show: boolean
-  crypto: SignerCrypto | null
-  mode?: 'sweep' | 'verify'
-  locked?: boolean
-  /** Sweep executor supplied by the page; resolves with the finished audit. */
-  runSweep?: (share: string, totpCode: string) => Promise<SweepAuditInfo>
-}>(), {
-  mode: 'sweep',
-  locked: false,
-  runSweep: undefined
-})
+const props = withDefaults(
+  defineProps<{
+    show: boolean
+    crypto: SignerCrypto | null
+    mode?: 'sweep' | 'verify'
+    locked?: boolean
+    /** Sweep executor supplied by the page; resolves with the finished audit. */
+    runSweep?: (share: string, totpCode: string) => Promise<SweepAuditInfo>
+  }>(),
+  {
+    mode: 'sweep',
+    locked: false,
+    runSweep: undefined,
+  },
+)
 
 const emit = defineEmits<{
   (event: 'close'): void
@@ -157,17 +207,20 @@ const rateLimited = ref(false)
 const running = ref(false)
 const audit = ref<SweepAuditInfo | null>(null)
 
-watch(() => props.show, show => {
-  if (!show) return
-  stage.value = 'input'
-  shareText.value = ''
-  totpCode.value = ''
-  parsedShare.value = null
-  errorMessage.value = ''
-  rateLimited.value = false
-  running.value = false
-  audit.value = null
-})
+watch(
+  () => props.show,
+  (show) => {
+    if (!show) return
+    stage.value = 'input'
+    shareText.value = ''
+    totpCode.value = ''
+    parsedShare.value = null
+    errorMessage.value = ''
+    rateLimited.value = false
+    running.value = false
+    audit.value = null
+  },
+)
 
 async function submit(): Promise<void> {
   if (!parsedShare.value || totpCode.value.length !== 6 || running.value) return
@@ -181,8 +234,14 @@ async function submit(): Promise<void> {
       // locked); this is the one-click "verify and unlock" the panel promises.
       const status = await unlockSignerWithShare(shareText.value, totpCode.value)
       audit.value = {
-        addresses: 0, planned: 0, swept: 0, failed: 0, amountUsd: null,
-        txHashes: [], status: 'verified', dryRun: false
+        addresses: 0,
+        planned: 0,
+        swept: 0,
+        failed: 0,
+        amountUsd: null,
+        txHashes: [],
+        status: 'verified',
+        dryRun: false,
       }
       stage.value = 'audit'
       emit('unlocked', status)

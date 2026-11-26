@@ -7,8 +7,10 @@
   >
     <UIcon name="i-lucide-shield-check" class="mt-0.5 size-4 shrink-0" aria-hidden="true" />
     <div class="min-w-0 space-y-1">
-      <p class="font-medium leading-6">{{ t('keyRotationGate.riskAckExpiry', { time: expiresLabel }) }}</p>
-      <p class="text-xs leading-5 opacity-90">{{ t('keyRotationGate.riskAckBanner' ) }}</p>
+      <p class="font-medium leading-6">{{
+        t('keyRotationGate.riskAckExpiry', { time: expiresLabel })
+      }}</p>
+      <p class="text-xs leading-5 opacity-90">{{ t('keyRotationGate.riskAckBanner') }}</p>
       <UButton
         v-if="remediationPath"
         :to="remediationPath"
@@ -45,7 +47,9 @@ const props = defineProps<{
 
 const { t } = useI18n()
 
-const remediationPath = computed(() => props.status?.remediation_path || KEY_ROTATION_REMEDIATION_PATH)
+const remediationPath = computed(
+  () => props.status?.remediation_path || KEY_ROTATION_REMEDIATION_PATH,
+)
 
 const expiresLabel = computed(() => {
   const raw = props.status?.risk_ack_expires_at

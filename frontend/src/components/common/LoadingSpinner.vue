@@ -26,7 +26,7 @@ interface Props {
 
 const props = withDefaults(defineProps<Props>(), {
   size: 'md',
-  color: 'primary'
+  color: 'primary',
 })
 
 const sizeClasses = computed(() => {
@@ -34,7 +34,7 @@ const sizeClasses = computed(() => {
     sm: 'size-4',
     md: 'size-8',
     lg: 'size-12',
-    xl: 'size-16'
+    xl: 'size-16',
   }
   return sizes[props.size]
 })
@@ -45,7 +45,7 @@ const colorClass = computed(() => {
     secondary: 'text-muted',
     // On solid primary buttons; inverted follows the theme like the button label does.
     white: 'text-inverted',
-    gray: 'text-dimmed'
+    gray: 'text-dimmed',
   }
   return colors[props.color]
 })
