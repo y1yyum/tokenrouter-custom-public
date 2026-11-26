@@ -69,8 +69,10 @@ type RequestAttempt struct {
 // RequestRecord summarizes a request independently of monitoring sampling.
 // Keep request bodies and credentials out of its fields.
 type RequestRecord struct {
-	UsageWriteUpdatedAt  time.Time `json:"usage_write_updated_at,omitzero"`   // last persistence evidence time
-	UsageWriteDurationMs *int64    `json:"usage_write_duration_ms,omitempty"` // analytical write operation duration
+	// ResponsesSettlement retains the final conversion observation even when no funds command is eligible.
+	ResponsesSettlement  ResponsesSettlementObservation `json:"responses_settlement,omitzero"`
+	UsageWriteUpdatedAt  time.Time                      `json:"usage_write_updated_at,omitzero"`   // last persistence evidence time
+	UsageWriteDurationMs *int64                         `json:"usage_write_duration_ms,omitempty"` // analytical write operation duration
 
 	UsageWriteState      string     `json:"usage_write_state,omitempty"`      // observed persistence outcome
 	UsageWriteError      string     `json:"usage_write_error,omitempty"`      // bounded persistence diagnostic
@@ -111,6 +113,17 @@ type RequestRecord struct {
 	Aliases        []RequestAlias   `json:"aliases,omitempty"`         // labeled correlated identifier values
 	Attempts       []RequestAttempt `json:"attempts,omitempty"`        // retained upstream attempt diagnostics
 	FailureTimings map[string]int64 `json:"failure_timings,omitempty"` // stage elapsed milliseconds by name
+}
+
+// ResponsesSettlementObservation records the logical request's metering and delivery verdicts.
+type ResponsesSettlementObservation struct {
+	Disposition     string `json:"disposition,omitempty"`      // chargeable, zero, not executed, or pending review
+	Evidence        string `json:"evidence,omitempty"`         // selected metering classification
+	Source          string `json:"source,omitempty"`           // source of the metering evidence
+	Resolution      string `json:"resolution,omitempty"`       // upstream terminal or protocol outcome
+	Delivery        string `json:"delivery,omitempty"`         // final client outcome
+	CompletionCount int    `json:"completion_count,omitempty"` // final result passed to completion
+	ProviderID      int64  `json:"provider_id,omitempty"`      // final observed metering provider
 }
 
 // RequestCapture serializes record updates and their observer notifications.
@@ -379,6 +392,9 @@ func MergeRequestRecord(previous, next RequestRecord) RequestRecord {
 	}
 	if next.Status == 0 {
 		next.Status = previous.Status
+	}
+	if next.ResponsesSettlement == (ResponsesSettlementObservation{}) {
+		next.ResponsesSettlement = previous.ResponsesSettlement
 	}
 	if next.DurationMs == 0 {
 		next.DurationMs = previous.DurationMs

@@ -4,6 +4,7 @@ import (
 	"context"
 
 	gatewayadapter "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/upstream/anthropic"
 )
 
@@ -27,7 +28,7 @@ import (
 // enables one-hour request cache injection for an Anthropic OAuth or Setup
 // Token target. Missing targets or settings readers disable that policy.
 func (r *Runtime) globalOAuthTTLInjection(ctx context.Context, target *gatewayadapter.ExecutionProvider) bool {
-	return target != nil && target.View().IsAnthropicOAuthOrSetupToken() && r.dependencies.Settings != nil && r.dependencies.Settings.IsAnthropicCacheTTL1hInjectionEnabled(ctx)
+	return !requestpolicy.HasClientCache(ctx) && target != nil && target.View().IsAnthropicOAuthOrSetupToken() && r.dependencies.Settings != nil && r.dependencies.Settings.IsAnthropicCacheTTL1hInjectionEnabled(ctx)
 }
 
 // injectTTL reports whether global OAuth injection or the authenticated API
@@ -61,7 +62,7 @@ func (r *Runtime) cacheUsageOverride(ctx context.Context, target *gatewayadapter
 // enables rewriting. Otherwise it returns the supplied slice, including
 // existing client cache annotations and their TTL values.
 func (r *Runtime) rewriteCache(ctx context.Context, body []byte) []byte {
-	if r.dependencies.Settings == nil || !r.dependencies.Settings.IsRewriteMessageCacheControlEnabled(ctx) {
+	if requestpolicy.HasClientCache(ctx) || r.dependencies.Settings == nil || !r.dependencies.Settings.IsRewriteMessageCacheControlEnabled(ctx) {
 		return body
 	}
 	// Remove existing message anchors before selecting replacement

@@ -12,6 +12,7 @@ import (
 
 	egressadapter "github.com/TokenFlux/TokenRouter/internal/egress/provider"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	responseprotocol "github.com/TokenFlux/TokenRouter/internal/protocol/openai"
 	"github.com/TokenFlux/TokenRouter/internal/routing/capability"
 	"github.com/TokenFlux/TokenRouter/internal/upstream/grok"
@@ -32,6 +33,10 @@ import (
 // eligible for protocol-error processing. Header relay and turn-state
 // ownership occur when the upstream reader prepares output, and response-body
 // closure remains with the execution caller rather than these option bindings.
+
+// responsesForegroundJSONKey retains the synchronous client representation
+// selected by native Responses admission before any provider attempt begins.
+const responsesForegroundJSONKey = "responses_foreground_json"
 
 // failedResponseTerminal classifies a failed terminal object for buffered
 // Responses output. Callers supply the selected provider, live request and
@@ -70,10 +75,32 @@ func (p *OpenAIResponseOutput) failedResponseTerminal(ctx context.Context, c *gi
 // reading and output, owns response-body closure, and may receive a terminal
 // failover error before any final response is written.
 func (p *OpenAIResponseOutput) NonStreamOptions(ctx context.Context, c *gin.Context, provider *gatewayprovider.ExecutionProvider) openai.NonStreamOptions {
+	var delivered func([]byte)
+	var compatibilityDelivered func(openai.ResponsesStreamResolution, error)
+	if c != nil && (compatibilityCohortFrom(c, responsesCohortKey) != nil || compatibilityCohortFrom(c, parametersCohortKey) != nil) {
+		delivered = func(body []byte) { recordResponsesCohortDelivery(c, responseJSONOutcome(body)) }
+		compatibilityDelivered = func(resolution openai.ResponsesStreamResolution, err error) {
+			outcome := responsecompat.OutcomeOtherFailure
+			switch {
+			case err != nil:
+				outcome = responsecompat.OutcomeClientGone
+			case resolution == openai.ResponsesStreamCompleted:
+				outcome = responsecompat.OutcomeCompleted
+			case resolution == openai.ResponsesStreamIncomplete:
+				outcome = responsecompat.OutcomeIncomplete
+			case resolution == openai.ResponsesStreamRefused:
+				outcome = responsecompat.OutcomeRefused
+			}
+			recordResponsesCohortDelivery(c, outcome)
+		}
+	}
 	return openai.NonStreamOptions{
-		OAuthProvider:       provider != nil && provider.Record.Type == capability.ProviderTypeOAuth,
-		GrokCompact:         provider != nil && provider.View().IsGrok() && IsOpenAIResponsesCompactPath(c),
-		PreserveContentType: p.Options.Configured && !p.Options.ResponseHeadersEnabled,
+		JSONDelivered:          delivered,
+		CompatibilityDelivered: compatibilityDelivered,
+		JSONOnly:               c != nil && c.GetBool(responsesForegroundJSONKey) && provider != nil && provider.Record.AllowsResponsesRequestRewrite(),
+		OAuthProvider:          provider != nil && provider.Record.Type == capability.ProviderTypeOAuth,
+		GrokCompact:            provider != nil && provider.View().IsGrok() && IsOpenAIResponsesCompactPath(c),
+		PreserveContentType:    p.Options.Configured && !p.Options.ResponseHeadersEnabled,
 		ReadBody: func(reader io.Reader) ([]byte, error) {
 			return ReadUpstreamResponseBody(reader, p.Options.ReadLimit, c, OpenAIResponseTooLarge)
 		},

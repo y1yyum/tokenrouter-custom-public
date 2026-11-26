@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bytes"
 	"context"
 	"mime"
 	"net/http"
@@ -118,6 +119,9 @@ func RewriteAPIKeyAdditionalModels(request *http.Request, apiKey *apikey.APIKey)
 	rewritten, err := modeltrace.RewriteAPIKeyAdditionalModels(body, apiKey.ModelMapping)
 	if err != nil {
 		return err
+	}
+	if !bytes.Equal(body, rewritten) {
+		retainParameterOriginalBody(request, body)
 	}
 	SetRequestBody(request, rewritten)
 	return nil

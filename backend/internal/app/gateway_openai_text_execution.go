@@ -12,9 +12,11 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/gateway"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/admission"
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
+	gatewaypg "github.com/TokenFlux/TokenRouter/internal/gateway/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/promptpolicy"
 	gatewayadapter "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/selection"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/ws"
 	wshttp "github.com/TokenFlux/TokenRouter/internal/gateway/ws/httpapi"
@@ -99,8 +101,14 @@ func provideOpenAIWebSockets(runtime *ws.Runtime, cfg *config.Config, connection
 // provideOpenAIResponses binds Responses execution to the text runtime's
 // request and output instances. text is required, and the assembled lineage and
 // image policy are retained for continuation and response-image decisions.
-func provideOpenAIResponses(text *gatewayhttp.OpenAITextExecutor, choices *selection.Compatible, lineage *gatewayhttp.OpenAIEncryptedLineage, imagePolicy *gatewayadapter.ResponseImagePolicy) *gatewayhttp.OpenAIResponsesExecutor {
-	return &gatewayhttp.OpenAIResponsesExecutor{Requests: text.Requests, Output: text.Output, Text: text, Grok: text.Grok, Lineage: lineage, ImageBridge: imagePolicy}
+// The compatibility service is shared with administrator settings so the same
+// configuration publication controls both native HTTP dispatch paths.
+func provideOpenAIResponses(text *gatewayhttp.OpenAITextExecutor, choices *selection.Compatible, lineage *gatewayhttp.OpenAIEncryptedLineage, imagePolicy *gatewayadapter.ResponseImagePolicy, compatibility *responsecompat.Service, cohorts *gatewaypg.CompatibilityCohorts) *gatewayhttp.OpenAIResponsesExecutor {
+	executor := &gatewayhttp.OpenAIResponsesExecutor{Requests: text.Requests, Output: text.Output, Text: text, Grok: text.Grok, Lineage: lineage, ImageBridge: imagePolicy, Compatibility: compatibility}
+	if cohorts != nil {
+		executor.Cohorts = cohorts
+	}
+	return executor
 }
 
 // provideOpenAIAuxiliary constructs auxiliary execution using the text

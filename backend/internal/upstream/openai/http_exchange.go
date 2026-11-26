@@ -35,10 +35,14 @@ type HTTPExchangeOptions struct {
 	RequestContext func(context.Context) (context.Context, context.CancelFunc)
 	Build          func(context.Context, []byte) (*http.Request, error) // required authenticated request builder
 	ApplyHeaders   func(http.Header)                                    // required final header writer
-	Do             func(*http.Request) (*http.Response, error)          // required HTTP exchange callback
-	Latency        func(time.Duration)                                  // required header-wait latency observer
-	HeaderTimeout  func() error                                         // required header timeout translator
-	TransportError func(error) error                                    // required transport error translator
+	// BeforeSend optionally finalizes a built request after header overrides.
+	// It may wait for local capacity. An error prevents transport handoff and
+	// returns to the caller without upstream error translation.
+	BeforeSend     func(*http.Request) error
+	Do             func(*http.Request) (*http.Response, error) // required HTTP exchange callback
+	Latency        func(time.Duration)                         // required header-wait latency observer
+	HeaderTimeout  func() error                                // required header timeout translator
+	TransportError func(error) error                           // required transport error translator
 }
 
 // openAIFirstOutputHeaderGuard resolves header arrival against the first-output
@@ -71,6 +75,8 @@ type openAIRequestContextReadCloser struct {
 // and StartedAt determines the positive FirstOutputTimeout deadline. The caller
 // closes a returned response body to release guarded context ownership.
 //
+// BeforeSend runs after final headers and before measuring transport latency.
+// A rejection from this hook closes the unsent request and its guarded context.
 // When timer stopping reports that the deadline callback ran, HeaderTimeout
 // wins over the transport result and any returned body is closed. Other
 // transport errors use TransportError after cleanup. Successful header arrival
@@ -93,6 +99,19 @@ func ExchangeHTTP(ctx context.Context, body []byte, options HTTPExchangeOptions)
 		return nil, err
 	}
 	options.ApplyHeaders(request.Header)
+	if options.BeforeSend != nil {
+		if err := options.BeforeSend(request); err != nil {
+			// The transport never acquired ownership on a pre-send rejection.
+			// Close the body and guard here so local cancellation cannot leak them.
+			if request.Body != nil {
+				_ = request.Body.Close()
+			}
+			if guard != nil {
+				guard.close()
+			}
+			return nil, err
+		}
+	}
 	started := time.Now()
 	response, err := options.Do(request)
 	options.Latency(time.Since(started))

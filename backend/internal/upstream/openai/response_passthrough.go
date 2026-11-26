@@ -480,15 +480,26 @@ func ReadPassthroughStreaming(ctx context.Context, resp *http.Response, c *upstr
 // callbacks. A Compact bridge can consume delivery; otherwise OutputContext.Data
 // writes with upstream content type or the JSON default. The result returns
 // usage, response ID, and image observations while shared Served and SearchCount
-// fields remain zero. The ctx parameter is retained by the interface but unused
-// here.
+// fields remain zero for the legacy path. A pilot compatibility attempt uses
+// the strict incremental reader and checks ctx before delivering JSON.
 func ReadPassthroughNonStreaming(ctx context.Context, resp *http.Response, sink upstream.OutputSink, options PassthroughOptions, originalModel, mappedModel string) (*NonStreamingResult, error) {
+	if options.NonStream.Compatibility != nil {
+		nonStream := options.NonStream
+		nonStream.ResponseHeaders = options.Headers
+		return readResponsesCompatibility(ctx, resp, upstream.NewOutputContext(sink), nonStream, originalModel, func(body []byte) ([]byte, error) {
+			return restoreBufferedPassthroughTools(body, options)
+		})
+	}
 	body, err := options.NonStream.ReadBody(resp.Body)
 	if err != nil {
 		return nil, err
 	}
 
-	if IsEventStreamResponse(resp.Header) {
+	stream, err := options.NonStream.bufferedStream(resp, body)
+	if err != nil {
+		return nil, err
+	}
+	if stream {
 		options.NonStream.ObserveSSE(string(body))
 		return ReadPassthroughSSEAsJSON(resp, sink, options, body, originalModel, mappedModel)
 	}
@@ -516,7 +527,8 @@ func ReadPassthroughNonStreaming(ctx context.Context, resp *http.Response, sink 
 	options.Headers(c.Writer.Header(), resp.Header)
 
 	contentType := resp.Header.Get("Content-Type")
-	if contentType == "" {
+	options.NonStream.prepareJSONHeaders(c.Writer.Header())
+	if contentType == "" || options.NonStream.JSONOnly {
 		contentType = "application/json"
 	}
 	if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
@@ -527,7 +539,7 @@ func ReadPassthroughNonStreaming(ctx context.Context, resp *http.Response, sink 
 		return nil, err
 	}
 	if !options.NonStream.WriteCompactBridge(resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
+		options.NonStream.deliverBuffered(c, resp.StatusCode, contentType, body)
 	}
 	return &NonStreamingResult{
 		Usage:            usage,
@@ -547,7 +559,7 @@ func ReadPassthroughNonStreaming(ctx context.Context, resp *http.Response, sink 
 // reconstruction keeps the terminal bytes. Compaction supplementation and tool
 // restoration precede header preparation and delivery. Final JSON requires the
 // namespace, reserved-name, and OpenAI client-tool restoration callbacks.
-// Without final JSON, the body stays SSE with compatible model replacement and
+// A JSON-only request fails if the final object is missing. Other callers can retain SSE with model replacement and
 // its content type. Image counts/sizes use the original SSE observation, while
 // the returned response ID follows delivered body extraction. Served and
 // SearchCount remain zero in this result.
@@ -571,6 +583,9 @@ func ReadPassthroughSSEAsJSON(resp *http.Response, sink upstream.OutputSink, opt
 		return nil, options.NonStream.ProtocolError(resp, msg)
 	}
 	finalResponse, ok := wire.ExtractCodexFinalResponse(bodyText)
+	if options.NonStream.JSONOnly && ok && !gjson.ValidBytes(finalResponse) {
+		return nil, options.NonStream.ProtocolError(resp, "Upstream event stream has an invalid final JSON response")
+	}
 
 	usage := wire.ParseSSEUsageFromBody(bodyText)
 	if ok {
@@ -600,6 +615,11 @@ func ReadPassthroughSSEAsJSON(resp *http.Response, sink upstream.OutputSink, opt
 		}
 		body = restoredBody
 	} else {
+		if options.NonStream.JSONOnly {
+			// Fail before header forwarding so downstream error handling can
+			// commit a JSON status without exposing the partial upstream stream.
+			return nil, options.NonStream.ProtocolError(resp, "Upstream event stream has no final JSON response")
+		}
 		if originalModel != "" && mappedModel != "" && originalModel != mappedModel {
 			bodyText = wire.ReplaceModelInSSEBody(bodyText, mappedModel, originalModel)
 		}
@@ -611,6 +631,7 @@ func ReadPassthroughSSEAsJSON(resp *http.Response, sink upstream.OutputSink, opt
 	c := upstream.NewOutputContext(sink)
 	options.Headers(c.Writer.Header(), resp.Header)
 	options.MissingUsage(resp, usage, terminalType, false)
+	options.NonStream.prepareJSONHeaders(c.Writer.Header())
 
 	contentType := "application/json; charset=utf-8"
 	if !ok {
@@ -620,7 +641,7 @@ func ReadPassthroughSSEAsJSON(resp *http.Response, sink upstream.OutputSink, opt
 		}
 	}
 	if !options.NonStream.WriteCompactBridge(resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
+		options.NonStream.deliverBuffered(c, resp.StatusCode, contentType, body)
 	}
 
 	return &NonStreamingResult{

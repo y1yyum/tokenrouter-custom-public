@@ -2786,7 +2786,7 @@ func newOpenAICompatibleStreamValidationContext(path, body string, claudeCodeOnl
 // states.
 func TestOpenAITextAssemblyReadAndStopBoundaries(t *testing.T) {
 	activity := &gatewayRequestActivity{Operations: lifecycle.NewOperations("openai-text-contract")}
-	h := provideOpenAITextHTTP(nil, nil, nil, nil, nil, nil, nil, nil, nil, provideOpenAITextAttemptRuntime(provideOpenAIAttemptBindings(nil, nil, nil, nil, nil, nil, GatewayCompletionRecorders{}, nil, nil, nil, nil, nil, nil, nil, nil, nil)), activity, nil, nil, nil, nil, nil)
+	h := provideOpenAITextHTTP(nil, nil, nil, nil, nil, nil, nil, nil, nil, provideOpenAITextAttemptRuntime(provideOpenAIAttemptBindings(nil, nil, nil, nil, nil, nil, GatewayCompletionRecorders{}, nil, nil, nil, nil, nil, nil, nil, nil, nil)), activity, nil, nil, nil, nil, nil, nil)
 	for _, stopped := range []bool{false, true} {
 		if stopped {
 			require.NoError(t, activity.StopContext(context.Background()))

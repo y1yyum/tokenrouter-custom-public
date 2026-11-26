@@ -21,6 +21,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	"github.com/TokenFlux/TokenRouter/internal/routing/capability"
+	"github.com/TokenFlux/TokenRouter/internal/scheduler"
 	"github.com/TokenFlux/TokenRouter/internal/server/clientip"
 	openaierrors "github.com/TokenFlux/TokenRouter/internal/upstream/openai"
 )
@@ -58,6 +59,9 @@ type Support struct {
 	Quota       gatewayprovider.QuotaUpdater         // captured Key quota update service
 	Moderation  gatewayhttp.ModerationPort           // upstream warning moderation recorder
 	Submission  gatewayhttp.CompletionSubmission     // shared completion task submission service
+	// ResponsesReadmission supplies wait limits when a yielded prefetch had
+	// no scheduler wait plan of its own.
+	ResponsesReadmission scheduler.ProviderWaitPlan
 }
 
 // OpenAIProviderScheduleModel chooses the model used for selected-provider
@@ -191,15 +195,20 @@ func (h *Support) AcquireResponsesProviderSlot(
 	streamStarted *bool,
 	reqLog *zap.Logger,
 ) (func(), bool) {
-	release, result := h.AcquireOpenAIProviderSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, nil)
-	return release, result
+	writeError := func(status int, kind, code, message string) {
+		started, writable := gatewayhttp.ResponsesErrorOutputMode(c, reqStream || gatewayhttp.IsOpenAIResponsesCompactPath(c))
+		if writable {
+			gatewayhttp.DefaultOpenAIErrorOutput().WriteStreamingErrorWithCode(c, status, kind, code, message, started, false)
+		}
+	}
+	return h.AcquireOpenAIProviderSlot(c, groupID, sessionHash, selection, reqStream, streamStarted, reqLog, writeError)
 }
 
 // AcquireOpenAIProviderSlot adopts or waits for the selected provider's
 // capacity. Callers supply the active request, stream marker, logger, and
 // shared concurrency services. A nil error writer selects OpenAI output;
-// returned cleanup is owned by forwarding, with Qoder streams retained until
-// explicit completion cleanup.
+// returned cleanup is owned by forwarding. Qoder streams and eligible
+// synchronous Responses candidates retain capacity until forwarding returns.
 func (h *Support) AcquireOpenAIProviderSlot(
 	c *gin.Context,
 	groupID *int64,
@@ -216,11 +225,12 @@ func (h *Support) AcquireOpenAIProviderSlot(
 		}
 	}
 	var projected *gatewayhttp.SelectedProviderSlot
-	// Qoder streaming reads tail usage after client cancellation. Pass its
-	// completion-release choice to the common slot adapter while other
-	// attempts use cancellation cleanup.
+	// An eligible Responses candidate may be rewritten after slot acquisition.
+	// Select explicit cleanup before the scheduler's prefetched, immediate, or
+	// queued slot is adopted, so downstream cancellation cannot race that decision.
 	if selection != nil && selection.Provider != nil {
-		projected = &gatewayhttp.SelectedProviderSlot{CompleteBeforeRelease: reqStream && selection.Provider.Record.Platform == capability.PlatformQoder, ProviderID: selection.Provider.Record.ID, Acquired: selection.Acquired, ReleaseFunc: selection.ReleaseFunc, WaitPlan: selection.WaitPlan}
+		completeBeforeRelease := gatewayhttp.ResponsesMayDrain(c, selection.Provider) || reqStream && selection.Provider.Record.Platform == capability.PlatformQoder
+		projected = &gatewayhttp.SelectedProviderSlot{CompleteBeforeRelease: completeBeforeRelease, ProviderID: selection.Provider.Record.ID, Acquired: selection.Acquired, ReleaseFunc: selection.ReleaseFunc, WaitPlan: selection.WaitPlan}
 	}
 	release, ok := gatewayhttp.AcquireSelectedProviderSlot(c, groupID, sessionHash, projected, reqStream, streamStarted, reqLog, writeError, h.Concurrency, h.Sticky, gatewayhttp.ProviderSlotHooks{Acquired: gatewayhttp.MarkOpsProviderSlotAcquired, CapacityLimited: gatewayhttp.MarkOpsRoutingCapacityLimited})
 	if !ok {

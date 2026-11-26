@@ -1,6 +1,8 @@
 package app
 
 import (
+	"time"
+
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/egress"
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
@@ -45,6 +47,8 @@ func provideOpenAIResponseOutput(cfg *config.Config, health *provideradapter.Ope
 		output.Options.ImageStreamKeepaliveInterval = v.Images.StreamKeepaliveIntervalSeconds
 		output.Options.OpenAIFirstOutputTimeoutSeconds = v.OpenAI.FirstOutputTimeoutSeconds
 		output.Options.OpenAIHighEffortFirstOutputTimeoutSeconds = v.OpenAI.HighEffortFirstOutputTimeoutSeconds
+		// Scheduler slot lifetimes are configured in whole minutes.
+		output.Options.CompatibilityProviderSlotTTL = time.Duration(cfg.Scheduling.ConcurrencySlotTTLMinutes) * time.Minute
 		output.Options.LogUpstreamErrorBody = v.UpstreamErrorBodyLog.Enabled
 		output.Options.LogUpstreamErrorBodyMaxBytes = v.UpstreamErrorBodyLog.MaxBytes
 		output.Options.ResponseHeadersEnabled = cfg.Gateway.ResponseHeaders.Enabled

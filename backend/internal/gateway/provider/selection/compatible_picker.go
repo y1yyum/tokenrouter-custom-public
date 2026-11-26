@@ -203,19 +203,23 @@ func (s *compatiblePicker) isProviderRequestCompatibleReason(ctx context.Context
 		return false, "provider_nil"
 	}
 	if reason := s.service.candidateEligibilityReason(ctx, provider, req.Platform, requestRoutingModel(req), req.RequireCompact, req.RequiredCapability); reason != "" {
+		observeParameterGateFailure(ctx, reason)
 		return false, reason
 	}
 	if req.RequirePrivacySet && !provider.View().IsPrivacySet() {
 		return false, "privacy_not_set"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProviderRequestRuntimeBlocked(ctx, provider, requestRoutingModel(req)) {
+		observeParameterUnavailable(ctx)
 		return false, "runtime_blocked"
 	}
 	if s != nil && s.service != nil && s.service.isOpenAIProxyStreamQuarantined(ctx, provider) {
+		observeParameterUnavailable(ctx)
 		return false, "proxy_stream_quarantined"
 	}
 
 	if paused, decision := gatewayprovider.OpenAIQuotaPause(ctx, provider); paused {
+		observeParameterUnavailable(ctx)
 		reason := "quota_auto_pause"
 		if decision.Window != "" {
 			reason += "_" + decision.Window
@@ -239,7 +243,7 @@ func (s *compatiblePicker) isProviderRequestCompatibleReason(ctx context.Context
 	if !providerSupportsOpenAICapabilities(ctx, provider, req.RequiredCapability, req.RequiredImageCapability) {
 		return false, "capability_mismatch"
 	}
-	reason := s.service.chatToolEligibilityReason(ctx, provider, req.GroupID, requestRoutingModel(req), req.RequireCompact, chatToolRanked)
+	reason := s.service.textParameterEligibilityReason(ctx, provider, req.GroupID, requestRoutingModel(req), req.RequireCompact, chatToolRanked)
 	return reason == "", reason
 }
 
@@ -491,11 +495,16 @@ func (s *Compatible) selectProviderWithSchedulerForRouting(
 	platform string,
 	previousResponseCanMove bool,
 ) (selection *gatewayprovider.SelectionResult, decision schedulercore.PlatformDecision, err error) {
+	ctx, parameters := withParameterSelection(ctx, len(excludedIDs))
 	ctx, capabilities := withCapabilitySelection(ctx)
 	// Retain typed admission failures until candidate selection has exhausted the
 	// pool; a supported route leaves capacity errors under scheduler control.
 	defer func() {
 		if err == nil && selection != nil && selection.Provider != nil {
+			return
+		}
+		if parameters != nil && (err == nil || errors.Is(err, schedulercore.ErrNoAvailableProviders)) {
+			err = parameters.failure(err)
 			return
 		}
 		// Only ordinary pool exhaustion can become this request error. Storage

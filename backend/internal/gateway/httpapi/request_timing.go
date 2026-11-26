@@ -30,9 +30,14 @@ import (
 // before a later flush. Every platform shares the same request collector and
 // first-event rules, including protocol conversion at the HTTP boundary.
 
-// The request-local writer binding lets upstream sinks identify delivery through
-// intervening model-restoration and capture writers without bypassing those writers.
-const requestTimingWriterKey = "http_text_timing_writer"
+const (
+	// The request-local writer binding lets upstream sinks identify delivery through
+	// intervening model-restoration and capture writers without bypassing those writers.
+	requestTimingWriterKey = "http_text_timing_writer"
+	// The delivered-frame cap bounds cohort observation when a terminal follows large
+	// text, tool, or media frames. Skipping a frame has no effect on its client bytes.
+	parameterSSEFrameLimit = 4 << 20
+)
 
 // timingResponseBody observes consumed response bytes without changing read ownership.
 type timingResponseBody struct {
@@ -50,6 +55,10 @@ type timingWriter struct {
 	ctx                context.Context // request lifecycle observations
 	frames             timingFrames    // delivered event framing state
 	pending            bool            // unflushed response event data
+	visible            bool            // first visible delivery already measured
+	// parameterStream is installed at policy enrollment before dispatch. It
+	// keeps the same framing observer active past the first visible event.
+	parameterStream atomic.Pointer[parameterDelivery]
 	// upstreamWrites scopes synchronous upstream sink emission. Heartbeat workers
 	// may read the counter concurrently, so source publication uses atomic access.
 	upstreamWrites atomic.Int32 // active upstream emission scopes
@@ -62,6 +71,11 @@ type timingFrames struct {
 	data    []byte               // current SSE data fields
 	event   string               // current SSE event name
 	observe func(string, string) // synchronous completed payload callback
+	// maxBytes enables bounded per-frame observation after first output.
+	// Oversized frames are skipped until the next blank line.
+	maxBytes     int  // retained bytes per frame, zero uses timing's default
+	discarding   bool // waiting for the oversized frame separator
+	discardBytes bool // current discarded line contains data
 }
 
 // TextRequestTiming installs admission observation before authentication reads
@@ -188,15 +202,9 @@ func (r *timingResponseBody) Close() error {
 // The parser can span several successful writes, while only the existing Flush
 // call records delivery of pending response data.
 func (w *timingWriter) Write(p []byte) (int, error) {
+	connected := w.ctx == nil || w.ctx.Err() == nil
 	n, err := w.ResponseWriter.Write(p)
-	if err != nil || n != len(p) {
-		w.disconnected()
-	}
-	if w.upstreamWrites.Load() > 0 && err == nil && n == len(p) && (w.stages.Streaming() || strings.Contains(w.Header().Get("Content-Type"), "text/event-stream")) {
-		w.frames.feed(p)
-	} else {
-		w.frames.reset()
-	}
+	w.observeWrite(p, err == nil && n == len(p), connected)
 	return n, err
 }
 
@@ -204,16 +212,53 @@ func (w *timingWriter) Write(p []byte) (int, error) {
 // Partial and failed writes discard incomplete frames just like Write. The
 // original byte count and error return unchanged to the response adapter.
 func (w *timingWriter) WriteString(s string) (int, error) {
+	connected := w.ctx == nil || w.ctx.Err() == nil
 	n, err := w.ResponseWriter.WriteString(s)
-	if err != nil || n != len(s) {
-		w.disconnected()
-	}
-	if w.upstreamWrites.Load() > 0 && err == nil && n == len(s) && (w.stages.Streaming() || strings.Contains(w.Header().Get("Content-Type"), "text/event-stream")) {
-		w.frames.feed([]byte(s))
-	} else {
-		w.frames.reset()
-	}
+	w.observeWrite([]byte(s), err == nil && n == len(s), connected)
 	return n, err
+}
+
+// observeWrite selects accepted bytes for the shared frame parser. A short or
+// rejected write resets framing and reports a disconnect, so a later blank
+// line cannot dispatch a frame that the HTTP writer failed to accept. For D2,
+// a write begun after request cancellation cannot establish terminal delivery
+// even if the underlying writer accepts bytes into its buffer.
+func (w *timingWriter) observeWrite(p []byte, accepted, connected bool) {
+	observer := w.parameterStream.Load()
+	upstream := w.upstreamWrites.Load() > 0
+	var contentType string
+	if observer != nil || upstream {
+		contentType = w.Header().Get("Content-Type")
+	}
+	if !accepted {
+		w.disconnected()
+		if observer != nil {
+			observer.failedWrite()
+		}
+		w.frames.reset()
+		return
+	}
+	sse := strings.Contains(contentType, "text/event-stream")
+	if observer != nil {
+		if !connected {
+			observer.failedWrite()
+			w.frames.reset()
+			return
+		}
+		if sse {
+			w.frames.maxBytes = parameterSSEFrameLimit
+			w.frames.feed(p)
+			return
+		}
+		if strings.Contains(contentType, "application/json") && w.Status() >= http.StatusOK && w.Status() < http.StatusMultipleChoices {
+			observer.observeUnary(p)
+		}
+	}
+	if upstream && (sse || w.stages.Streaming()) {
+		w.frames.feed(p)
+		return
+	}
+	w.frames.reset()
 }
 
 // observe records actual data and useful content after successful frame writes.
@@ -222,10 +267,17 @@ func (w *timingWriter) WriteString(s string) (int, error) {
 //
 // A complete data event establishes pending response bytes even when it has no
 // useful content, allowing an initial metadata frame to establish the first
-// response Flush. Useful content ends further parser work, but its pending flag
-// remains available to the following Flush. Thus content observation never
-// performs a flush itself or commits staged output early.
+// response Flush. Useful content ends timing observation, while a bound D2
+// observer continues to consume complete SSE frames. The pending flag remains
+// available to the following Flush without committing staged output early.
 func (w *timingWriter) observe(data, event string) {
+	observer := w.parameterStream.Load()
+	if observer != nil && event != "@json" && strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+		observer.observe(data, event)
+	}
+	if w.visible || w.upstreamWrites.Load() == 0 {
+		return
+	}
 	if (event == "@json" && !w.stages.Streaming()) || !timingDataEvent(data, event) {
 		return
 	}
@@ -233,7 +285,8 @@ func (w *timingWriter) observe(data, event string) {
 	w.pending = true
 	if timingVisible(data, event) {
 		w.stages.Mark("first_visible_output_ms")
-		w.frames.stopped = true
+		w.visible = true
+		w.frames.stopped = observer == nil
 	}
 }
 
@@ -261,17 +314,38 @@ func (w *timingWriter) Flush() {
 // caller has observed every milestone it needs, parsing stops and retained
 // buffers are released on the next feed.
 func (f *timingFrames) feed(p []byte) {
+	limit := f.maxBytes
+	if limit == 0 {
+		limit = OpenAIResponseDefaultMaxLineSize
+	}
 	for _, b := range p {
 		// Diagnostic framing uses the existing default SSE size ceiling. Oversized
 		// observations stop parsing without changing the platform reader's own limit,
 		// response bytes, or error handling.
-		if len(f.line)+len(f.data) > OpenAIResponseDefaultMaxLineSize {
-			f.stopped = true
+		if !f.discarding && b != '\n' && len(f.line)+len(f.data)+len(f.event) >= limit {
+			if f.maxBytes == 0 {
+				f.stopped = true
+			} else {
+				// The terminal may arrive after this large data event. Track
+				// only the blank separator and resume on the next frame.
+				f.reset()
+				f.discarding = true
+				f.discardBytes = true
+			}
 		}
 		if f.stopped {
 			f.line = nil
 			f.data = nil
 			return
+		}
+		if f.discarding {
+			if b == '\n' {
+				f.discarding = f.discardBytes
+				f.discardBytes = false
+			} else if b != '\r' {
+				f.discardBytes = true
+			}
+			continue
 		}
 		if b == '\n' {
 			f.consume(strings.TrimSuffix(string(f.line), "\r"))
@@ -337,7 +411,13 @@ func (f *timingFrames) finish() {
 }
 
 // reset discards partial delivery evidence after a failed downstream write.
-func (f *timingFrames) reset() { f.line = f.line[:0]; f.data = f.data[:0]; f.event = "" }
+func (f *timingFrames) reset() {
+	f.line = f.line[:0]
+	f.data = f.data[:0]
+	f.event = ""
+	f.discarding = false
+	f.discardBytes = false
+}
 
 // timingDataEvent applies the shared protocol event classification for HTTP frames.
 func timingDataEvent(data, event string) bool { return timing.DataEvent(data, event) }

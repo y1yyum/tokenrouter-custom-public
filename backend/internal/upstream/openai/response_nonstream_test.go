@@ -301,6 +301,68 @@ func TestReadSSEAsJSONUnextractedStream(t *testing.T) {
 	require.Equal(t, [][]byte{bytes.ReplaceAll(input, []byte("upstream-model"), []byte("client-model"))}, sink.bodies)
 }
 
+// TestBufferedJSONOnlyContract exercises both output adapters on a foreground
+// request whose upstream falsely advertises JSON. A partial event stream must
+// fail before any downstream bytes, while an extractable response still uses
+// the old terminal semantics even when the upstream omits its response ID.
+func TestBufferedJSONOnlyContract(t *testing.T) {
+	const complete = `{"object":"response","output":[],"usage":{"input_tokens":1}}`
+	for _, passthrough := range []bool{false, true} {
+		for _, tc := range []struct {
+			name      string
+			body      string
+			wantError bool
+		}{
+			{"partial", "data: [DONE]\n\n", true},
+			{"invalid", "<html>unavailable</html>", true},
+			{"legacy", "data: {\"type\":\"response.completed\",\"response\":" + complete + "}\n\n", false},
+			{"direct", complete, false},
+		} {
+			t.Run(fmt.Sprintf("%s/passthrough=%t", tc.name, passthrough), func(t *testing.T) {
+				var calls []string
+				failure := errors.New("invalid upstream representation")
+				protocolError := func(*http.Response, string) error { return failure }
+				// Model both provider header policies copying upstream representation
+				// headers before the synchronous reader commits its reconstructed JSON.
+				headers := func(dst, _ http.Header) {
+					dst.Set("Content-Type", "text/event-stream")
+					dst.Set("Content-Length", "999")
+				}
+				var heads []upstream.OutputHead
+				var bodies [][]byte
+				var err error
+				if passthrough {
+					options := passthroughTestOptions(&calls)
+					options.NonStream.JSONOnly = true
+					options.NonStream.ProtocolError = protocolError
+					options.Headers = headers
+					_, sink, readErr := readPassthroughFixture([]byte(tc.body), false, options, &calls)
+					heads, bodies, err = sink.heads, sink.bodies, readErr
+				} else {
+					options := nonStreamingTestOptions(&calls)
+					options.JSONOnly = true
+					options.ProtocolError = protocolError
+					options.ResponseHeaders = headers
+					_, _, sink, readErr := readNonStreamingFixture([]byte(tc.body), false, options, &calls, "model", "model")
+					heads, bodies, err = sink.heads, sink.bodies, readErr
+				}
+				if tc.wantError {
+					require.ErrorIs(t, err, failure)
+					require.Empty(t, heads)
+					require.Empty(t, bodies)
+					return
+				}
+				require.NoError(t, err)
+				require.Len(t, heads, 1)
+				require.Equal(t, "application/json", heads[0].Header.Get("Content-Type"))
+				require.Empty(t, heads[0].Header.Get("Content-Length"))
+				require.Len(t, bodies, 1)
+				require.JSONEq(t, complete, string(bodies[0]))
+			})
+		}
+	}
+}
+
 // readNonStreamingFixture runs one reader against caller-supplied body storage.
 // JSON reads borrow that storage directly; SSE reads receive its framed bytes,
 // and the returned context and sink expose output commitment for assertions.

@@ -12,6 +12,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/apikey"
 	egressadapter "github.com/TokenFlux/TokenRouter/internal/egress/provider"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logredact"
 )
@@ -81,8 +82,10 @@ func (p *OpenAIResponseOutput) BindResponseProvider(ctx context.Context, c *gin.
 // commitment. Stopping a committed Compact stream emits a response.failed event
 // under its existing HTTP status, and another committed SSE stream uses
 // StreamError without mutating headers; otherwise filtered upstream headers
-// precede a JSON 502 envelope. The returned error retains the same diagnostic
-// message for execution logging.
+// precede a JSON 502 envelope. An enrolled synchronous request records this
+// protocol outcome at the write boundary, preserving client cancellation when
+// delivery has already become impossible. The returned error retains the
+// same diagnostic message for execution logging.
 func (p *OpenAIResponseOutput) ProtocolError(resp *http.Response, c *gin.Context, message string) error {
 	message = logredact.SanitizeUpstreamQueries(strings.TrimSpace(message))
 	if message == "" {
@@ -99,14 +102,30 @@ func (p *OpenAIResponseOutput) ProtocolError(resp *http.Response, c *gin.Context
 		DefaultOpenAIErrorOutput().StreamError(c, http.StatusBadGateway, "upstream_error", message, true)
 		return fmt.Errorf("non-streaming openai protocol error: %s", message)
 	}
+	recordCohort := compatibilityCohortFrom(c, responsesCohortKey) != nil && !c.Writer.Written()
+	if recordCohort && FailoverClientGone(c) {
+		recordResponsesCohortDelivery(c, responsecompat.OutcomeClientGone)
+		return fmt.Errorf("non-streaming openai protocol error: %s", message)
+	}
 	egressadapter.WriteFilteredHeaders(c.Writer.Header(), resp.Header, p.Headers)
 	c.Writer.Header().Set("Content-Type", "application/json; charset=utf-8")
+	priorErrors := len(c.Errors)
 	c.JSON(http.StatusBadGateway, gin.H{
 		"error": gin.H{
 			"type":    "upstream_error",
 			"message": message,
 		},
 	})
+	if recordCohort {
+		// The buffered reader has already established the protocol failure.
+		// Record it only after the client write succeeds, since a disconnected
+		// client may have committed headers before the body write failed.
+		outcome := responsecompat.OutcomeProtocol502
+		if len(c.Errors) != priorErrors {
+			outcome = responsecompat.OutcomeClientGone
+		}
+		recordResponsesCohortDelivery(c, outcome)
+	}
 	return fmt.Errorf("non-streaming openai protocol error: %s", message)
 }
 

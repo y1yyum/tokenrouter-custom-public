@@ -12,6 +12,7 @@ import (
 	protocolforward "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/media"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	"github.com/TokenFlux/TokenRouter/internal/ops"
@@ -248,7 +249,7 @@ func (s *Gemini) forwardClaudeBodyAsOpenAICompat(
 	options.Do = func(req *http.Request) (*http.Response, error) {
 		return s.Transport.Do(req, proxyURL, provider.Record.ID, provider.Record.Concurrency)
 	}
-	if replayedTool {
+	if _, strict := requestpolicy.StrictIntent(ctx); replayedTool && !strict {
 		options.RepairToolReplay = func() bool {
 			fallback, err := convertClaudeMessagesToGeminiGenerateContent(claudeBody)
 			if err == nil {

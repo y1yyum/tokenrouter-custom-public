@@ -519,6 +519,9 @@ func (s *Client) transportOptions(req *http.Request, proxyURL string, providerID
 // closing their bodies releases pool accounting after the caller finishes
 // reading.
 func (s *Client) Do(req *http.Request, proxyURL string, providerID int64, concurrency int) (*http.Response, error) {
+	if err := prepareParameterBody(req, providerID); err != nil {
+		return nil, err
+	}
 	applyGrokCLIProxyHeaders(req)
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
@@ -527,7 +530,7 @@ func (s *Client) Do(req *http.Request, proxyURL string, providerID int64, concur
 	if err != nil {
 		return nil, err
 	}
-	return s.pool.Do(req, opts)
+	return s.exchangeText(req, opts)
 }
 
 // DoWithTLS sends through the technical pool with a selected TLS fingerprint
@@ -540,6 +543,9 @@ func (s *Client) DoWithTLS(req *http.Request, proxyURL string, providerID int64,
 	if profile == nil || (req != nil && req.URL != nil && strings.EqualFold(req.URL.Scheme, "http")) {
 		return s.Do(req, proxyURL, providerID, concurrency)
 	}
+	if err := prepareParameterBody(req, providerID); err != nil {
+		return nil, err
+	}
 	applyGrokCLIProxyHeaders(req)
 	if err := s.validateRequestHost(req); err != nil {
 		return nil, err
@@ -548,7 +554,7 @@ func (s *Client) DoWithTLS(req *http.Request, proxyURL string, providerID int64,
 	if err != nil {
 		return nil, err
 	}
-	return s.pool.Do(req, opts)
+	return s.exchangeText(req, opts)
 }
 
 // CloseIdleConnections asks a capable pool to release its idle transports. A

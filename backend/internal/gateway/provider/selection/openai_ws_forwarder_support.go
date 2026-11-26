@@ -301,6 +301,17 @@ func (s *Compatible) resolveProviderByPreviousResponseIDForCapability(
 		s.UpstreamRoutingModelRestricted(ctx, *groupID, provider, routingModel, requireCompact) {
 		return 0, nil, "", nil
 	}
+	if parameterSelectionActive(ctx) {
+		source, _ := requeststate.ClientProtocolFromContext(ctx)
+		// A WebSocket-only binding cannot decide the status of an HTTP-only
+		// continuation before that transport's ordinary eligibility is established.
+		if source == protocol.ProtocolOpenAIResponses && !supportsHTTPResponseContinuation(ctx, provider) {
+			return 0, nil, "", nil
+		}
+		if parameterCandidateReason(ctx, provider, routingModel) != "" {
+			return 0, nil, "", nil
+		}
+	}
 	return providerID, provider, responseID, store
 }
 

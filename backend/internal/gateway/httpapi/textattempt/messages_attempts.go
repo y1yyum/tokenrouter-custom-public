@@ -175,6 +175,9 @@ func (b *messageAttemptBridge) Select(excluded map[int64]struct{}) (textflow.Sel
 // diagnosis; model-not-found retains its diagnostic message, while other cases
 // record applicable capacity limitation and provider-unavailability details.
 func (b *messageAttemptBridge) FirstSelectionFailure(err error, fallbackUsed bool) {
+	if gatewayhttp.WriteTextParameterCandidateError(b.c, protocol.ProtocolAnthropicMessages, err, *b.streamStarted) {
+		return
+	}
 	if handleGroupSelectionBusinessError(b.c, err, *b.streamStarted, func(status int, errType string, message string, responseStarted bool) {
 		b.binding().handleStreamingAwareError(b.c, status, errType, message, responseStarted)
 	}) {
@@ -268,6 +271,9 @@ func (b *messageAttemptBridge) Acquire() bool {
 				zap.Int64("provider_id", b.provider.Record.ID),
 				zap.Int("max_waiting", b.selection.WaitPlan.MaxWaiting),
 			)
+			if gatewayhttp.WriteStrictParameterCapacityError(b.c, *b.streamStarted) {
+				return false
+			}
 			b.binding().handleStreamingAwareErrorWithCode(b.c, http.StatusTooManyRequests, "rate_limit_error", gatewayhttp.GatewayQueueFullCode, "Too many pending requests, please retry later", *b.streamStarted)
 			return false
 		}
@@ -295,6 +301,9 @@ func (b *messageAttemptBridge) Acquire() bool {
 		if err != nil {
 			b.reqLog.Warn("gateway.provider_slot_acquire_failed", zap.Int64("provider_id", b.provider.Record.ID), zap.Error(err))
 			releaseWait()
+			if gatewayhttp.WriteStrictParameterCapacityError(b.c, *b.streamStarted) {
+				return false
+			}
 			b.binding().handleConcurrencyError(b.c, err, "provider", *b.streamStarted)
 			return false
 		}
@@ -426,10 +435,14 @@ func (b *messageAttemptBridge) Forward(state textflow.AttemptState) textflow.Out
 	// from earlier keepalives when the outer loop decides whether replay
 	// remains permitted.
 	b.writerSizeBeforeForward = gatewayhttp.HeartbeatAdjustedWrittenSize(b.c)
-	if b.provider.Record.Platform == capability.PlatformAntigravity {
-		b.result, err = b.binding().forwardAntigravity(requestCtx, b.c, b.provider, attemptBody, b.hasBoundSession)
-	} else {
-		b.result, err = b.binding().forwardMessages(requestCtx, b.c, b.provider, b.attemptParsedReq)
+	err = gatewayhttp.RecheckTextParameterCandidate(requestCtx, b.c, b.provider, b.attemptParsedReq.Model, protocol.ProtocolAnthropicMessages, *b.streamStarted)
+	routeRejected := err != nil
+	if !routeRejected {
+		if b.provider.Record.Platform == capability.PlatformAntigravity {
+			b.result, err = b.binding().forwardAntigravity(requestCtx, b.c, b.provider, attemptBody, b.hasBoundSession)
+		} else {
+			b.result, err = b.binding().forwardMessages(requestCtx, b.c, b.provider, b.attemptParsedReq)
+		}
 	}
 
 	// The same wrapped callback also covers upstream failures before
@@ -445,6 +458,9 @@ func (b *messageAttemptBridge) Forward(state textflow.AttemptState) textflow.Out
 
 	if b.providerReleaseFunc != nil {
 		b.providerReleaseFunc()
+	}
+	if routeRejected {
+		return textflow.Outcome{Stop: true, Err: err}
 	}
 	// Local capability checks may finish the request before transport, leaving
 	// no success or failure from this provider for the scheduler to sample.

@@ -1,6 +1,8 @@
 package httpapi
 
 import (
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/server/adminapi"
 )
 
@@ -153,5 +155,61 @@ var ManagementOperations = map[string]*adminapi.Operation{
 		Response:    "json",
 		BrowserPath: "/admin/settings",
 		Input:       adminapi.Arguments("/api/v1/admin/settings/rectifier", []string{}, (*UpdateRectifierSettingsRequest)(nil)),
+	}),
+	"settings.responses_request_compatibility.list": adminapi.Define(adminapi.Operation{
+		ID:          "settings.responses_request_compatibility.list",
+		Module:      "settings",
+		Title:       "Get Responses compatibility settings",
+		TitleZH:     "读取 Responses 兼容设置",
+		Description: "Reads the saved rollout policy and the revision applied by this instance.",
+		Method:      "GET",
+		Path:        "/api/v1/admin/settings/responses-request-compatibility",
+		ReadOnly:    true,
+		Response:    "json",
+		Output:      adminapi.JSONResponse(responsecompat.Status{}),
+		BrowserPath: "/admin/settings",
+		Input:       adminapi.Arguments("/api/v1/admin/settings/responses-request-compatibility", []string{}, nil),
+	}),
+	"settings.responses_request_compatibility.update": adminapi.Define(adminapi.Operation{
+		ID:          "settings.responses_request_compatibility.update",
+		Module:      "settings",
+		Title:       "Update Responses compatibility settings",
+		TitleZH:     "更新 Responses 兼容设置",
+		Description: "Replaces the rollout policy if the supplied revision matches the saved revision. Requires browser confirmation.",
+		Method:      "PUT",
+		Path:        "/api/v1/admin/settings/responses-request-compatibility",
+		Sensitive:   true,
+		Response:    "json",
+		Output:      adminapi.JSONResponse(responsecompat.Status{}),
+		BrowserPath: "/admin/settings",
+		Input:       adminapi.Arguments("/api/v1/admin/settings/responses-request-compatibility", []string{}, (*UpdateResponsesCompatibilitySettingsRequest)(nil)),
+	}),
+	"settings.request_parameter_policy.list": adminapi.Define(adminapi.Operation{
+		ID:          "settings.request_parameter_policy.list",
+		Module:      "settings",
+		Title:       "Get gateway request parameter policy",
+		TitleZH:     "读取网关请求参数策略",
+		Description: "Reads entry parameter rules and the revision applied by this instance.",
+		Method:      "GET",
+		Path:        "/api/v1/admin/settings/request-parameter-policy",
+		ReadOnly:    true,
+		Response:    "json",
+		Output:      adminapi.JSONResponse(requestpolicy.Status{}),
+		BrowserPath: "/admin/settings",
+		Input:       adminapi.Arguments("/api/v1/admin/settings/request-parameter-policy", []string{}, nil),
+	}),
+	"settings.request_parameter_policy.update": adminapi.Define(adminapi.Operation{
+		ID:          "settings.request_parameter_policy.update",
+		Module:      "settings",
+		Title:       "Update gateway request parameter policy",
+		TitleZH:     "更新网关请求参数策略",
+		Description: "Replaces entry parameter rules at the supplied saved revision. Requires browser confirmation.",
+		Method:      "PUT",
+		Path:        "/api/v1/admin/settings/request-parameter-policy",
+		Sensitive:   true,
+		Response:    "json",
+		Output:      adminapi.JSONResponse(requestpolicy.Status{}),
+		BrowserPath: "/admin/settings",
+		Input:       adminapi.Arguments("/api/v1/admin/settings/request-parameter-policy", []string{}, (*UpdateParameterPolicySettingsRequest)(nil)),
 	}),
 }

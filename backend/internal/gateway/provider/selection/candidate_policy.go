@@ -257,7 +257,10 @@ func (s *Compatible) candidateEligibilityReason(ctx context.Context, value *gate
 // gates that the basic scheduler normally evaluates after this callback.
 func (s *Compatible) basicCandidateEligibilityReason(ctx context.Context, value *gatewayadapter.ExecutionProvider, platform, model string, compact bool, required provider.OpenAIEndpointCapability) string {
 	reason := s.candidateEligibilityReason(ctx, value, platform, model, compact, required)
-	if reason != "" || !requeststate.ChatFunctionToolsRequired(ctx) {
+	if reason != "" || !requeststate.ChatFunctionToolsRequired(ctx) && !parameterSelectionActive(ctx) {
+		if reason != "" {
+			observeParameterGateFailure(ctx, reason)
+		}
 		return reason
 	}
 	state, _ := ctx.Value(candidatePolicyKey{}).(candidatePolicy)
@@ -270,12 +273,29 @@ func (s *Compatible) basicCandidateEligibilityReason(ctx context.Context, value 
 		return "shadow_parent_unhealthy"
 	}
 	if s.isOpenAIProviderRequestRuntimeBlocked(ctx, value, model) {
+		observeParameterUnavailable(ctx)
 		return "runtime_blocked"
 	}
 	if s.isOpenAIProxyStreamQuarantined(ctx, value) {
+		observeParameterUnavailable(ctx)
 		return "proxy_stream_quarantined"
 	}
-	return s.chatToolEligibilityReason(ctx, value, state.groupID, model, compact, chatToolRanked)
+	return s.textParameterEligibilityReason(ctx, value, state.groupID, model, compact, chatToolRanked)
+}
+
+// textParameterEligibilityReason applies strict route evidence under the same
+// group upstream allowlist as native Chat tools. Strict eligibility is checked
+// first so absence of versioned evidence cannot be misreported as a tool error.
+func (s *Compatible) textParameterEligibilityReason(ctx context.Context, value *gatewayadapter.ExecutionProvider, groupID *int64, model string, compact bool, stage chatToolCheckStage) string {
+	if parameterSelectionActive(ctx) {
+		if groupID != nil && s.NeedsUpstreamGroupRestriction(ctx, groupID) && s.UpstreamRoutingModelRestricted(ctx, *groupID, value, model, compact) {
+			return "group_upstream_restricted"
+		}
+		if reason := parameterCandidateReason(ctx, value, model); reason != "" {
+			return reason
+		}
+	}
+	return s.chatToolEligibilityReason(ctx, value, groupID, model, compact, stage)
 }
 
 // chatToolEligibilityReason checks the final protocol and provider-mapped model
@@ -399,7 +419,13 @@ func candidateOutputEligibility(ctx context.Context, value *gatewayadapter.Execu
 		state.observe(err)
 	}
 	if err != nil {
-		return apperror.Reason(err)
+		reason := apperror.Reason(err)
+		if reason == "MODEL_CAPABILITY_UNKNOWN" || reason == "MODEL_ATTRIBUTES_UNAVAILABLE" {
+			// An incomplete catalogue read cannot establish the status of this
+			// route's parameter constraints before ranking examines the remaining candidates.
+			observeParameterUnavailable(ctx)
+		}
+		return reason
 	}
 	return ""
 }

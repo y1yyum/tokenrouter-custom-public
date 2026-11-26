@@ -333,7 +333,13 @@ func RegisterGatewayRoutes(engine *gin.Engine, endpoints RouteEndpoints, options
 	antigravityV1.Use(options.APIKeyAuth)
 	antigravityV1.Use(requireGroupAnthropic, requireExtendedProtocol)
 	{
-		antigravityV1.POST("/messages", messagesProtocolGate, messagesHTTP.Messages)
+		antigravityV1.POST("/messages", messagesProtocolGate, func(c *gin.Context) {
+			if openAITextHTTP == nil {
+				messagesHTTP.Messages(c)
+				return
+			}
+			messagesHTTP.serveMessages(c, openAITextHTTP.rejectByParameterPolicy)
+		})
 		antigravityV1.POST("/messages/count_tokens", countTokensProtocolGate, countTokensHandler)
 		antigravityV1.GET("/models", modelsHTTP.AntigravityModels)
 		antigravityV1.GET("/usage", endpoints.PublicUsage)

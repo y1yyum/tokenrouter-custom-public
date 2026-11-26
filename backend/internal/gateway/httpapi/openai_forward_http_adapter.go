@@ -57,11 +57,14 @@ func (s *OpenAIResponsesExecutor) nativeForwardHTTPOptions(ctx context.Context, 
 		return openai.OpenAIImagesMainModelError(status, body, input.UpstreamModel, input.ImageBillingModel)
 	}
 	sink := NewResponseSink(c)
-	if input.Stream {
+	if input.ClientStream {
 		sink = s.Output.streamSink(c, provider)
 	}
 	return forward.HTTPOptions{
 		Exchange: exchange, Sink: sink,
+		RejectedFieldRetryState: func(body []byte) *openai.ResponsesRejectedFieldRetryState {
+			return openAIResponsesRejectedFieldRetryStateForRequest(c, provider.Record.ID, body)
+		},
 		StreamOptions: func() openai.StreamOptions {
 			return s.Output.StreamOptions(ctx, c, provider, input.ReasoningEffortValue)
 		},

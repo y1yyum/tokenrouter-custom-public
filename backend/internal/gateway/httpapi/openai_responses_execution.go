@@ -12,6 +12,7 @@ import (
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	openaiexecution "github.com/TokenFlux/TokenRouter/internal/gateway/provider/openaiforward"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/timing"
 	"github.com/TokenFlux/TokenRouter/internal/routing/capability"
 	"github.com/TokenFlux/TokenRouter/internal/upstream/openai"
@@ -47,6 +48,10 @@ type OpenAIResponsesExecutor struct {
 	Lineage *OpenAIEncryptedLineage
 	// Responses image injection policy
 	ImageBridge *gatewayprovider.ResponseImagePolicy
+	// Compatibility matches the fully built upstream request against the local rollout policy.
+	Compatibility *responsecompat.Service
+	// Cohorts records the first trial arm and final result independently of billing.
+	Cohorts responsecompat.CohortRecorder
 }
 
 // Forward prepares and executes one selected Responses provider attempt,
@@ -84,8 +89,20 @@ func (s *OpenAIResponsesExecutor) Forward(ctx context.Context, c *gin.Context, p
 	originalBody := prepared.OriginalBody
 	requestView := prepared.View
 	reqModel, reqStream, promptCacheKey := requestView.Model, requestView.Stream, requestView.PromptCacheKey
+	if c != nil && c.GetBool(responsesForegroundJSONKey) && provider.Record.AllowsResponsesRequestRewrite() {
+		reqStream = false
+	}
 	originalModel := reqModel
 	isCodexCLI := prepared.CodexCLI
+	if prepared.Route != openaiexecution.DispatchResponses && prepared.Route != openaiexecution.DispatchPassthrough {
+		// Protocol bridges lack the native send hook and still require the selected
+		// provider's capacity before entering their own transport paths.
+		if acquire := responsesCapacity(ctx).Acquire; acquire != nil {
+			if err := acquire(ctx); err != nil {
+				return nil, err
+			}
+		}
+	}
 	switch prepared.Route {
 	case openaiexecution.DispatchRawChat:
 		timing.ObserveProviderPrepare(ctx, time.Since(attemptPrepStart))
@@ -96,7 +113,7 @@ func (s *OpenAIResponsesExecutor) Forward(ctx context.Context, c *gin.Context, p
 	case openaiexecution.DispatchAnthropic:
 		return s.Text.NativeResponses(ctx, c, provider, body, reqModel)
 	case openaiexecution.DispatchPassthrough:
-		return s.Text.passthroughWithPreludeState(ctx, c, provider, originalBody, canonicalImageIntentBody, reqModel, prepared.ImageIntentInvalidated, prepared.ReasoningEffort, reqStream, startTime, prepared.SanitizedToolSchemasPlatform, prepared.SanitizedReasoningReplay, prepared.SanitizedInputItemIDs, tlsRouterMatch)
+		return s.Text.passthroughWithPreludeState(ctx, c, provider, originalBody, canonicalImageIntentBody, reqModel, prepared.ImageIntentInvalidated, prepared.ReasoningEffort, reqStream, startTime, prepared.SanitizedToolSchemasPlatform, prepared.SanitizedReasoningReplay, prepared.SanitizedInputItemIDs, s.prepareCompatibilitySend(ctx, c, provider, attemptPrepStart, prepared.ReasoningEffort), tlsRouterMatch)
 	}
 
 	nativePrepRecorded := false
@@ -202,7 +219,8 @@ func (s *OpenAIResponsesExecutor) Forward(ctx context.Context, c *gin.Context, p
 		ImageBillingModel: imageBillingModel, ImageSizeTier: imageSizeTier, ImageInputSize: imageInputSize,
 		ImageMainModelAdapted: transformed.ImageMainModelAdapted,
 		DefaultInstructions:   transformed.DefaultInstructions,
-		Stream:                reqStream, OAuth: provider.View().IsOAuth(), Shadow: provider.View().IsShadow(), Grok: provider.View().IsGrok(), StartedAt: startTime,
+		ClientStream:          reqStream, OAuth: provider.View().IsOAuth(), Shadow: provider.View().IsShadow(), Grok: provider.View().IsGrok(), StartedAt: startTime,
+		PrepareSend: s.prepareCompatibilitySend(ctx, c, provider, attemptPrepStart, reasoningEffort),
 	}
 	exchange := openai.HTTPExchangeOptions{
 		StartedAt:          startTime,
@@ -211,12 +229,14 @@ func (s *OpenAIResponsesExecutor) Forward(ctx context.Context, c *gin.Context, p
 		Build: func(ctx context.Context, body []byte) (*http.Request, error) {
 			return s.Requests.Build(ctx, c, provider, body, token, reqStream, promptCacheKey, isCodexCLI, tlsRouterMatch)
 		},
-		ApplyHeaders: func(headers http.Header) { openai.ApplyCodexFingerprintHeaders(headers, fingerprintIDs) },
-		Do: func(request *http.Request) (*http.Response, error) {
+		ApplyHeaders: func(headers http.Header) {
+			openai.ApplyCodexFingerprintHeaders(headers, fingerprintIDs)
 			if !nativePrepRecorded {
 				nativePrepRecorded = true
 				timing.ObserveProviderPrepare(ctx, time.Since(attemptPrepStart))
 			}
+		},
+		Do: func(request *http.Request) (*http.Response, error) {
 			resetResponseModel(c)
 			proxyURL := ""
 			if provider.Record.ProxyID != nil && provider.Record.Proxy != nil {

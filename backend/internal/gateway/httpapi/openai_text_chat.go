@@ -54,6 +54,7 @@ func (h *OpenAITextHandler) ChatCompletions(c *gin.Context) {
 	// Keep request lifetime active through admission, execution and deferred slot
 	// release so application shutdown waits for the complete HTTP handling interval.
 	defer done()
+	defer finishCompatibilityCohorts(c)
 	c.Request = c.Request.WithContext(h.options.PlanModelRestrictions.WithRequest(c.Request.Context(), nil, false))
 
 	streamStarted := false
@@ -102,6 +103,9 @@ func (h *OpenAITextHandler) ChatCompletions(c *gin.Context) {
 	if err := wirejson.ValidateRequestObject(body); err != nil {
 		LogRequestBodyParseFailure(reqLog, body, err)
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", RequestBodyParseErrorMessage(err))
+		return
+	}
+	if h.rejectByParameterPolicy(c, apiKey, EndpointChatCompletions, body) {
 		return
 	}
 	// Replace user prompts before model resolution, moderation, and session hashing so later steps share the

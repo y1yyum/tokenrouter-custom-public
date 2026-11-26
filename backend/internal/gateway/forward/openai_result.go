@@ -28,6 +28,8 @@ import (
 // OpenAIResult holds OpenAI-compatible execution observations and private WebSocket replay state.
 type OpenAIResult struct {
 	RequestAttempt telemetry.RequestAttemptRef `json:"-"` // originating diagnostic dispatch reference
+	// ResponsesSettlement carries the final metering decision for an actual Responses conversion.
+	ResponsesSettlement *ResponsesSettlementEvidence `json:"-"`
 	// LocalWarmup marks a locally completed warmup. Gateway turn completion skips
 	// its normal usage and scheduling feedback, and SucceededForScheduling returns false.
 	LocalWarmup bool `json:"-"`
@@ -133,6 +135,15 @@ type OpenAIResult struct {
 	// wsProviderFailoverReplayInput supplies recovered items when a turn needs
 	// another provider. Its slice and raw-message bytes are retained by reference.
 	wsProviderFailoverReplayInput []json.RawMessage
+}
+
+// ResponsesSettlementEvidence describes the reader's selected metering and replay decision.
+// Trusted quantities are carried by the surrounding result's ordinary usage and media fields.
+type ResponsesSettlementEvidence struct {
+	State         string // reader metering state, including explicit zero and unverified
+	Source        string // origin of selected metering
+	Resolution    string // upstream terminal or protocol verdict
+	ReplayAllowed bool   // proven pre-execution refusal after the exchange ended
 }
 
 // SucceededForScheduling classifies this result for upstream scheduling

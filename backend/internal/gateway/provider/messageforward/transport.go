@@ -11,6 +11,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/egress"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	gatewayadapter "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/infra/httpclient"
 	"github.com/TokenFlux/TokenRouter/internal/infra/httpclient/tlsfingerprint"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
@@ -63,6 +64,9 @@ func (r *Runtime) scheduleActivity(target *gatewayadapter.ExecutionProvider) {
 // contains a generic client message, and synchronous HTTP output remains with
 // the outer handler.
 func (r *Runtime) transportError(ctx context.Context, output HTTPBoundary, target *gatewayadapter.ExecutionProvider, err error, notice forward.Notice) error {
+	if requestpolicy.IsWireMismatch(err) {
+		return err
+	}
 	safe := logredact.SanitizeUpstreamQueries(err.Error())
 	output.SetError(0, safe, "")
 	notice.Platform = target.Record.Platform

@@ -260,6 +260,41 @@ setup 使用与主服务一致的配置文件查找规则（含 `CONFIG_FILE` �
 - 部分更新：`UpdatePaymentConfig` 区分"省略（保留原值）"与"显式清空（空切片、空 map、空串或 `false`）"，分阶段写入时后阶段缺省值不覆盖前阶段已持久化配置。
 - 敏感字段与容错：敏感字段在管理页返回掩码或空串，提交省略或空白保留原值。写库失败保持内存快照不变；写库成功但通知失败记录可观测错误，靠 TTL 或重载恢复。验证码设置一次批量读取，保证同请求一致。
 
+<a id="responses_request_compatibility"></a>
+### Responses 请求兼容灰度
+
+| 项 | 约定 |
+| --- | --- |
+| 设置键 | `gateway_responses_request_compatibility` |
+| 管理接口 | `GET /api/v1/admin/settings/responses-request-compatibility` 读取，`PUT` 完整替换 |
+| 版本 | 缺键为 `revision: 0`。PUT 必须带读取到的版本。保存成功后递增 1，竞争写入返回 409 |
+| 匹配 | 生效组 ID、本站提供商 ID、映射后的模型、实际出站路径均精确匹配。两个 ID 必须为正数，重复四元组返回 400 |
+| 规则字段 | `effective_group_id`、`provider_id`、`upstream_model`、`upstream_endpoint`、`mode`、`sync_to_stream`、`enforce_percent` |
+| 开关 | 全局和单规则均默认为 `off`，取两者较保守的模式。规则需显式设置 `sync_to_stream: true`。两层均为 `enforce` 时，按本站逻辑请求 ID 分桶，低于整数百分比的进执行臂，其余进观察臂 |
+
+成功响应含已保存的 `settings`、当前实例的 `applied_revision` 和快照是否仍有效的 `fresh`。尚未发布版本时，`applied_revision` 为 `null`。写入失败保留本地快照。提交后发布失败返回 `SETTINGS_APPLY_FAILED`，并标记 `persisted=true`。
+
+入组按首次命中的规则、修订号和灰度臂计数。请求结束时另记最后一次对拟发送候选进行兼容评估的 `final_revision`，以及该请求是否交付过转换请求。新鲜快照即使明确关闭，也记录其修订号。评估时遇到冷启动、快照过期或无效配置，修订号为 0。冷启动期间从未入组的请求无记录。在途记录的最终修订号为空。
+
+| 配置刷新 | 生效规则 |
+| --- | --- |
+| 实例启动及运行 | 启动先读取主库，随后按 1 秒节拍刷新。每次权威读取限时 1 秒 |
+| 正常读取 | 从该次读取开始算起，快照满 3 秒失效。版本和本地代次阻止迟到结果覆盖更新的快照 |
+| 读取失败 | 暂时失败沿用原到期时间。冷启动、快照过期或读到无效配置时，停止新的转换 |
+
+<a id="request_parameter_policy"></a>
+### 网关请求参数策略
+
+| 项 | 约定 |
+| --- | --- |
+| 设置键 | `gateway_request_parameter_policy`，独立于 Responses 请求兼容灰度 |
+| 管理接口 | `GET /api/v1/admin/settings/request-parameter-policy` 读取，`PUT` 按 `revision` 完整替换。缺键为版本 0，保存成功后版本递增，竞争写入返回 409 |
+| 规则字段 | `entry_group_id`、`inbound_endpoint`、`requested_model`、`mode`、`strict_percent`。前三项精确匹配鉴权入口组、规范化入站端点、原始模型名。重复规则返回 400 |
+| 模式 | 全局和单条规则默认 `off`。缺组、缺少匹配规则或任一开关为 `off` 时沿用原有行为。其余匹配请求进 `observe`，两层均为 `strict` 且命中稳定百分比分桶时进入 `strict` |
+| 状态与关闭 | GET 同时返回已保存的 `settings`、本实例的 `applied_revision` 和 `fresh`。实例每秒刷新，权威读取限时 1 秒，快照从读取开始算起 3 秒失效。关闭或失效只停止新入组，请求已入组时沿用首次臂与版本 |
+
+普通 Messages、Chat Completions 和 Responses 通过基础 JSON 对象校验后入组并固定原始字段。`observe` 只登记观察，`strict` 可在选路前用入口原生 400 返回可证实的 Schema 错误。二期 `D₂` 按首次入组的阶段、请求 ID、版本及臂统计，独立于一期 `D`。
+
 <a id="bstats_reporting"></a>
 ### bStats 安装统计
 

@@ -55,6 +55,7 @@ func (h *OpenAITextHandler) Messages(c *gin.Context) {
 	// Request lifetime covers all admission callbacks and synchronous execution;
 	// deferred user cleanup runs before the entry leaves the application request barrier.
 	defer done()
+	defer finishCompatibilityCohorts(c)
 	c.Request = c.Request.WithContext(h.options.PlanModelRestrictions.WithRequest(c.Request.Context(), nil, false))
 
 	streamStarted := false
@@ -111,6 +112,9 @@ func (h *OpenAITextHandler) Messages(c *gin.Context) {
 	if err := wirejson.ValidateRequestObject(body); err != nil {
 		LogRequestBodyParseFailure(reqLog, body, err)
 		h.anthropicErrorResponse(c, http.StatusBadRequest, "invalid_request_error", RequestBodyParseErrorMessage(err))
+		return
+	}
+	if h.rejectByParameterPolicy(c, apiKey, EndpointMessages, body) {
 		return
 	}
 	// Replace user prompts before model resolution, moderation, and session hashing so later steps share the

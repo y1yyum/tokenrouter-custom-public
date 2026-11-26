@@ -275,11 +275,20 @@ client_model
 ### 字节计数、提前提交与上游过滤
 
 - 心跳字节口径：`StreamHeartbeatBytes` 汇总排队、图片流读取器、Compact/图片 SSE、图片 JSON 空白和统一文本心跳；`HeartbeatAdjustedWrittenSize` 同口径计算（仅心跳返回 Gin `-1`，无心跳保留原 Size 含仅提交 Header 后的 0，读取异步计数时锁定 writer 大小）。
+- 二期参数策略按已成功写入的客户端 SSE 终态结清分母 D₂。Messages 取 `stop_reason`，Chat 取 `finish_reason` 及已交付的拒答分片，Responses 取生命周期终态及其输出。观察器复用计时 writer 的帧解析，仅保留一帧及终态标记。超大帧跳到下一帧继续观察。终态前断连记 `client_gone`，之后断连保留已交付结果。
 - 提交与重试口径：`OutputWriter.Written()` 判 HTTP 是否已提交（能否发头），`ContentWritten()` 判业务输出与重试窗口。
 - 提前提交 200 约束：后续错误以客户端协议的 SSE 错误结束，不可再改 HTTP 状态；迟到的上游响应头不可发送也不登记归属。响应头在读取器私有 map 中准备，`ResponseSink.Begin` 先关闭提前提交窗口再复查提交态，仅仍可应用的头才触发归属登记；已提交后 HTTP writer 返回 Header 副本防止并发冲突；只有心跳的请求仍可在预算内重试或换号。
 - Gemini 元数据与尾帧：成功请求 ID 等元数据仅在 `OutputContext` 私有 Header 准备，首个业务事件前不碰 Gin Header；原生与转换共用有界消费，终态后用量尾帧最多继续收集 5 秒，见 [Gemini 流生命周期](../interfaces/gemini_upstream.md#gemini_stream_lifecycle)。
 - 上游心跳过滤：读取侧消费注释、`ping`/`heartbeat`/`keepalive` 与空 data 帧；JSON `type` 优先于 event 名（`event: ping` 携带业务数据时保留）。逐行缓冲上限 16 行、16 KiB，遇未知字段、超限或 EOF 不完整候选时保守释放非注释行；明确错误事件不因 data 为空忽略；上游活动计时在过滤前。
 - 独立路径与 TTFT：排队心跳由 `WaitObserver` 在请求 goroutine 写入（Gemini 排队同发空 SSE 事件）；Compact 与图片保留专用控制器，图片错误按已提交 Content-Type 选 SSE 或 JSON（JSON 空白心跳后仍返合法 JSON）。注释、ping 与空文本、thinking、工具参数 delta 不建立 TTFT 数据事件。
+
+<a id="responses_aggregation_capacity"></a>
+### 同步 Responses 试点的聚合容量与时限
+
+- 普通 HTTP 与可改写透传共用首输出、读间隔和请求总时限。首输出从候选准备开始，响应头和心跳不重启计时。收到响应头后，实际读到正文才刷新间隔。总截止从本站入口起算，取服务端预算与调用方截止中的较早者。服务端预算为提供商槽租期预留关体时间。
+- 首次命中先入组。实际符合执行臂转换的请求共用每实例 4 个聚合名额，覆盖两个 HTTP 入口、所有规则和提供商。原生流、观察臂、未命中和其他协议沿用各自的容量路径。
+- 等待聚合名额计入原请求总截止，并响应取消和服务端终止。队列满时先归还已预取的提供商槽。拿到名额后再取原候选的提供商槽。规则关闭或快照失效会唤醒等待者，以原同步报文继续。发送前复核配置、连接与重放资格。
+- 发包后若仍在等响应头，断连会取消上游请求。有响应体时可继续读尾部用量，最多 5 秒，任何更早截止或服务端终止都可打断读取。聚合名额和提供商槽均持有至读取退出并关闭响应体。客户端断连可先归还用户槽。
 
 ## 用量与结算
 

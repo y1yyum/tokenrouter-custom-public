@@ -10,6 +10,7 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/TokenFlux/TokenRouter/internal/gateway/media"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/modelcatalog"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
@@ -124,6 +125,23 @@ func GeminiThinking(result modelrules.Resolution, body []byte) (*bridge.GeminiTh
 // final adaptive edits can return partial bytes with an error; callers adopt
 // the result only when successful.
 func ApplyModelAttributeParameters(body []byte, result modelrules.Resolution) ([]byte, error) {
+	return ApplyRequestModelAttributeParameters(context.Background(), body, result)
+}
+
+// ApplyRequestModelAttributeParameters applies the selected route rules with
+// the original thinking provenance. An enabled setting can become adaptive
+// under the selected model rule only when there is no client budget.
+func ApplyRequestModelAttributeParameters(ctx context.Context, body []byte, result modelrules.Resolution) ([]byte, error) {
+	intent, strict := requestpolicy.StrictIntent(ctx)
+	budget := intent.Lookup("thinking", "budget_tokens")
+	hardBudget := strict && budget.Origin == requestpolicy.OriginExplicit
+	if hardBudget && result.Target.UpstreamProtocol == "anthropic_messages" && intent.Endpoint != requestpolicy.EndpointMessages {
+		var err error
+		body, err = sjson.SetRawBytes(body, "thinking", []byte(intent.Lookup("thinking").Raw))
+		if err != nil {
+			return nil, err
+		}
+	}
 	result = result.ForRequest(ModelRequestState(body))
 	remove := append([]string(nil), result.Rules.DropFields...)
 	if value := result.Attributes.Temperature; value != nil && !*value {
@@ -186,7 +204,7 @@ func ApplyModelAttributeParameters(body []byte, result modelrules.Resolution) ([
 	}
 	// Adaptive mode encodes control through thinking.type, so an enabled request
 	// loses its explicit budget after adaptive is set; propagate either failed byte edit.
-	if (result.Rules.ThinkingMode == "adaptive" || result.Rules.ThinkingMode == "adaptive_between_tools") && gjson.GetBytes(body, "thinking.type").String() == "enabled" {
+	if !hardBudget && (result.Rules.ThinkingMode == "adaptive" || result.Rules.ThinkingMode == "adaptive_between_tools") && gjson.GetBytes(body, "thinking.type").String() == "enabled" {
 		body, err = sjson.SetBytes(body, "thinking.type", "adaptive")
 		if err == nil {
 			body, err = sjson.DeleteBytes(body, "thinking.budget_tokens")
@@ -309,7 +327,7 @@ func PrepareModelAttributeParameters(ctx context.Context, value *ExecutionProvid
 	if value != nil {
 		value.Capabilities = &result
 	}
-	body, err = ApplyModelAttributeParameters(body, result)
+	body, err = ApplyRequestModelAttributeParameters(ctx, body, result)
 	if err != nil {
 		return body, err
 	}
@@ -387,7 +405,7 @@ func PrepareGrokResponses(ctx context.Context, provider *ExecutionProvider, mode
 	if err != nil {
 		return nil, err
 	}
-	body, err = ApplyModelAttributeParameters(body, resolution)
+	body, err = ApplyRequestModelAttributeParameters(ctx, body, resolution)
 	if err != nil {
 		return nil, err
 	}

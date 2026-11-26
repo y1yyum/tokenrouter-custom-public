@@ -7,6 +7,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/apikey"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	schedulercore "github.com/TokenFlux/TokenRouter/internal/scheduler"
@@ -287,6 +288,20 @@ func (s *Generic) genericSelector() (*schedulercore.GenericSelector, *projection
 		},
 		IsUpstreamModelRestrictedByGroup: func(ctx context.Context, id int64, a *schedulercore.FlowProvider, model string) bool {
 			return s.isUpstreamModelRestrictedByGroup(ctx, id, scope.oldProvider(a), model)
+		},
+		AllowsRequestParameters: func(ctx context.Context, id *int64, a *schedulercore.FlowProvider, model string) bool {
+			if !parameterSelectionActive(ctx) {
+				return true
+			}
+			target := scope.oldProvider(a)
+			if !s.isProviderInGroup(target, id) {
+				return false
+			}
+			if group, _ := requeststate.GroupFromContext(ctx); group != nil && group.RequireOAuthOnly && !target.View().IsOAuth() {
+				return false
+			}
+			mapped := s.groupMappedModelForGroup(ctx, id, model)
+			return parameterCandidateReason(ctx, target, mapped) == ""
 		},
 		ShouldClearStickySessionForProviderLayer: func(ctx context.Context, a *schedulercore.FlowProvider, model string) bool {
 			return s.shouldClearStickySessionForProviderLayer(ctx, scope.oldProvider(a), model)

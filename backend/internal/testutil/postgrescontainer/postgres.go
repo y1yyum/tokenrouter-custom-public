@@ -5,6 +5,7 @@ package postgrescontainer
 import (
 	"context"
 	"database/sql"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
@@ -31,6 +32,13 @@ import (
 // default image. Cleanup closes the pool before terminating any created
 // container with a fresh thirty-second context, including after startup errors.
 func New(t *testing.T) *sql.DB {
+	return newWithMigrations(t, migrations.FS)
+}
+
+// newWithMigrations starts a test-owned container and applies the supplied
+// authoritative migration set. A historical scenario can stop at its last
+// supported version and invoke the same runner with later migrations afterward.
+func newWithMigrations(t *testing.T, fsys fs.FS) *sql.DB {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
@@ -62,7 +70,7 @@ func New(t *testing.T) *sql.DB {
 	db, err := sql.Open("postgres", dsn)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, db.Close()) })
-	require.NoError(t, postgresinfra.ApplyMigrations(ctx, db, migrations.FS))
+	require.NoError(t, postgresinfra.ApplyMigrations(ctx, db, fsys))
 	return db
 }
 
@@ -71,9 +79,16 @@ func New(t *testing.T) *sql.DB {
 // destroys afterward. Without a DSN the test owns a fresh container. Check
 // the expected database name and its public schema before applying migrations.
 func NewOrExternal(t *testing.T, dsn, databaseName string) *sql.DB {
+	return NewOrExternalWithMigrations(t, dsn, databaseName, migrations.FS)
+}
+
+// NewOrExternalWithMigrations prepares an isolated database with the supplied
+// migration set. A provided DSN must name an empty test database whose
+// lifecycle belongs to the caller. Without a DSN the fixture owns the container.
+func NewOrExternalWithMigrations(t *testing.T, dsn, databaseName string, fsys fs.FS) *sql.DB {
 	t.Helper()
 	if dsn == "" {
-		return New(t)
+		return newWithMigrations(t, fsys)
 	}
 	db, err := sql.Open("postgres", dsn)
 	require.NoError(t, err)
@@ -83,6 +98,6 @@ func NewOrExternal(t *testing.T, dsn, databaseName string) *sql.DB {
 		SELECT 1 FROM information_schema.tables WHERE table_schema = 'public'
 	)`, databaseName).Scan(&emptyFixture))
 	require.True(t, emptyFixture, "expected an empty %s database", databaseName)
-	require.NoError(t, postgresinfra.ApplyMigrations(t.Context(), db, migrations.FS))
+	require.NoError(t, postgresinfra.ApplyMigrations(t.Context(), db, fsys))
 	return db
 }

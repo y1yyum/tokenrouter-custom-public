@@ -56,6 +56,15 @@ type OpenAIResponseOptions struct {
 	// OpenAIFirstOutputTimeoutSeconds: base first-output timeout seconds.
 	// OpenAIHighEffortFirstOutputTimeoutSeconds: high-effort override timeout seconds.
 	OpenAIFirstOutputTimeoutSeconds, OpenAIHighEffortFirstOutputTimeoutSeconds int
+	// CompatibilityTransport overrides positive stage clocks for converted
+	// exchanges. The executor supplies the attempt start and request deadline.
+	CompatibilityTransport openai.ResponsesTransportOptions
+	// CompatibilityTotalTimeout overrides the converted request's default total
+	// duration. The executor still caps it using CompatibilityProviderSlotTTL.
+	CompatibilityTotalTimeout time.Duration
+	// CompatibilityProviderSlotTTL carries the ordinary scheduler slot lifetime
+	// so the converted request stops upstream work before that slot can expire.
+	CompatibilityProviderSlotTTL time.Duration
 	// upstream body logging enabled
 	LogUpstreamErrorBody bool
 	// LogUpstreamErrorBodyMaxBytes bounds logged excerpts. ReadErrorBody can also

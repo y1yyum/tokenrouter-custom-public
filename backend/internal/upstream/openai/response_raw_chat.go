@@ -39,7 +39,10 @@ import (
 // RawResponseOptions binds raw Chat delivery and protocol conversion to
 // attempt-specific observation and policy.
 type RawResponseOptions struct {
-	Runtime bridge.Runtime // conversion clock and random source
+	// ResponsesDelivered observes an entire converted JSON response after the
+	// client write succeeds. Other client protocols and streamed replies skip it.
+	ResponsesDelivered func([]byte)
+	Runtime            bridge.Runtime // conversion clock and random source
 	// ProviderID identifies the selected provider in raw-stream truncation
 	// diagnostics; a nil gateway provider leaves it zero without disabling bound
 	// output callbacks.
@@ -393,7 +396,7 @@ func ReadCCAsResponsesBuffered(c *upstream.OutputContext, resp *http.Response, o
 	options.CacheOutput(responsesResp.Output)
 
 	options.Headers(c.Writer.Header(), resp.Header)
-	c.JSON(http.StatusOK, responsesResp)
+	c.JSONObserved(http.StatusOK, responsesResp, options.ResponsesDelivered)
 
 	return &CompatResponseResult{
 		RequestID:       requestID,

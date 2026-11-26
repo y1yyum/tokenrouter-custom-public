@@ -8,6 +8,7 @@ import (
 	"go.uber.org/zap"
 
 	"github.com/TokenFlux/TokenRouter/internal/scheduler"
+	"github.com/TokenFlux/TokenRouter/internal/upstream/openai"
 )
 
 // selected_provider_slot.go acquires or adopts selected-provider capacity and
@@ -66,8 +67,9 @@ type ProviderSlotHooks struct {
 // CompleteBeforeRelease retains it until caller cleanup.
 //
 // A waiting selection gets an immediate acquisition attempt before queue
-// admission. Queue-counter failure is logged and acquisition continues; denied
-// admission ends with 429. Successful waiting removes its owned wait count
+// admission. Queue-counter failure is logged and acquisition continues. A full
+// queue ends with 429, or 503 when a strict constraint limits routing.
+// Successful waiting removes its owned wait count
 // before reporting acquisition and binding stickiness. Sticky-binding failure
 // remains diagnostic, and an already acquired selection keeps the scheduler's
 // existing binding. Nonnil returned releases are idempotent across cancellation
@@ -104,7 +106,15 @@ func AcquireSelectedProviderSlot(c *gin.Context, groupID *int64, sessionHash str
 		selection.WaitPlan.MaxConcurrency,
 	)
 	if err != nil {
+		// The Responses send owner presents its absolute deadline. Returning
+		// before capacity output keeps a local timeout from becoming a provider rejection.
+		if context.Cause(ctx) == openai.ErrResponsesDeadline {
+			return nil, false
+		}
 		reqLog.Warn("openai.provider_slot_quick_acquire_failed", zap.Int64("provider_id", providerID), zap.Error(err))
+		if WriteStrictParameterCapacityError(c, streamStarted != nil && *streamStarted) {
+			return nil, false
+		}
 		status, errType, code, message := ConcurrencyErrorResponse(err, "provider")
 		writeError(status, errType, code, message)
 		return nil, false
@@ -130,6 +140,9 @@ func AcquireSelectedProviderSlot(c *gin.Context, groupID *int64, sessionHash str
 			zap.Int64("provider_id", providerID),
 			zap.Int("max_waiting", selection.WaitPlan.MaxWaiting),
 		)
+		if WriteStrictParameterCapacityError(c, streamStarted != nil && *streamStarted) {
+			return nil, false
+		}
 		writeError(http.StatusTooManyRequests, "rate_limit_error", GatewayQueueFullCode, "Too many pending requests, please retry later")
 		return nil, false
 	}
@@ -154,7 +167,13 @@ func AcquireSelectedProviderSlot(c *gin.Context, groupID *int64, sessionHash str
 		streamStarted,
 	)
 	if err != nil {
+		if context.Cause(ctx) == openai.ErrResponsesDeadline {
+			return nil, false
+		}
 		reqLog.Warn("openai.provider_slot_acquire_failed", zap.Int64("provider_id", providerID), zap.Error(err))
+		if WriteStrictParameterCapacityError(c, streamStarted != nil && *streamStarted) {
+			return nil, false
+		}
 		status, errType, code, message := ConcurrencyErrorResponse(err, "provider")
 		writeError(status, errType, code, message)
 		return nil, false
