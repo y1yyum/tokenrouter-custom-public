@@ -2,6 +2,8 @@
 """Select pre-push checks from changes relative to a Git base."""
 import argparse
 import os
+import posixpath
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -107,7 +109,7 @@ def go_test_packages(directories):
         ['go', 'list', '-e', '-f', '{{if or .GoFiles .TestGoFiles .XTestGoFiles}}{{.Dir}}{{end}}',
          *['./' + d for d in directories]],
         cwd=ROOT / 'backend', text=True)
-    return ['./' + os.path.relpath(d, ROOT / 'backend') for d in output.split()]
+    return ['./' + Path(d).relative_to(ROOT / 'backend').as_posix() for d in output.splitlines()]
 
 
 def plan(files, base, go_packages=go_test_packages):
@@ -191,7 +193,7 @@ def plan(files, base, go_packages=go_test_packages):
             # complete suite checks consumers that related-file selection could miss.
             commands.append(('.', [*pnpm, 'run', 'test:run']))
         else:
-            related = [os.path.relpath(ROOT / f, ROOT / 'frontend') for f in frontend + locale]
+            related = [posixpath.relpath(f, 'frontend') for f in frontend + locale]
             if related:
                 commands.append(('.', [*pnpm, 'exec', 'vitest', 'related', '--run', '--passWithNoTests', *related]))
 
@@ -212,6 +214,14 @@ def run(commands):
     started = time.monotonic()
     for directory, args in commands:
         print('==> ' + ('' if directory == '.' else '(' + directory + ') ') + ' '.join(args), flush=True)
+        # Git for Windows supplies Bash on PATH. The system launcher with the same
+        # name enters WSL, where the selected native toolchain may be unavailable.
+        if os.name == 'nt' and args[0] == 'bash':
+            args = [shutil.which('bash') or 'bash', *args[1:]]
+        if os.name == 'nt' and args[0] == 'pnpm':
+            # Forward argument boundaries through the pnpm shell shim, including
+            # filenames containing whitespace or shell metacharacters.
+            args = [shutil.which('bash') or 'bash', '-c', 'exec pnpm "$@"', 'pnpm', *args[1:]]
         code = subprocess.call(args, cwd=ROOT / directory)
         if code:
             print('快检失败。修复后重新推送；确需跳过时使用 git push --no-verify。', file=sys.stderr)

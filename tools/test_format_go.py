@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """在临时 Git 仓库中验证格式化范围和真实 golangci-lint 行为。"""
 
+import os
 from pathlib import Path
 import shutil
 import subprocess
@@ -49,7 +50,7 @@ class FormatGoTest(unittest.TestCase):
     def write(self, name, source):
         path = self.root / name
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(source)
+        path.write_text(source, encoding="utf-8", newline="\n")
 
     def run_formatter(self, *args):
         return subprocess.run(
@@ -65,19 +66,19 @@ class FormatGoTest(unittest.TestCase):
         self.write("unstaged.go", SOURCE + "var Other=4\n")
         self.git("mv", "renamed.go", "with space.go")
         (self.root / "deleted.go").unlink()
-        self.write("new\nfile.go", SOURCE)
+        untracked = "new file.go" if os.name == "nt" else "new\nfile.go"
+        self.write(untracked, SOURCE)
         self.write("backend/ent/schema/item.go", SOURCE)
         self.write("generated.go", GENERATED + "var Generated=2\n")
         self.write("new_generated.go", GENERATED)
         self.write("vendor/dependency.go", SOURCE)
         self.write("node_modules/dependency.go", SOURCE)
-        (self.root / "linked.go").symlink_to("unchanged.go")
         self.write(".gitignore", "ignored.go\n")
         self.write("ignored.go", SOURCE)
 
-        selected = {str(path.relative_to(self.root)) for path in changed_go_files(self.root)}
+        selected = {path.relative_to(self.root).as_posix() for path in changed_go_files(self.root)}
         self.assertEqual(selected, {
-            "staged.go", "unstaged.go", "with space.go", "new\nfile.go",
+            "staged.go", "unstaged.go", "with space.go", untracked,
             "backend/ent/schema/item.go",
         })
         before = {path: path.read_bytes() for path in self.root.rglob("*.go") if path.is_file()}
@@ -88,10 +89,23 @@ class FormatGoTest(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(self.git("show", ":staged.go"), staged)
         for path, content in before.items():
-            if str(path.relative_to(self.root)) not in selected:
+            if path.relative_to(self.root).as_posix() not in selected:
                 self.assertEqual(path.read_bytes(), content)
         result = self.run_formatter("--check")
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_symlink_excluded_from_formatting(self):
+        """The formatter must leave linked Go sources outside its write set.
+        Windows runners need link creation privileges to construct this fixture.
+        """
+        link = self.root / "linked.go"
+        try:
+            link.symlink_to("unchanged.go")
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest(str(error))
+            raise
+        self.assertNotIn(link, changed_go_files(self.root))
 
     def test_clean_checkout_uses_commit_base(self):
         base = self.git("rev-parse", "HEAD").decode().strip()
@@ -168,7 +182,7 @@ func Read() int { return limit }
         self.write("lintfixture/go.mod", "module example.com/formatfixture\n\ngo 1.27.0\n")
         self.write("lintfixture/value.go", "package sample\n\nfunc Read() int {\n\n\treturn 1\n\n}\n")
         result = subprocess.run(
-            ["bash", str(self.root / "tools/golangci-lint.sh"), "run",
+            [shutil.which("bash") or "bash", (self.root / "tools/golangci-lint.sh").as_posix(), "run",
              "--config", str(self.root / "backend/.golangci.yml"), "--timeout=2m", "./..."],
             cwd=self.root / "lintfixture", capture_output=True, text=True,
         )
