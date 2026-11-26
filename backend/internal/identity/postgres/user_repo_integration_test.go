@@ -5,6 +5,7 @@ package postgres
 import (
 	"context"
 	"fmt"
+	"slices"
 	"testing"
 	"time"
 
@@ -75,8 +76,8 @@ func TestUserListSearchAndActivityOrder(t *testing.T) {
 		order string  // requested activity sort direction
 		want  []int64 // expected sorted account identifiers
 	}{
-		{"asc", []int64{ids[2], ids[0], ids[1]}},
-		{"desc", []int64{ids[1], ids[0], ids[2]}},
+		{"asc", []int64{ids[2], min(ids[0], ids[1]), max(ids[0], ids[1])}},
+		{"desc", []int64{max(ids[0], ids[1]), min(ids[0], ids[1]), ids[2]}},
 	} {
 		for i, id := range tc.want {
 			got, total, err := store.ListWithFilters(ctx, pagination.PaginationParams{Page: i + 1, PageSize: 1, SortBy: "last_used_at", SortOrder: tc.order}, identity.UserListFilters{IncludeSubscriptions: &noSubscriptions})
@@ -130,6 +131,7 @@ func TestUserListSearchAndActivityOrder(t *testing.T) {
 			}
 			want = append(want, id)
 		}
+		slices.Sort(want)
 		got, total, err := store.ListWithFilters(ctx, pagination.PaginationParams{Page: 1, PageSize: 100, SortBy: "id", SortOrder: "asc"}, filters)
 		require.NoError(t, err)
 		for _, row := range got {
@@ -155,12 +157,14 @@ func TestUserRechargeMultiplierPersistenceAndOrdering(t *testing.T) {
 		ids = append(ids, row.ID)
 	}
 	noSubscriptions := false
+	lowRateTie, highRateTie := min(ids[1], ids[3]), max(ids[1], ids[3])
+	lowNullTie, highNullTie := min(ids[0], ids[4]), max(ids[0], ids[4])
 	for _, tc := range []struct {
 		order string  // requested numeric sort direction
 		ids   []int64 // expected stable pagination sequence
 	}{
-		{"asc", []int64{ids[2], ids[1], ids[3], ids[0], ids[4]}},
-		{"desc", []int64{ids[3], ids[1], ids[2], ids[4], ids[0]}},
+		{"asc", []int64{ids[2], lowRateTie, highRateTie, lowNullTie, highNullTie}},
+		{"desc", []int64{highRateTie, lowRateTie, ids[2], highNullTie, lowNullTie}},
 	} {
 		for page, id := range tc.ids {
 			rows, total, err := store.ListWithFilters(ctx, pagination.PaginationParams{Page: page + 1, PageSize: 1, SortBy: "balance_recharge_multiplier", SortOrder: tc.order}, identity.UserListFilters{IncludeSubscriptions: &noSubscriptions})

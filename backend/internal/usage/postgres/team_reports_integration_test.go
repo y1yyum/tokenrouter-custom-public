@@ -96,8 +96,14 @@ func (s *UsageLogRepoSuite) TestTeamReportsAnalyticsParity() {
 				s.Require().Equal(member.ID, gotMembers[0].ActorUserID)
 			} else {
 				s.Require().Len(gotMembers, 4)
-				s.Require().Equal("left", gotMembers[2].Status)
-				s.Require().Zero(gotMembers[3].Summary.RequestCount)
+				byActor := make(map[int64]team.TeamMemberUsageSeries, len(gotMembers))
+				for _, row := range gotMembers {
+					byActor[row.ActorUserID] = row
+				}
+				s.Require().Contains(byActor, former.ID)
+				s.Require().Contains(byActor, empty.ID)
+				s.Require().Equal("left", byActor[former.ID].Status)
+				s.Require().Zero(byActor[empty.ID].Summary.RequestCount)
 			}
 		}
 	}
