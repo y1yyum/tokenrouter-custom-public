@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -10,9 +11,79 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/tidwall/gjson"
 
+	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	httpapitestkit "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi/testkit"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/tierpolicy"
 )
+
+// TestResponsesCompatibilityFinalError uses a previously populated writer to
+// verify that terminal status and retry guidance describe only the classified
+// final attempt. The observer and the HTTP response must report the same code.
+func TestResponsesCompatibilityFinalError(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		retry   []string
+		want    string
+		outcome string
+	}{
+		{"overload", http.StatusServiceUnavailable, []string{"45"}, "45", responsecompat.OutcomeOverload503},
+		{"timeout", http.StatusGatewayTimeout, nil, "", responsecompat.OutcomeTimeout504},
+		{"protocol", http.StatusBadGateway, []string{"invalid"}, "", responsecompat.OutcomeProtocol502},
+		{"ambiguous", http.StatusServiceUnavailable, []string{"10", "20"}, "", responsecompat.OutcomeOverload503},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, EndpointResponses, nil)
+			cohort := &compatibilityCohort{}
+			c.Set(responsesCohortKey, cohort)
+			c.Header("Retry-After", "9")
+			failure := ProjectOpenAIFailoverError(&forwardcore.UpstreamFailoverError{
+				Reason: forwardcore.OpenAIResponsesCompatibilityReason, StatusCode: tc.status,
+				ResponseHeaders: http.Header{"Retry-After": tc.retry},
+			})
+			observed := 0
+			hooks := FailoverErrorHooks{Upstream: func(_ *gin.Context, status int, _ string) { observed = status }}
+			DefaultOpenAIErrorOutput().WriteFailoverExhausted(c, failure, false, nil, hooks)
+			require.Equal(t, tc.status, observed)
+			require.Equal(t, tc.status, recorder.Code)
+			require.Equal(t, tc.want, recorder.Header().Get("Retry-After"))
+			require.Equal(t, "upstream_error", gjson.Get(recorder.Body.String(), "error.type").String())
+			before := recorder.Body.String()
+			cancel()
+			DefaultOpenAIErrorOutput().WriteFailoverExhausted(c, failure, false, nil, hooks)
+			require.Equal(t, before, recorder.Body.String())
+			require.Equal(t, tc.outcome, cohort.delivered)
+		})
+	}
+}
+
+// TestResponsesCompatibilityCanceledError records a canceled delivery without
+// losing the classified upstream status. Gin retains 499 for access logging
+// while the writer receives no JSON or SSE bytes.
+func TestResponsesCompatibilityCanceledError(t *testing.T) {
+	recorder := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(recorder)
+	ctx, cancel := context.WithCancel(t.Context())
+	c.Request = httptest.NewRequestWithContext(ctx, http.MethodPost, EndpointResponses, nil)
+	cohort := &compatibilityCohort{}
+	c.Set(responsesCohortKey, cohort)
+	cancel()
+	failure := ProjectOpenAIFailoverError(&forwardcore.UpstreamFailoverError{
+		Reason: forwardcore.OpenAIResponsesCompatibilityReason, StatusCode: http.StatusGatewayTimeout,
+	})
+	observed := 0
+	hooks := FailoverErrorHooks{Upstream: func(_ *gin.Context, status int, _ string) { observed = status }}
+	DefaultOpenAIErrorOutput().WriteFailoverExhausted(c, failure, true, nil, hooks)
+	require.Equal(t, http.StatusGatewayTimeout, observed)
+	require.Equal(t, StatusClientClosedRequest, c.Writer.Status())
+	require.Empty(t, recorder.Body.String())
+	require.Equal(t, responsecompat.OutcomeClientGone, cohort.delivered)
+}
 
 // TestWriteOpenAIFastPolicyBlockedResponse_AfterKeepaliveCommit waits for a
 // Compact heartbeat before a fast-tier rejection. It checks HTTP 200 and one

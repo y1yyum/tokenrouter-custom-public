@@ -47,6 +47,10 @@ type ResponseOutcome struct {
 	Images              bool // partial-image completion path selected
 	NativePartial       bool // native partial-result completion selected
 	FirstOutputRecovery bool // failure eligible for first-output allowance
+	// ReplayClosed prevents every outer recovery path, including group fallback
+	// before RetryReady. A converted attempt can have irrevocable upstream work
+	// while the buffered downstream response still has no committed bytes.
+	ReplayClosed bool
 }
 
 // ResponseOptions controls ordinary switching and the additional allowance for
@@ -54,6 +58,7 @@ type ResponseOutcome struct {
 type ResponseOptions struct {
 	MaxSwitches       int  // ordinary provider-switch budget
 	FirstOutputBudget bool // enable separate first-output failure allowance
+	legacyRetryOutput bool // Chat and Messages adapters write when their retry check fails
 }
 
 // ResponsePorts supplies serial attempt, output and completion operations for
@@ -88,13 +93,12 @@ type ResponsePorts interface {
 	// handling.
 	Forward() ResponseOutcome
 	// PartialImages handles the forwarding error accompanying retained image
-	// output before completion. The loop proceeds to Success and Complete
-	// afterward, so the adapter keeps the partial image observations available to
-	// those operations.
+	// output before completion. Responses preserves these observations on its
+	// failure path. Other entry kinds retain their existing partial-output policy.
 	PartialImages(error)
 	// RetryReady reports whether a classified failure remains safe to replay for
-	// this request. Implementations reject closed output windows and own final
-	// failure handling on false, after which the loop returns.
+	// this request. The Responses adapter returns its decision before the loop
+	// chooses final output. Chat and Messages retain their adapter-owned output.
 	RetryReady(*AttemptFailure) bool
 	// RetryWait observes a same-provider retry with its effective limit, new retry
 	// count and selected delay. The loop performs the context-aware wait
@@ -103,7 +107,7 @@ type ResponsePorts interface {
 	RetryWait(*AttemptFailure, int, int, time.Duration)
 	// Exhausted handles the final classified failure after retry or switch
 	// allowances end. The adapter writes output appropriate to the current request
-	// state, and the loop performs no completion after this path.
+	// state. The loop passes retained Responses results to completion afterward.
 	Exhausted(*AttemptFailure)
 	// Switched records the selected ordinary switch before its budget is checked.
 	// It can therefore run for the final exhausted failure, and funds completion
@@ -143,11 +147,11 @@ type ResponsePorts interface {
 //
 // Unsupported continuation skips exclude candidates before ordinary accounting.
 // Accepted group fallback clears local exclusions and same-provider counts
-// while retaining global counters and OAuth limiting state. Native partial
-// results complete through the failure path, and partial image results reach
-// retained-output completion. Ordinary classified failures retry or switch only
-// within their applicable allowances; success and retained images finish with
-// completion and their ordinary switch count.
+// while retaining global counters and OAuth limiting state. Responses partial
+// work is retained on failure without reporting provider success. The final
+// error is presented before a retained result is handed to completion. An
+// intermediate attempt may spend recovery allowances without writing output or
+// submitting completion.
 func RunResponses(options ResponseOptions, p ResponsePorts) {
 	served := false
 	if lifecycle, ok := p.(interface {
@@ -168,9 +172,34 @@ func RunResponses(options ResponseOptions, p ResponsePorts) {
 	sameProvider := make(map[int64]int)
 	switches, firstOutputSwitches := 0, 0
 	var last *AttemptFailure
+	// A retry in progress can terminate before another exchange starts. Retain
+	// its failure through cancellation so the adapter can observe that exit.
+	var retrying ResponseOutcome
 	var oauth failover.OAuth429State
+	finishFailure := func(outcome ResponseOutcome) {
+		served = outcome.Attempt.Served || outcome.NativePartial || outcome.Images
+		if outcome.Images {
+			p.PartialImages(outcome.Err)
+		}
+		if outcome.Failure != nil {
+			p.Exhausted(outcome.Failure)
+		} else {
+			p.OtherFailure(outcome.Err)
+		}
+		if outcome.HasResult {
+			p.Complete()
+		}
+		p.Failed()
+	}
+	finishClassified := finishFailure
+	if options.legacyRetryOutput {
+		finishClassified = func(outcome ResponseOutcome) { p.Exhausted(outcome.Failure) }
+	}
 	for {
 		if !p.CanAttempt() {
+			if retrying.Failure != nil {
+				finishFailure(retrying)
+			}
 			return
 		}
 		selected, err := p.Select(excluded)
@@ -183,19 +212,28 @@ func RunResponses(options ResponseOptions, p ResponsePorts) {
 		}
 		if selected.Skip != nil {
 			excluded[selected.Provider.ID] = struct{}{}
-			last = selected.Skip
+			if retrying.Failure == nil {
+				last = selected.Skip
+			}
 			continue
 		}
 		if !p.Acquire() {
 			return
 		}
 		outcome := p.Forward()
+		retrying = ResponseOutcome{}
 		// Preparation can return a pricing rejection after writing its local client
 		// error. Stop here before retry, provider-success feedback or completion capture.
 		if outcome.Stop || errors.Is(outcome.Err, admission.ErrModelPricingRejected) {
 			return
 		}
 		if outcome.Err != nil {
+			if outcome.ReplayClosed || (!options.legacyRetryOutput && (outcome.NativePartial || outcome.Images || outcome.Attempt.HasUsage || !p.CanAttempt())) {
+				// Observed work remains available for completion after final error
+				// delivery. Neither group fallback nor provider retry can replay it.
+				finishFailure(outcome)
+				return
+			}
 			if fallback, ok := p.(interface {
 				// TryGroupFallback handles group recovery and returns handled/retry
 				// decisions. Handled false leaves ordinary failure processing available;
@@ -228,17 +266,24 @@ func RunResponses(options ResponseOptions, p ResponsePorts) {
 				if outcome.Failure != nil {
 					failure := outcome.Failure
 					if !p.RetryReady(failure) {
+						if !options.legacyRetryOutput {
+							finishFailure(outcome)
+						}
 						return
 					}
 					if failure.Policy == nil || !failure.Policy.RetryNext {
-						p.Exhausted(failure)
+						finishClassified(outcome)
 						return
 					}
 					// Eligible first-output failures spend their separate allowance before
 					// same-provider recovery, so repeated retries cannot renew that failure opportunity.
 					if options.FirstOutputBudget && failover.FirstOutputExhausted(outcome.FirstOutputRecovery, &firstOutputSwitches) {
-						p.Exhausted(failure)
+						finishClassified(outcome)
 						return
+					}
+					if !options.legacyRetryOutput {
+						retrying = outcome
+						last = failure
 					}
 					retryLimit := failover.EffectiveSameProviderRetryLimit(failure.Policy, selected.RetryLimit)
 					if failure.Policy.RetryableOnSameProvider && failover.SameProviderRetryAllowed(failure.Policy, sameProvider[selected.Provider.ID], retryLimit) {
@@ -257,6 +302,9 @@ func RunResponses(options ResponseOptions, p ResponsePorts) {
 						// Attempt cleanup belongs to the adapter before this delay. If the wait
 						// observes cancellation, return before another selection can start this recovery.
 						if !failover.SleepWithContext(p.Context(), delay) {
+							if !options.legacyRetryOutput {
+								finishFailure(outcome)
+							}
 							return
 						}
 						continue
@@ -274,16 +322,20 @@ func RunResponses(options ResponseOptions, p ResponsePorts) {
 					excluded[selected.Provider.ID] = struct{}{}
 					last = failure
 					if switches >= options.MaxSwitches {
-						p.Exhausted(failure)
+						finishClassified(outcome)
 						return
 					}
 					switches++
 					if failover.StopOAuth429(selected.OAuth, failure.Policy.StatusCode, switches, &oauth) {
-						p.Exhausted(failure)
+						finishClassified(outcome)
 						return
 					}
 					p.Switching(failure, switches, options.MaxSwitches)
 					continue
+				}
+				if !options.legacyRetryOutput {
+					finishFailure(outcome)
+					return
 				}
 				p.OtherFailure(outcome.Err)
 				p.Complete()

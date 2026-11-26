@@ -1,7 +1,11 @@
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
+import { defineComponent, h } from 'vue'
 
+import { useDesktopTableViewport } from '@/composables/useDesktopTableViewport'
+import { TABLE_DESKTOP_MEDIA_QUERY } from '@/constants/layout'
 import DataTable from '../DataTable.vue'
+import type { Column } from '../types'
 
 // DataTable.spec.ts checks responsive rendering, sorting, selection, and virtual
 // measurement ownership. Mounted tables and local browser stubs reproduce
@@ -10,7 +14,7 @@ import DataTable from '../DataTable.vue'
 
 vi.mock('vue-i18n', () => ({
   useI18n: () => ({
-    t: (key: string) => key,
+    t: (key: string, fallback?: string) => (typeof fallback === 'string' ? fallback : key),
   }),
 }))
 
@@ -49,6 +53,33 @@ const stubMobileMatchMedia = () => {
   })
 }
 
+// These columns pair fixed controls with unequal data widths and provide both
+// header layouts for server-side and client-side sorting tests.
+const compactColumns: Column[] = [
+  { key: 'select', label: '', width: '44px' },
+  {
+    key: 'identity',
+    label: 'Identity',
+    width: '200px',
+    sortOptions: [
+      { key: 'name', label: 'Name' },
+      { key: 'id', label: 'ID' },
+    ],
+    subtitleSortLayout: 'inline',
+  },
+  {
+    key: 'groups',
+    label: 'Groups',
+    width: '100px',
+    sortOptions: [
+      { key: 'priority', label: 'Priority' },
+      { key: 'rate_multiplier', label: 'Rate' },
+    ],
+    subtitleSortLayout: 'subline',
+  },
+  { key: 'actions', label: 'Actions', width: '106px' },
+]
+
 describe('DataTable', () => {
   beforeEach(() => {
     stubDesktopMatchMedia()
@@ -68,6 +99,79 @@ describe('DataTable', () => {
 
     expect(window.matchMedia).toHaveBeenCalledWith('(min-width: 1024px)')
     wrapper.unmount()
+  })
+
+  // A responsive cell and its table share one browser breakpoint subscription.
+  // Crossing into cards and back must restore the desktop width and drag handles.
+  it('switches with responsive cells and measures the remounted desktop wrapper', async () => {
+    let desktop = true
+    let clientWidth = 800
+    const listeners = new Set<(event: MediaQueryListEvent) => void>()
+    const matchMedia = vi.mocked(window.matchMedia)
+    const previousMatchMedia = matchMedia.getMockImplementation()!
+    matchMedia.mockImplementation((query) => {
+      const media = previousMatchMedia(query)
+      if (query !== TABLE_DESKTOP_MEDIA_QUERY) return media
+      return {
+        ...media,
+        matches: desktop,
+        addEventListener: (_type, listener) =>
+          listeners.add(listener as (event: MediaQueryListEvent) => void),
+        removeEventListener: (_type, listener) =>
+          listeners.delete(listener as (event: MediaQueryListEvent) => void),
+      }
+    })
+    const widthSpy = vi.spyOn(HTMLElement.prototype, 'clientWidth', 'get')
+    widthSpy.mockImplementation(() => clientWidth)
+
+    // ResponsiveCell uses the shared breakpoint just like a provider usage cell.
+    const ResponsiveCell = defineComponent({
+      setup() {
+        const isDesktop = useDesktopTableViewport()
+        return () => h('span', isDesktop.value ? 'Desktop cell' : 'Card cell')
+      },
+    })
+    const wrapper = mount(DataTable, {
+      props: {
+        columns: compactColumns,
+        columnOrderStorageKey: 'compact-order',
+        density: 'compact',
+        data: [{ id: 1, name: 'Key' }],
+      },
+      slots: { 'cell-identity': () => h(ResponsiveCell) },
+    })
+
+    // changeViewport delivers the browser breakpoint event to every subscriber.
+    const changeViewport = async (matches: boolean, width: number) => {
+      desktop = matches
+      clientWidth = width
+      for (const listener of [...listeners]) {
+        listener({ matches, media: TABLE_DESKTOP_MEDIA_QUERY } as MediaQueryListEvent)
+      }
+      await flushPromises()
+    }
+
+    try {
+      await flushPromises()
+      expect(listeners.size).toBe(1)
+      expect(wrapper.get('table').element.style.width).toBe('800px')
+      expect(wrapper.findAll('.column-drag-handle')).toHaveLength(2)
+      expect(wrapper.text()).toContain('Desktop cell')
+
+      await changeViewport(false, 320)
+      expect(wrapper.find('table').exists()).toBe(false)
+      expect(wrapper.find('.column-drag-handle').exists()).toBe(false)
+      expect(wrapper.text()).toContain('Card cell')
+
+      await changeViewport(true, 350)
+      expect(listeners.size).toBe(1)
+      expect(wrapper.get('table').element.style.width).toBe('450px')
+      expect(wrapper.findAll('.column-drag-handle')).toHaveLength(2)
+      expect(wrapper.text()).toContain('Desktop cell')
+    } finally {
+      wrapper.unmount()
+      widthSpy.mockRestore()
+    }
   })
 
   // A pending mobile table shares field headings with its loaded cards. Values
@@ -136,6 +240,258 @@ describe('DataTable', () => {
     expect(nameHeader.attributes('aria-sort')).toBe('descending')
     expect(nameHeader.findAll('svg')[0].classes()).toContain('text-gray-300')
     expect(nameHeader.findAll('svg')[1].classes()).toContain('text-primary-600')
+  })
+
+  // Compact widths use the scrollport rather than the viewport. Changing its
+  // width or the visible columns redistributes only surplus data-cell space.
+  it('sizes compact columns from the container and preserves fixed widths', async () => {
+    vi.stubGlobal('ResizeObserver', undefined)
+    const wrapper = mount(DataTable, {
+      props: { density: 'compact', columns: compactColumns, data: [{ id: 1, name: 'Key' }] },
+    })
+
+    try {
+      await flushPromises()
+      const scrollport = wrapper.get('.table-wrapper').element
+      const table = wrapper.get('table')
+      // readColumnWidths returns the allocated track sizes in rendered column order.
+      const readColumnWidths = () =>
+        wrapper.findAll('col').map(({ element }) => element.style.width)
+      // resizeScrollport simulates the width left after reserving the scrollbar.
+      const resizeScrollport = async (clientWidth: number, scrollWidth: number) => {
+        Object.defineProperties(scrollport, {
+          clientWidth: { configurable: true, value: clientWidth },
+          scrollWidth: { configurable: true, value: scrollWidth },
+        })
+        window.dispatchEvent(new Event('resize'))
+        await wrapper.vm.$nextTick()
+      }
+
+      expect(table.classes()).toContain('table-fixed')
+      expect(table.classes()).not.toContain('min-w-max')
+      expect(wrapper.get('td[data-column-key="select"]').classes()).toContain(
+        'table-selection-cell',
+      )
+      expect(wrapper.get('td[data-column-key="identity"]').classes()).toEqual(
+        expect.arrayContaining(['px-2', 'py-2', 'whitespace-normal']),
+      )
+      await resizeScrollport(901, 901)
+      expect(table.element.style.width).toBe('901px')
+      expect(readColumnWidths()).toEqual(['44px', '501px', '250px', '106px'])
+      expect(wrapper.classes()).not.toContain('is-scrollable')
+
+      await resizeScrollport(400, 450)
+      expect(table.element.style.width).toBe('450px')
+      expect(readColumnWidths()).toEqual(['44px', '200px', '100px', '106px'])
+      expect(wrapper.classes()).toContain('is-scrollable')
+
+      await wrapper.setProps({ columns: compactColumns.filter(({ key }) => key !== 'groups') })
+      await resizeScrollport(400, 400)
+      expect(table.element.style.width).toBe('400px')
+      expect(readColumnWidths()).toEqual(['44px', '250px', '106px'])
+      expect(wrapper.classes()).not.toContain('is-scrollable')
+    } finally {
+      wrapper.unmount()
+      vi.unstubAllGlobals()
+    }
+  })
+
+  // An existing standard table supplies pixel widths. Its header hints and
+  // conventional padding remain available without introducing fixed tracks.
+  it('keeps standard sizing when density is omitted', () => {
+    const wrapper = mount(DataTable, {
+      props: {
+        columns: [{ key: 'name', label: 'Name', width: '200px' }],
+        data: [{ id: 1, name: 'Key' }],
+      },
+    })
+    expect(wrapper.find('colgroup').exists()).toBe(false)
+    expect(wrapper.get('table').classes()).toContain('min-w-max')
+    expect(wrapper.get('th').element.style.width).toBe('200px')
+    expect(wrapper.get('td').classes()).toEqual(expect.arrayContaining(['px-6', 'py-3']))
+    wrapper.unmount()
+  })
+
+  // A composite header combines native sort controls, a separate group title,
+  // and independent help. Activating either sort label changes only its own key.
+  it('sorts compact sub-fields independently and announces only the active direction', async () => {
+    const wrapper = mount(DataTable, {
+      props: {
+        density: 'compact',
+        columns: compactColumns,
+        data: [{ id: 1, name: 'Key' }],
+        defaultSortKey: 'name',
+        serverSideSort: true,
+      },
+      slots: { 'header-groups': '<span>Groups</span><button type="button">Help</button>' },
+    })
+    await wrapper.vm.$nextTick()
+    const identity = wrapper.get('th[data-column-key="identity"]')
+    const groups = wrapper.get('th[data-column-key="groups"]')
+    const [name, id] = identity.findAll('button')
+    const [help, priority, rate] = groups.findAll('button')
+    expect(identity.text()).not.toContain('Identity')
+    expect(groups.text()).toMatch(/Groups.*Priority/)
+    expect(identity.attributes('aria-sort')).toBe('ascending')
+    expect(groups.attributes('aria-sort')).toBeUndefined()
+    expect(name.attributes('aria-label')).toBe('Name (Ascending)')
+    expect(name.findAll('svg')).toHaveLength(1)
+    expect(id.find('svg').exists()).toBe(false)
+    expect(rate.find('svg').exists()).toBe(false)
+
+    await groups.trigger('click')
+    await groups.get('span').trigger('click')
+    await help.trigger('click')
+    expect(wrapper.emitted('sort')).toBeUndefined()
+
+    expect(priority.attributes('type')).toBe('button')
+    await id.trigger('click')
+    await priority.trigger('click')
+    await priority.get('svg').trigger('click')
+    expect(priority.attributes('aria-label')).toBe('Priority (Descending)')
+    expect(groups.attributes('aria-sort')).toBe('descending')
+    expect(identity.attributes('aria-sort')).toBeUndefined()
+    expect(identity.find('svg').exists()).toBe(false)
+    expect(wrapper.emitted('sort')).toEqual([
+      ['id', 'asc'],
+      ['priority', 'asc'],
+      ['priority', 'desc'],
+    ])
+    wrapper.unmount()
+  })
+
+  // Storage contains a sub-option rather than its visual column key. When the
+  // key vanishes, the table overwrites the preference and emits one fallback.
+  it('restores composite sorting and falls back once when the active option is removed', async () => {
+    const props = {
+      density: 'compact' as const,
+      columns: compactColumns,
+      data: [{ id: 1, name: 'Key' }],
+      sortStorageKey: 'compact-sort',
+      defaultSortKey: 'name',
+      defaultSortOrder: 'desc' as const,
+      serverSideSort: true,
+    }
+    const first = mount(DataTable, { props })
+    const rateButton = first.get('button[aria-label="Rate"]')
+    await rateButton.trigger('click')
+    await rateButton.trigger('click')
+    first.unmount()
+
+    const wrapper = mount(DataTable, { props })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('button[aria-label="Rate (Descending)"]').exists()).toBe(true)
+    expect(wrapper.emitted('sort')).toBeUndefined()
+
+    await wrapper.setProps({ columns: compactColumns.filter(({ key }) => key !== 'actions') })
+    expect(wrapper.emitted('sort')).toBeUndefined()
+    const withoutRate = compactColumns.map((column) =>
+      column.key === 'groups'
+        ? { ...column, sortOptions: column.sortOptions?.slice(0, 1) }
+        : column,
+    )
+    await wrapper.setProps({ columns: withoutRate })
+    expect(wrapper.emitted('sort')).toEqual([['name', 'desc']])
+    expect(wrapper.get('th[data-column-key="identity"]').attributes('aria-sort')).toBe('descending')
+    expect(localStorage.getItem('compact-sort')).toBe(
+      JSON.stringify({ key: 'name', order: 'desc' }),
+    )
+
+    await wrapper.setProps({ columns: compactColumns })
+    expect(wrapper.find('button[aria-label="Rate"]').exists()).toBe(true)
+    expect(wrapper.find('button[aria-label="Name (Descending)"]').exists()).toBe(true)
+    expect(wrapper.emitted('sort')).toEqual([['name', 'desc']])
+    await wrapper.get('button[aria-label="Priority"]').trigger('click')
+    await wrapper.setProps({ columns: compactColumns.filter(({ key }) => key !== 'groups') })
+    expect(wrapper.emitted('sort')).toEqual([
+      ['name', 'desc'],
+      ['priority', 'asc'],
+      ['name', 'desc'],
+    ])
+    wrapper.unmount()
+  })
+
+  // A hidden persisted option can be stale on the first mount. The header
+  // repairs storage silently because initial server loading belongs to the parent.
+  it('repairs an unavailable restored key without emitting an initial sort', async () => {
+    localStorage.setItem('compact-sort', JSON.stringify({ key: 'priority', order: 'asc' }))
+    const wrapper = mount(DataTable, {
+      props: {
+        density: 'compact',
+        columns: compactColumns.filter(({ key }) => key !== 'groups'),
+        data: [],
+        sortStorageKey: 'compact-sort',
+        defaultSortKey: 'name',
+        serverSideSort: true,
+      },
+    })
+    await wrapper.vm.$nextTick()
+    expect(wrapper.find('button[aria-label="Name (Ascending)"]').exists()).toBe(true)
+    expect(localStorage.getItem('compact-sort')).toBe(JSON.stringify({ key: 'name', order: 'asc' }))
+    expect(wrapper.emitted('sort')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  // Client sorting uses the option's data key, which differs from the visual
+  // column key. Removing that column clears the saved choice without a request.
+  it('sorts client rows by the child key and clears storage without an available fallback', async () => {
+    const wrapper = mount(DataTable, {
+      props: {
+        density: 'compact',
+        columns: compactColumns,
+        data: [
+          { id: 1, identity: 'Entry one', name: 'Zeta' },
+          { id: 2, identity: 'Entry two', name: 'Alpha' },
+        ],
+        rowKey: 'id',
+        sortStorageKey: 'compact-sort',
+      },
+    })
+    await wrapper.get('button[aria-label="Name"]').trigger('click')
+    expect(wrapper.findAll('tbody tr').map((row) => row.attributes('data-row-id'))).toEqual([
+      '2',
+      '1',
+    ])
+
+    await wrapper.setProps({ columns: compactColumns.filter(({ key }) => key !== 'identity') })
+    expect(localStorage.getItem('compact-sort')).toBeNull()
+    expect(wrapper.find('[aria-sort]').exists()).toBe(false)
+    expect(wrapper.emitted('sort')).toBeUndefined()
+    wrapper.unmount()
+  })
+
+  // A compact card and its desktop counterpart receive the same row and value
+  // in each slot, including custom selection and the separately rendered actions.
+  it('passes the same cell slots and payloads to compact mobile cards', () => {
+    const options = {
+      props: {
+        density: 'compact' as const,
+        columns: compactColumns,
+        data: [{ id: 7, identity: 'Provider A', actions: 'edit' }],
+      },
+      slots: {
+        'cell-select': '<span data-test="custom-select">{{ params.row.id }}</span>',
+        'cell-identity': '<span data-test="custom-identity">{{ params.value }}</span>',
+        'cell-actions':
+          '<span data-test="custom-actions">{{ params.row.id }} {{ params.value }} {{ params.expanded }}</span>',
+      },
+    }
+    const desktop = mount(DataTable, options)
+    stubMobileMatchMedia()
+    const mobile = mount(DataTable, options)
+    expect(mobile.find('table').exists()).toBe(false)
+    expect(mobile.find('[data-field="identity"]').exists()).toBe(true)
+    for (const [slot, value] of [
+      ['custom-select', '7'],
+      ['custom-identity', 'Provider A'],
+      ['custom-actions', '7 edit false'],
+    ]) {
+      const selector = `[data-test="${slot}"]`
+      expect(mobile.get(selector).text()).toBe(value)
+      expect(desktop.get(selector).text()).toBe(value)
+    }
+    desktop.unmount()
+    mobile.unmount()
   })
 
   // A small dataset remains below the virtualization threshold. Every record

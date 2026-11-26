@@ -1,775 +1,867 @@
 <template>
-  <div ref="rootRef" v-if="showUsageWindows">
-    <!-- Anthropic OAuth and setup-token rows show observed provider usage. -->
-    <template
-      v-if="
-        provider.platform === 'anthropic' &&
-        (provider.type === 'oauth' || provider.type === 'setup-token')
-      "
-    >
-      <!-- Loading state -->
-      <div v-if="loading" class="space-y-1.5">
-        <!-- OAuth: 3 rows, Setup Token: 1 row -->
-        <div class="flex items-center gap-1">
-          <div class="skeleton h-3 w-[32px]"></div>
-          <div class="skeleton h-1.5 w-8 rounded-full"></div>
-          <div class="skeleton h-3 w-[32px]"></div>
-        </div>
-        <template v-if="provider.type === 'oauth'">
-          <div class="flex items-center gap-1">
-            <div class="skeleton h-3 w-[32px]"></div>
-            <div class="skeleton h-1.5 w-8 rounded-full"></div>
-            <div class="skeleton h-3 w-[32px]"></div>
-          </div>
-          <div class="flex items-center gap-1">
-            <div class="skeleton h-3 w-[32px]"></div>
-            <div class="skeleton h-1.5 w-8 rounded-full"></div>
-            <div class="skeleton h-3 w-[32px]"></div>
-          </div>
-        </template>
-      </div>
-
-      <!-- Error state -->
-      <div v-else-if="error" class="text-xs text-red-500">
-        {{ error }}
-      </div>
-
-      <!-- Usage data -->
-      <div v-else-if="usageInfo" class="space-y-1">
-        <!-- API error (degraded response) -->
-        <div
-          v-if="usageInfo.error"
-          class="text-xs text-amber-600 dark:text-amber-400 truncate max-w-[200px]"
-          :title="usageInfo.error"
-        >
-          {{ usageInfo.error }}
-        </div>
-        <!-- 5h Window -->
-        <UsageProgressBar
-          v-if="usageInfo.five_hour"
-          label="5h"
-          :utilization="usageInfo.five_hour.utilization"
-          :resets-at="usageInfo.five_hour.resets_at"
-          :window-stats="usageInfo.five_hour.window_stats"
-          color="indigo"
-        />
-
-        <!-- 7d Window (OAuth only) -->
-        <UsageProgressBar
-          v-if="usageInfo.seven_day"
-          label="7d"
-          :utilization="usageInfo.seven_day.utilization"
-          :resets-at="usageInfo.seven_day.resets_at"
-          color="emerald"
-        />
-
-        <!-- 7d Sonnet Window (OAuth only) -->
-        <UsageProgressBar
-          v-if="usageInfo.seven_day_sonnet"
-          label="7d S"
-          :utilization="usageInfo.seven_day_sonnet.utilization"
-          :resets-at="usageInfo.seven_day_sonnet.resets_at"
-          color="purple"
-        />
-
-        <!-- Fable-specific seven-day usage window. -->
-        <UsageProgressBar
-          v-if="usageInfo.seven_day_fable"
-          label="7d F"
-          :utilization="usageInfo.seven_day_fable.utilization"
-          :resets-at="usageInfo.seven_day_fable.resets_at"
-          color="amber"
-        />
-
-        <!-- Passive sampling label + active query button -->
-        <div class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start">
-          <span
-            v-if="usageInfo.source === 'passive'"
-            class="text-xs text-gray-400 dark:text-gray-500 italic"
-          >
-            {{ t('admin.providers.usageWindow.passiveSampled') }}
-          </span>
-          <button
-            type="button"
-            class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-500 dark:hover:bg-primary-500/8 transition-colors"
-            :disabled="activeQueryLoading"
-            @click="loadActiveUsage"
-          >
-            <Icon
-              name="refresh"
-              size="xs"
-              :class="{ 'animate-spin': activeQueryLoading }"
-              :stroke-width="2"
-            />
-            {{ t('admin.providers.usageWindow.activeQuery') }}
-          </button>
-        </div>
-      </div>
-
-      <!-- No data yet -->
-      <div v-else class="space-y-1">
-        <div class="text-xs text-gray-400">-</div>
-        <!-- Render the probe component in the empty observation branch; its own platform predicate decides whether an explicit quota probe applies. -->
-        <GrokQuotaProbeCell :provider="provider" />
-      </div>
-    </template>
-
-    <!-- OpenAI OAuth rows consume the provider usage response. -->
-    <template v-else-if="provider.platform === 'openai' && provider.type === 'oauth'">
-      <div v-if="hasOpenAIUsageFallback" class="space-y-1">
-        <UsageProgressBar
-          v-if="usageInfo?.five_hour"
-          label="5h"
-          :utilization="usageInfo.five_hour.utilization"
-          :resets-at="usageInfo.five_hour.resets_at"
-          :window-stats="usageInfo.five_hour.window_stats"
-          :show-now-when-idle="true"
-          color="indigo"
-        />
-        <UsageProgressBar
-          v-if="usageInfo?.seven_day"
-          label="7d"
-          :utilization="usageInfo.seven_day.utilization"
-          :resets-at="usageInfo.seven_day.resets_at"
-          :window-stats="usageInfo.seven_day.window_stats"
-          :show-now-when-idle="true"
-          color="emerald"
-        />
-        <OpenAIQuotaResetCell :provider="provider">
-          <template #pre-actions>
-            <button
-              type="button"
-              class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8"
-              :disabled="activeQueryLoading"
-              @click="loadActiveUsage"
-            >
-              <Icon
-                name="refresh"
-                size="xs"
-                :class="{ 'animate-spin': activeQueryLoading }"
-                :stroke-width="2"
-              />
-              {{ t('admin.providers.usageWindow.activeQuery') }}
-            </button>
-          </template>
-          <span
-            v-if="openAIQuotaAutoPaused"
-            class="inline-flex items-center rounded-compact bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
-          >
-            {{ t('admin.providers.usageWindow.quotaAutoPaused') }}
-          </span>
-        </OpenAIQuotaResetCell>
-      </div>
-      <div v-else-if="loading" class="space-y-1.5">
-        <div class="flex items-center gap-1">
-          <div class="skeleton h-3 w-[32px]"></div>
-          <div class="skeleton h-1.5 w-8 rounded-full"></div>
-          <div class="skeleton h-3 w-[32px]"></div>
-        </div>
-        <div class="flex items-center gap-1">
-          <div class="skeleton h-3 w-[32px]"></div>
-          <div class="skeleton h-1.5 w-8 rounded-full"></div>
-          <div class="skeleton h-3 w-[32px]"></div>
-        </div>
-      </div>
-      <div v-else>
-        <div class="text-xs text-gray-400">-</div>
-        <OpenAIQuotaResetCell :provider="provider" class="mt-1" />
-      </div>
-    </template>
-
-    <!-- Antigravity OAuth providers: fetch usage from API -->
-    <template v-else-if="provider.platform === 'antigravity' && provider.type === 'oauth'">
-      <!-- Ineligible entitlement warning. -->
+  <div ref="rootRef" class="min-w-0">
+    <div v-if="compact && compactWindows.length" class="grid grid-cols-2 gap-x-2 text-xs leading-4">
       <div
-        v-if="hasIneligibleTiers"
-        class="mb-1 flex items-center justify-end gap-1 lg:justify-start"
+        v-for="(window, index) in compactWindows.slice(0, 4)"
+        :key="index"
+        class="flex min-w-0 items-center gap-1"
+        data-test="provider-compact-window"
       >
-        <span class="group relative cursor-help">
-          <Icon name="exclamationCircle" size="xs" class="h-3.5 w-3.5 text-red-500" />
-          <span
-            class="pointer-events-none absolute left-0 top-full z-50 mt-1 w-80 whitespace-normal break-words tooltip-panel rounded-compact px-3 py-2 text-xs leading-relaxed opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
-          >
-            {{ t('admin.providers.ineligibleWarning') }}
-          </span>
-        </span>
-      </div>
-
-      <!-- Forbidden state (403) -->
-      <div v-if="isForbidden" class="space-y-1">
-        <span
-          :class="[
-            'inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium',
-            forbiddenBadgeClass,
-          ]"
-        >
-          {{ forbiddenLabel }}
-        </span>
-        <div v-if="validationURL" class="flex items-center gap-1">
-          <a
-            :href="validationURL"
-            target="_blank"
-            rel="noopener noreferrer"
-            class="text-xs text-link"
-            :title="t('admin.providers.openVerification')"
-          >
-            {{ t('admin.providers.openVerification') }}
-          </a>
-          <button
-            type="button"
-            class="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-            :title="t('admin.providers.copyLink')"
-            @click="copyValidationURL"
-          >
-            {{ linkCopied ? t('admin.providers.linkCopied') : t('admin.providers.copyLink') }}
-          </button>
-        </div>
-      </div>
-
-      <!-- Needs reauth (401) -->
-      <div v-else-if="needsReauth" class="space-y-1">
-        <span
-          class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
-        >
-          {{ t('admin.providers.needsReauth') }}
-        </span>
-      </div>
-
-      <!-- Degraded error (non-403, non-401) -->
-      <div v-else-if="usageInfo?.error" class="space-y-1">
-        <span
-          class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
-        >
-          {{ usageErrorLabel }}
-        </span>
-      </div>
-
-      <!-- Loading state -->
-      <div v-else-if="loading" class="space-y-1.5">
-        <div class="flex items-center gap-1">
-          <div class="skeleton h-3 w-[32px]"></div>
-          <div class="skeleton h-1.5 w-8 rounded-full"></div>
-          <div class="skeleton h-3 w-[32px]"></div>
-        </div>
-      </div>
-
-      <!-- Error state -->
-      <div v-else-if="error" class="text-xs text-red-500">
-        {{ error }}
-      </div>
-
-      <!-- Usage data from API -->
-      <div v-else-if="antigravityUsageGroups.length > 0" class="space-y-2">
-        <div v-for="group in antigravityUsageGroups" :key="group.key" class="space-y-1">
-          <div class="text-right text-xs font-medium text-gray-500 dark:text-dark-400 lg:text-left">
-            {{ t(group.labelKey) }}
-          </div>
-          <UsageProgressBar
-            v-if="group.weekly !== null"
-            label="7d"
-            :utilization="group.weekly.utilization"
-            :resets-at="group.weekly.resetTime"
-            :window-stats="group.weekly.windowStats"
-            color="emerald"
-          />
-          <UsageProgressBar
-            v-if="group.fiveHour !== null"
-            label="5h"
-            :utilization="group.fiveHour.utilization"
-            :resets-at="group.fiveHour.resetTime"
-            :window-stats="group.fiveHour.windowStats"
-            color="indigo"
-          />
-        </div>
-
+        <span class="min-w-0 truncate" :title="window.label">{{ window.label }}</span>
         <div
-          v-if="aiCreditsDisplay"
-          class="mt-1 flex items-center justify-end gap-1 text-xs text-gray-500 dark:text-gray-400 lg:justify-start"
+          v-if="window.utilization !== null"
+          class="h-1 min-w-1 flex-1 overflow-hidden rounded-full bg-gray-200 dark:bg-dark-700"
+          aria-hidden="true"
         >
-          <Icon name="creditCard" size="xs" />
-          {{ t('admin.providers.aiCreditsBalance') }}: {{ aiCreditsDisplay }}
-        </div>
-      </div>
-      <div
-        v-else-if="aiCreditsDisplay"
-        class="flex items-center justify-end gap-1 text-xs text-gray-500 dark:text-gray-400 lg:justify-start"
-      >
-        <Icon name="creditCard" size="xs" />
-        {{ t('admin.providers.aiCreditsBalance') }}: {{ aiCreditsDisplay }}
-      </div>
-      <div v-else class="text-xs text-gray-400">-</div>
-
-      <div v-if="!loading" class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start">
-        <button
-          type="button"
-          class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8"
-          :disabled="activeQueryLoading"
-          @click="loadActiveUsage"
-        >
-          <Icon
-            name="refresh"
-            size="xs"
-            :class="{ 'animate-spin': activeQueryLoading }"
-            :stroke-width="2"
-          />
-          {{ t('admin.providers.usageWindow.activeQuery') }}
-        </button>
-      </div>
-    </template>
-
-    <!-- Grok OAuth rows combine xAI quota observations with local request accounting. -->
-    <template v-else-if="provider.platform === 'grok' && provider.type === 'oauth'">
-      <div v-if="loading" class="space-y-1.5">
-        <div class="flex items-center gap-1">
-          <div class="skeleton h-3 w-[32px]"></div>
-          <div class="skeleton h-1.5 w-8 rounded-full"></div>
-          <div class="skeleton h-3 w-[32px]"></div>
-        </div>
-      </div>
-      <div v-else-if="error" class="text-xs text-red-500">
-        {{ error }}
-      </div>
-      <div v-else-if="needsReauth" class="space-y-1">
-        <span
-          class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
-        >
-          {{ t('admin.providers.needsReauth') }}
-        </span>
-      </div>
-      <div v-else-if="isForbidden" class="space-y-1">
-        <span
-          class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
-        >
-          {{ usageInfo?.grok_entitlement_status || t('admin.providers.forbidden') }}
-        </span>
-      </div>
-      <div v-else-if="usageInfo" class="space-y-1">
-        <!-- Free-plan rows use the local rolling-day token allowance; paid-plan rows expose available weekly, monthly, and prepaid observations. -->
-        <template v-if="grokIsFree">
-          <UsageProgressBar
-            v-if="grokFreeTokenBar"
-            label="24h"
-            :title="
-              t('admin.providers.usageWindow.grokFreeQuota24hHint', {
-                limit: formatCompactNumber(grokFreeTokenBar.limit),
-              })
-            "
-            :utilization="grokFreeTokenBar.utilization"
-            :window-stats="grokFreeQuotaUsage"
-            :show-now-when-idle="true"
-            color="emerald"
-          />
-          <div v-else-if="grokQuotaUnknown" class="text-xs text-gray-500 dark:text-gray-400">
-            {{ grokQuotaUnknownLabel }}
-          </div>
-        </template>
-        <template v-else>
-          <UsageProgressBar
-            v-if="grokWeeklyBillingBar"
-            label="7d"
-            :utilization="grokWeeklyBillingBar.utilization"
-            :resets-at="grokWeeklyBillingBar.resetsAt"
-            :window-stats="grokWeeklyBillingBar.windowStats"
-            :show-now-when-idle="true"
-            color="indigo"
-          />
-          <UsageProgressBar
-            v-if="grokMonthlyBillingBar"
-            label="30d"
-            :utilization="grokMonthlyBillingBar.utilization"
-            :resets-at="grokMonthlyBillingBar.resetsAt"
-            :window-stats="grokMonthlyBillingBar.windowStats"
-            :show-now-when-idle="true"
-            color="indigo"
-          />
           <div
-            v-if="grokPrepaidMoneyLine"
-            class="flex flex-wrap items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
-          >
-            <span
-              v-if="grokPrepaidMoneyLine.showPrepaid"
-              class="rounded-compact bg-emerald-50 px-1 py-0.5 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
-              :title="t('admin.providers.usageWindow.grokPrepaid')"
-            >
-              {{ t('admin.providers.usageWindow.grokPrepaid') }} ${{ grokPrepaidMoneyLine.prepaid }}
-            </span>
-            <span
-              v-if="grokPrepaidMoneyLine.showUsedLimit"
-              :title="t('admin.providers.usageWindow.grokMonthlyLimit')"
-            >
-              {{ t('admin.providers.usageWindow.grokUsed') }}
-              {{ grokPrepaidMoneyLine.used }}/{{ grokPrepaidMoneyLine.limit }}
-            </span>
-          </div>
-          <div v-if="grokQuotaUnknown" class="text-xs text-gray-500 dark:text-gray-400">
-            {{ grokQuotaUnknownLabel }}
-          </div>
-        </template>
-        <div
-          v-if="usageInfo.error"
-          class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]"
-          :title="usageInfo.error"
-        >
-          {{ usageErrorLabel }}
+            class="h-full rounded-full bg-primary-500"
+            :style="{ width: Math.min(100, Math.max(0, window.utilization)) + '%' }"
+          ></div>
         </div>
-        <div v-if="grokRetryAfterLabel" class="text-xs text-amber-600 dark:text-amber-400">
-          {{ t('admin.providers.usageWindow.grokRetryAfter', { time: grokRetryAfterLabel }) }}
-        </div>
-        <GrokQuotaProbeCell :provider="provider" compact @probed="handleGrokProbed" />
+        <span class="ml-auto shrink-0 tabular-nums">{{
+          window.utilization === null ? '—' : Math.round(window.utilization) + '%'
+        }}</span>
       </div>
-      <div v-else class="space-y-1">
-        <div class="text-xs text-gray-400">-</div>
-        <GrokQuotaProbeCell :provider="provider" compact @probed="handleGrokProbed" />
-      </div>
-    </template>
+    </div>
+    <div v-else-if="compact && (loading || upstreamUsageLoading)" class="skeleton h-3 w-20"></div>
+    <div
+      v-else-if="compact && compactUsageNotice"
+      class="truncate text-xs leading-4 text-gray-500 dark:text-gray-400"
+    >
+      {{ compactUsageNotice }}
+    </div>
 
-    <!-- Qoder Cosy rows display upstream credit-pool observations. -->
-    <template v-else-if="provider.platform === 'qoder'">
-      <div v-if="loading" class="space-y-1.5">
-        <div class="flex items-center gap-1">
-          <div class="skeleton h-3 w-[48px]"></div>
-          <div class="skeleton h-1.5 w-8 rounded-full"></div>
-          <div class="skeleton h-3 w-[40px]"></div>
-        </div>
-      </div>
-      <div v-else-if="error" class="text-xs text-red-500">
-        {{ error }}
-      </div>
-      <div
-        v-else-if="usageInfo?.qoder_quota?.display_mode === 'enterprise'"
-        class="space-y-1 text-xs"
+    <div class="min-w-0" :class="{ 'flex items-center gap-1 text-xs leading-4': compact }">
+      <span
+        v-if="compact && compactObservedAt"
+        class="min-w-0 truncate text-gray-500 dark:text-gray-400"
+        :title="compactObservedAt"
       >
-        <a
-          v-if="qoderEnterpriseURL"
-          :href="qoderEnterpriseURL"
-          target="_blank"
-          rel="noopener noreferrer"
-          class="text-link"
-        >
-          {{ t('admin.providers.qoder.viewUpstreamUsage') }}
-        </a>
-        <span v-else>{{ t('admin.providers.qoder.enterpriseUsage') }}</span>
-      </div>
-      <div v-else-if="usageInfo?.qoder_quota" class="space-y-1">
-        <div
-          v-if="usageInfo.error"
-          class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]"
-          :title="usageInfo.error"
-        >
-          {{ usageErrorLabel }}
-        </div>
-        <UsageProgressBar
-          label="Credits"
-          :utilization="qoderQuotaUsageBar.utilization"
-          :resets-at="qoderQuotaUsageBar.resetsAt"
-          wide-label
-          color="indigo"
-        />
-        <div
-          v-for="pack in usageInfo.qoder_quota.dedicated_packages"
-          :key="pack.id"
-          class="text-xs text-gray-500 dark:text-gray-400"
-          :title="pack.description"
-        >
-          {{ pack.name }}: {{ formatCompactNumber(pack.remaining) }}/{{
-            formatCompactNumber(pack.total)
-          }}
-          <span v-for="label in pack.labels" :key="label.dimension + label.value">
-            {{ label.value }}</span
-          >
-        </div>
-        <div
-          class="flex flex-wrap items-center justify-end gap-1.5 text-xs text-gray-500 dark:text-gray-400 lg:justify-start"
-        >
-          <span
-            class="whitespace-nowrap rounded-compact bg-gray-100 px-1.5 py-0.5 dark:bg-dark-700"
-          >
-            {{ qoderQuotaCreditsLabel }}
-          </span>
-          <span
-            v-if="usageInfo.qoder_quota.is_quota_exceeded"
-            class="rounded-compact bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
-          >
-            exceeded
-          </span>
-          <span
-            v-if="usageInfo.qoder_quota.snapshot_from_provider"
-            class="whitespace-nowrap rounded-compact bg-gray-100 px-1.5 py-0.5 dark:bg-dark-700"
-          >
-            cached
-          </span>
-        </div>
-        <button
-          type="button"
-          class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8 transition-colors"
-          :disabled="activeQueryLoading"
-          @click="loadActiveUsage"
-        >
-          <Icon
-            name="refresh"
-            size="xs"
-            :class="{ 'animate-spin': activeQueryLoading }"
-            :stroke-width="2"
-          />
-          {{ t('admin.providers.usageWindow.activeQuery') }}
-        </button>
-      </div>
-      <div v-else-if="usageInfo?.error" class="space-y-1">
-        <div
-          class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]"
-          :title="usageInfo.error"
-        >
-          {{ usageErrorLabel }}
-        </div>
-        <button
-          type="button"
-          class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8 transition-colors"
-          :disabled="activeQueryLoading"
-          @click="loadActiveUsage"
-        >
-          <Icon
-            name="refresh"
-            size="xs"
-            :class="{ 'animate-spin': activeQueryLoading }"
-            :stroke-width="2"
-          />
-          {{ t('admin.providers.usageWindow.activeQuery') }}
-        </button>
-      </div>
-      <div v-else class="text-xs text-gray-400">-</div>
-    </template>
-
-    <!-- Gemini platform: show quota + local usage window -->
-    <template v-else-if="provider.platform === 'gemini'">
-      <ProviderUpstreamUsageCell
-        v-if="provider.type === 'apikey'"
+        {{ compactObservedAt }}
+      </span>
+      <ProviderUpstreamUsageQueryButton
+        v-if="compact && isUpstreamUsageQueryEnabled(provider)"
+        class="shrink-0 whitespace-nowrap"
         :provider="provider"
-        :result="upstreamUsage"
-        :error="upstreamUsageError"
         :loading="upstreamUsageLoading"
-        :show-query-button="false"
         :request="requestUpstreamUsage"
       />
-      <!-- Auth Type + Tier Badge (first line) -->
-      <div v-if="geminiAuthTypeLabel" class="mb-1 flex items-center gap-1">
-        <span
-          :class="[
-            'inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium',
-            geminiTierClass,
-          ]"
-        >
-          {{ geminiAuthTypeLabel }}
-        </span>
-        <!-- Help icon -->
-        <span class="group relative cursor-help">
-          <Icon
-            name="questionCircle"
-            size="xs"
-            class="h-3.5 w-3.5 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
-          />
-          <span
-            class="pointer-events-none absolute left-0 top-full z-50 mt-1 w-80 whitespace-normal break-words tooltip-panel rounded-compact px-3 py-2 text-xs leading-relaxed opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
+      <ProviderCellDetails
+        :inline="!compact"
+        keep-mounted
+        :label="t('admin.providers.compact.usageDetails')"
+      >
+        <template #trigger>
+          <span v-if="compactWindows.length > 4" data-test="provider-compact-window-overflow"
+            >+{{ compactWindows.length - 4 }}</span
           >
-            <div class="font-semibold mb-1">{{
-              t('admin.providers.gemini.quotaPolicy.title')
-            }}</div>
-            <div class="mb-2 text-gray-300">{{ t('admin.providers.gemini.quotaPolicy.note') }}</div>
-            <div class="space-y-1">
+          <span v-else>{{ t('common.more') }}</span>
+        </template>
+        <div v-if="showUsageWindows">
+          <!-- Anthropic OAuth and setup-token rows show observed provider usage. -->
+          <template
+            v-if="
+              provider.platform === 'anthropic' &&
+              (provider.type === 'oauth' || provider.type === 'setup-token')
+            "
+          >
+            <!-- Loading state -->
+            <div v-if="loading" class="space-y-1.5">
+              <!-- OAuth: 3 rows, Setup Token: 1 row -->
+              <div class="flex items-center gap-1">
+                <div class="skeleton h-3 w-[32px]"></div>
+                <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                <div class="skeleton h-3 w-[32px]"></div>
+              </div>
+              <template v-if="provider.type === 'oauth'">
+                <div class="flex items-center gap-1">
+                  <div class="skeleton h-3 w-[32px]"></div>
+                  <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                  <div class="skeleton h-3 w-[32px]"></div>
+                </div>
+                <div class="flex items-center gap-1">
+                  <div class="skeleton h-3 w-[32px]"></div>
+                  <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                  <div class="skeleton h-3 w-[32px]"></div>
+                </div>
+              </template>
+            </div>
+
+            <!-- Error state -->
+            <div v-else-if="error" class="text-xs text-red-500">
+              {{ error }}
+            </div>
+
+            <!-- Usage data -->
+            <div v-else-if="usageInfo" class="space-y-1">
+              <!-- API error (degraded response) -->
               <div
-                ><strong>{{ geminiQuotaPolicyChannel }}:</strong></div
+                v-if="usageInfo.error"
+                class="text-xs text-amber-600 dark:text-amber-400 truncate max-w-[200px]"
+                :title="usageInfo.error"
               >
-              <div class="pl-2">• {{ geminiQuotaPolicyLimits }}</div>
-              <div class="mt-2">
-                <a
-                  :href="geminiQuotaPolicyDocsUrl"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  class="text-link"
+                {{ usageInfo.error }}
+              </div>
+              <!-- 5h Window -->
+              <UsageProgressBar
+                v-if="usageInfo.five_hour"
+                label="5h"
+                :utilization="usageInfo.five_hour.utilization"
+                :resets-at="usageInfo.five_hour.resets_at"
+                :window-stats="usageInfo.five_hour.window_stats"
+                color="indigo"
+              />
+
+              <!-- 7d Window (OAuth only) -->
+              <UsageProgressBar
+                v-if="usageInfo.seven_day"
+                label="7d"
+                :utilization="usageInfo.seven_day.utilization"
+                :resets-at="usageInfo.seven_day.resets_at"
+                color="emerald"
+              />
+
+              <!-- 7d Sonnet Window (OAuth only) -->
+              <UsageProgressBar
+                v-if="usageInfo.seven_day_sonnet"
+                label="7d S"
+                :utilization="usageInfo.seven_day_sonnet.utilization"
+                :resets-at="usageInfo.seven_day_sonnet.resets_at"
+                color="purple"
+              />
+
+              <!-- Fable-specific seven-day usage window. -->
+              <UsageProgressBar
+                v-if="usageInfo.seven_day_fable"
+                label="7d F"
+                :utilization="usageInfo.seven_day_fable.utilization"
+                :resets-at="usageInfo.seven_day_fable.resets_at"
+                color="amber"
+              />
+
+              <!-- Passive sampling label + active query button -->
+              <div class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start">
+                <span
+                  v-if="usageInfo.source === 'passive'"
+                  class="text-xs text-gray-400 dark:text-gray-500 italic"
                 >
-                  {{ t('admin.providers.gemini.quotaPolicy.columns.docs') }} →
-                </a>
+                  {{ t('admin.providers.usageWindow.passiveSampled') }}
+                </span>
+                <button
+                  type="button"
+                  class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50 dark:text-primary-500 dark:hover:bg-primary-500/8 transition-colors"
+                  :disabled="activeQueryLoading"
+                  @click="loadActiveUsage"
+                >
+                  <Icon
+                    name="refresh"
+                    size="xs"
+                    :class="{ 'animate-spin': activeQueryLoading }"
+                    :stroke-width="2"
+                  />
+                  {{ t('admin.providers.usageWindow.activeQuery') }}
+                </button>
               </div>
             </div>
-          </span>
-        </span>
-      </div>
 
-      <!-- Usage data or unlimited flow -->
-      <div class="space-y-1">
-        <ProviderUsageStatsChips
-          v-if="showGeminiTodayStats && todayStats"
-          :stats="todayStats"
-          scope="today"
-        />
-        <div
-          v-else-if="showGeminiTodayStats && todayStatsLoading"
-          class="mb-0.5 flex items-center justify-end gap-1 lg:justify-start"
-        >
-          <div class="skeleton h-3 w-10"></div>
-          <div class="skeleton h-3 w-8"></div>
-          <div class="skeleton h-3 w-12"></div>
+            <!-- No data yet -->
+            <div v-else class="space-y-1">
+              <div class="text-xs text-gray-400">-</div>
+              <!-- Render the probe component in the empty observation branch; its own platform predicate decides whether an explicit quota probe applies. -->
+              <GrokQuotaProbeCell :provider="provider" />
+            </div>
+          </template>
+
+          <!-- OpenAI OAuth rows consume the provider usage response. -->
+          <template v-else-if="provider.platform === 'openai' && provider.type === 'oauth'">
+            <div v-if="hasOpenAIUsageFallback" class="space-y-1">
+              <UsageProgressBar
+                v-if="usageInfo?.five_hour"
+                label="5h"
+                :utilization="usageInfo.five_hour.utilization"
+                :resets-at="usageInfo.five_hour.resets_at"
+                :window-stats="usageInfo.five_hour.window_stats"
+                :show-now-when-idle="true"
+                color="indigo"
+              />
+              <UsageProgressBar
+                v-if="usageInfo?.seven_day"
+                label="7d"
+                :utilization="usageInfo.seven_day.utilization"
+                :resets-at="usageInfo.seven_day.resets_at"
+                :window-stats="usageInfo.seven_day.window_stats"
+                :show-now-when-idle="true"
+                color="emerald"
+              />
+              <OpenAIQuotaResetCell :provider="provider">
+                <template #pre-actions>
+                  <button
+                    type="button"
+                    class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8"
+                    :disabled="activeQueryLoading"
+                    @click="loadActiveUsage"
+                  >
+                    <Icon
+                      name="refresh"
+                      size="xs"
+                      :class="{ 'animate-spin': activeQueryLoading }"
+                      :stroke-width="2"
+                    />
+                    {{ t('admin.providers.usageWindow.activeQuery') }}
+                  </button>
+                </template>
+                <span
+                  v-if="openAIQuotaAutoPaused"
+                  class="inline-flex items-center rounded-compact bg-amber-100 px-1.5 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                >
+                  {{ t('admin.providers.usageWindow.quotaAutoPaused') }}
+                </span>
+              </OpenAIQuotaResetCell>
+            </div>
+            <div v-else-if="loading" class="space-y-1.5">
+              <div class="flex items-center gap-1">
+                <div class="skeleton h-3 w-[32px]"></div>
+                <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                <div class="skeleton h-3 w-[32px]"></div>
+              </div>
+              <div class="flex items-center gap-1">
+                <div class="skeleton h-3 w-[32px]"></div>
+                <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                <div class="skeleton h-3 w-[32px]"></div>
+              </div>
+            </div>
+            <div v-else>
+              <div class="text-xs text-gray-400">-</div>
+              <OpenAIQuotaResetCell :provider="provider" class="mt-1" />
+            </div>
+          </template>
+
+          <!-- Antigravity OAuth providers: fetch usage from API -->
+          <template v-else-if="provider.platform === 'antigravity' && provider.type === 'oauth'">
+            <!-- Ineligible entitlement warning. -->
+            <div
+              v-if="hasIneligibleTiers"
+              class="mb-1 flex items-center justify-end gap-1 lg:justify-start"
+            >
+              <span class="group relative cursor-help">
+                <Icon name="exclamationCircle" size="xs" class="h-3.5 w-3.5 text-red-500" />
+                <span
+                  class="pointer-events-none absolute left-0 top-full z-50 mt-1 w-80 whitespace-normal break-words tooltip-panel rounded-compact px-3 py-2 text-xs leading-relaxed opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
+                >
+                  {{ t('admin.providers.ineligibleWarning') }}
+                </span>
+              </span>
+            </div>
+
+            <!-- Forbidden state (403) -->
+            <div v-if="isForbidden" class="space-y-1">
+              <span
+                :class="[
+                  'inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium',
+                  forbiddenBadgeClass,
+                ]"
+              >
+                {{ forbiddenLabel }}
+              </span>
+              <div v-if="validationURL" class="flex items-center gap-1">
+                <a
+                  :href="validationURL"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  class="text-xs text-link"
+                  :title="t('admin.providers.openVerification')"
+                >
+                  {{ t('admin.providers.openVerification') }}
+                </a>
+                <button
+                  type="button"
+                  class="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
+                  :title="t('admin.providers.copyLink')"
+                  @click="copyValidationURL"
+                >
+                  {{ linkCopied ? t('admin.providers.linkCopied') : t('admin.providers.copyLink') }}
+                </button>
+              </div>
+            </div>
+
+            <!-- Needs reauth (401) -->
+            <div v-else-if="needsReauth" class="space-y-1">
+              <span
+                class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
+              >
+                {{ t('admin.providers.needsReauth') }}
+              </span>
+            </div>
+
+            <!-- Degraded error (non-403, non-401) -->
+            <div v-else-if="usageInfo?.error" class="space-y-1">
+              <span
+                class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+              >
+                {{ usageErrorLabel }}
+              </span>
+            </div>
+
+            <!-- Loading state -->
+            <div v-else-if="loading" class="space-y-1.5">
+              <div class="flex items-center gap-1">
+                <div class="skeleton h-3 w-[32px]"></div>
+                <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                <div class="skeleton h-3 w-[32px]"></div>
+              </div>
+            </div>
+
+            <!-- Error state -->
+            <div v-else-if="error" class="text-xs text-red-500">
+              {{ error }}
+            </div>
+
+            <!-- Usage data from API -->
+            <div v-else-if="antigravityUsageGroups.length > 0" class="space-y-2">
+              <div v-for="group in antigravityUsageGroups" :key="group.key" class="space-y-1">
+                <div
+                  class="text-right text-xs font-medium text-gray-500 dark:text-dark-400 lg:text-left"
+                >
+                  {{ t(group.labelKey) }}
+                </div>
+                <UsageProgressBar
+                  v-if="group.weekly !== null"
+                  label="7d"
+                  :utilization="group.weekly.utilization"
+                  :resets-at="group.weekly.resetTime"
+                  :window-stats="group.weekly.windowStats"
+                  color="emerald"
+                />
+                <UsageProgressBar
+                  v-if="group.fiveHour !== null"
+                  label="5h"
+                  :utilization="group.fiveHour.utilization"
+                  :resets-at="group.fiveHour.resetTime"
+                  :window-stats="group.fiveHour.windowStats"
+                  color="indigo"
+                />
+              </div>
+
+              <div
+                v-if="aiCreditsDisplay"
+                class="mt-1 flex items-center justify-end gap-1 text-xs text-gray-500 dark:text-gray-400 lg:justify-start"
+              >
+                <Icon name="creditCard" size="xs" />
+                {{ t('admin.providers.aiCreditsBalance') }}: {{ aiCreditsDisplay }}
+              </div>
+            </div>
+            <div
+              v-else-if="aiCreditsDisplay"
+              class="flex items-center justify-end gap-1 text-xs text-gray-500 dark:text-gray-400 lg:justify-start"
+            >
+              <Icon name="creditCard" size="xs" />
+              {{ t('admin.providers.aiCreditsBalance') }}: {{ aiCreditsDisplay }}
+            </div>
+            <div v-else class="text-xs text-gray-400">-</div>
+
+            <div
+              v-if="!loading"
+              class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start"
+            >
+              <button
+                type="button"
+                class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 transition-colors hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8"
+                :disabled="activeQueryLoading"
+                @click="loadActiveUsage"
+              >
+                <Icon
+                  name="refresh"
+                  size="xs"
+                  :class="{ 'animate-spin': activeQueryLoading }"
+                  :stroke-width="2"
+                />
+                {{ t('admin.providers.usageWindow.activeQuery') }}
+              </button>
+            </div>
+          </template>
+
+          <!-- Grok OAuth rows combine xAI quota observations with local request accounting. -->
+          <template v-else-if="provider.platform === 'grok' && provider.type === 'oauth'">
+            <div v-if="loading" class="space-y-1.5">
+              <div class="flex items-center gap-1">
+                <div class="skeleton h-3 w-[32px]"></div>
+                <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                <div class="skeleton h-3 w-[32px]"></div>
+              </div>
+            </div>
+            <div v-else-if="error" class="text-xs text-red-500">
+              {{ error }}
+            </div>
+            <div v-else-if="needsReauth" class="space-y-1">
+              <span
+                class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-orange-100 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300"
+              >
+                {{ t('admin.providers.needsReauth') }}
+              </span>
+            </div>
+            <div v-else-if="isForbidden" class="space-y-1">
+              <span
+                class="inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/40 dark:text-red-300"
+              >
+                {{ usageInfo?.grok_entitlement_status || t('admin.providers.forbidden') }}
+              </span>
+            </div>
+            <div v-else-if="usageInfo" class="space-y-1">
+              <!-- Free-plan rows use the local rolling-day token allowance; paid-plan rows expose available weekly, monthly, and prepaid observations. -->
+              <template v-if="grokIsFree">
+                <UsageProgressBar
+                  v-if="grokFreeTokenBar"
+                  label="24h"
+                  :title="
+                    t('admin.providers.usageWindow.grokFreeQuota24hHint', {
+                      limit: formatCompactNumber(grokFreeTokenBar.limit),
+                    })
+                  "
+                  :utilization="grokFreeTokenBar.utilization"
+                  :window-stats="grokFreeQuotaUsage"
+                  :show-now-when-idle="true"
+                  color="emerald"
+                />
+                <div v-else-if="grokQuotaUnknown" class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ grokQuotaUnknownLabel }}
+                </div>
+              </template>
+              <template v-else>
+                <UsageProgressBar
+                  v-if="grokWeeklyBillingBar"
+                  label="7d"
+                  :utilization="grokWeeklyBillingBar.utilization"
+                  :resets-at="grokWeeklyBillingBar.resetsAt"
+                  :window-stats="grokWeeklyBillingBar.windowStats"
+                  :show-now-when-idle="true"
+                  color="indigo"
+                />
+                <UsageProgressBar
+                  v-if="grokMonthlyBillingBar"
+                  label="30d"
+                  :utilization="grokMonthlyBillingBar.utilization"
+                  :resets-at="grokMonthlyBillingBar.resetsAt"
+                  :window-stats="grokMonthlyBillingBar.windowStats"
+                  :show-now-when-idle="true"
+                  color="indigo"
+                />
+                <div
+                  v-if="grokPrepaidMoneyLine"
+                  class="flex flex-wrap items-center gap-1 text-xs text-gray-500 dark:text-gray-400"
+                >
+                  <span
+                    v-if="grokPrepaidMoneyLine.showPrepaid"
+                    class="rounded-compact bg-emerald-50 px-1 py-0.5 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                    :title="t('admin.providers.usageWindow.grokPrepaid')"
+                  >
+                    {{ t('admin.providers.usageWindow.grokPrepaid') }} ${{
+                      grokPrepaidMoneyLine.prepaid
+                    }}
+                  </span>
+                  <span
+                    v-if="grokPrepaidMoneyLine.showUsedLimit"
+                    :title="t('admin.providers.usageWindow.grokMonthlyLimit')"
+                  >
+                    {{ t('admin.providers.usageWindow.grokUsed') }}
+                    {{ grokPrepaidMoneyLine.used }}/{{ grokPrepaidMoneyLine.limit }}
+                  </span>
+                </div>
+                <div v-if="grokQuotaUnknown" class="text-xs text-gray-500 dark:text-gray-400">
+                  {{ grokQuotaUnknownLabel }}
+                </div>
+              </template>
+              <div
+                v-if="usageInfo.error"
+                class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]"
+                :title="usageInfo.error"
+              >
+                {{ usageErrorLabel }}
+              </div>
+              <div v-if="grokRetryAfterLabel" class="text-xs text-amber-600 dark:text-amber-400">
+                {{ t('admin.providers.usageWindow.grokRetryAfter', { time: grokRetryAfterLabel }) }}
+              </div>
+              <GrokQuotaProbeCell :provider="provider" compact @probed="handleGrokProbed" />
+            </div>
+            <div v-else class="space-y-1">
+              <div class="text-xs text-gray-400">-</div>
+              <GrokQuotaProbeCell :provider="provider" compact @probed="handleGrokProbed" />
+            </div>
+          </template>
+
+          <!-- Qoder Cosy rows display upstream credit-pool observations. -->
+          <template v-else-if="provider.platform === 'qoder'">
+            <div v-if="loading" class="space-y-1.5">
+              <div class="flex items-center gap-1">
+                <div class="skeleton h-3 w-[48px]"></div>
+                <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                <div class="skeleton h-3 w-[40px]"></div>
+              </div>
+            </div>
+            <div v-else-if="error" class="text-xs text-red-500">
+              {{ error }}
+            </div>
+            <div
+              v-else-if="usageInfo?.qoder_quota?.display_mode === 'enterprise'"
+              class="space-y-1 text-xs"
+            >
+              <a
+                v-if="qoderEnterpriseURL"
+                :href="qoderEnterpriseURL"
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-link"
+              >
+                {{ t('admin.providers.qoder.viewUpstreamUsage') }}
+              </a>
+              <span v-else>{{ t('admin.providers.qoder.enterpriseUsage') }}</span>
+            </div>
+            <div v-else-if="usageInfo?.qoder_quota" class="space-y-1">
+              <div
+                v-if="usageInfo.error"
+                class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]"
+                :title="usageInfo.error"
+              >
+                {{ usageErrorLabel }}
+              </div>
+              <UsageProgressBar
+                label="Credits"
+                :utilization="qoderQuotaUsageBar.utilization"
+                :resets-at="qoderQuotaUsageBar.resetsAt"
+                wide-label
+                color="indigo"
+              />
+              <div
+                v-for="pack in usageInfo.qoder_quota.dedicated_packages"
+                :key="pack.id"
+                class="text-xs text-gray-500 dark:text-gray-400"
+                :title="pack.description"
+              >
+                {{ pack.name }}: {{ formatCompactNumber(pack.remaining) }}/{{
+                  formatCompactNumber(pack.total)
+                }}
+                <span v-for="label in pack.labels" :key="label.dimension + label.value">
+                  {{ label.value }}</span
+                >
+              </div>
+              <div
+                class="flex flex-wrap items-center justify-end gap-1.5 text-xs text-gray-500 dark:text-gray-400 lg:justify-start"
+              >
+                <span
+                  class="whitespace-nowrap rounded-compact bg-gray-100 px-1.5 py-0.5 dark:bg-dark-700"
+                >
+                  {{ qoderQuotaCreditsLabel }}
+                </span>
+                <span
+                  v-if="usageInfo.qoder_quota.is_quota_exceeded"
+                  class="rounded-compact bg-amber-100 px-1.5 py-0.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300"
+                >
+                  exceeded
+                </span>
+                <span
+                  v-if="usageInfo.qoder_quota.snapshot_from_provider"
+                  class="whitespace-nowrap rounded-compact bg-gray-100 px-1.5 py-0.5 dark:bg-dark-700"
+                >
+                  cached
+                </span>
+              </div>
+              <button
+                type="button"
+                class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8 transition-colors"
+                :disabled="activeQueryLoading"
+                @click="loadActiveUsage"
+              >
+                <Icon
+                  name="refresh"
+                  size="xs"
+                  :class="{ 'animate-spin': activeQueryLoading }"
+                  :stroke-width="2"
+                />
+                {{ t('admin.providers.usageWindow.activeQuery') }}
+              </button>
+            </div>
+            <div v-else-if="usageInfo?.error" class="space-y-1">
+              <div
+                class="truncate text-xs text-amber-600 dark:text-amber-400 max-w-[200px]"
+                :title="usageInfo.error"
+              >
+                {{ usageErrorLabel }}
+              </div>
+              <button
+                type="button"
+                class="inline-flex items-center gap-0.5 rounded-compact px-1.5 py-0.5 text-xs font-medium text-primary-600 hover:bg-primary-50 disabled:cursor-not-allowed disabled:opacity-50 dark:text-primary-500 dark:hover:bg-primary-500/8 transition-colors"
+                :disabled="activeQueryLoading"
+                @click="loadActiveUsage"
+              >
+                <Icon
+                  name="refresh"
+                  size="xs"
+                  :class="{ 'animate-spin': activeQueryLoading }"
+                  :stroke-width="2"
+                />
+                {{ t('admin.providers.usageWindow.activeQuery') }}
+              </button>
+            </div>
+            <div v-else class="text-xs text-gray-400">-</div>
+          </template>
+
+          <!-- Gemini platform: show quota + local usage window -->
+          <template v-else-if="provider.platform === 'gemini'">
+            <ProviderUpstreamUsageCell
+              v-if="provider.type === 'apikey'"
+              :provider="provider"
+              :result="upstreamUsage"
+              :error="upstreamUsageError"
+              :loading="upstreamUsageLoading"
+              :show-query-button="false"
+              :request="requestUpstreamUsage"
+            />
+            <!-- Auth Type + Tier Badge (first line) -->
+            <div v-if="geminiAuthTypeLabel" class="mb-1 flex items-center gap-1">
+              <span
+                :class="[
+                  'inline-block rounded-compact px-1.5 py-0.5 text-xs font-medium',
+                  geminiTierClass,
+                ]"
+              >
+                {{ geminiAuthTypeLabel }}
+              </span>
+              <!-- Help icon -->
+              <span class="group relative cursor-help">
+                <Icon
+                  name="questionCircle"
+                  size="xs"
+                  class="h-3.5 w-3.5 text-gray-400 hover:text-gray-600 dark:text-gray-500 dark:hover:text-gray-300"
+                />
+                <span
+                  class="pointer-events-none absolute left-0 top-full z-50 mt-1 w-80 whitespace-normal break-words tooltip-panel rounded-compact px-3 py-2 text-xs leading-relaxed opacity-0 shadow-lg transition-opacity group-hover:opacity-100"
+                >
+                  <div class="font-semibold mb-1">{{
+                    t('admin.providers.gemini.quotaPolicy.title')
+                  }}</div>
+                  <div class="mb-2 text-gray-300">{{
+                    t('admin.providers.gemini.quotaPolicy.note')
+                  }}</div>
+                  <div class="space-y-1">
+                    <div
+                      ><strong>{{ geminiQuotaPolicyChannel }}:</strong></div
+                    >
+                    <div class="pl-2">• {{ geminiQuotaPolicyLimits }}</div>
+                    <div class="mt-2">
+                      <a
+                        :href="geminiQuotaPolicyDocsUrl"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="text-link"
+                      >
+                        {{ t('admin.providers.gemini.quotaPolicy.columns.docs') }} →
+                      </a>
+                    </div>
+                  </div>
+                </span>
+              </span>
+            </div>
+
+            <!-- Usage data or unlimited flow -->
+            <div class="space-y-1">
+              <ProviderUsageStatsChips
+                v-if="!compact && showGeminiTodayStats && todayStats"
+                :stats="todayStats"
+                scope="today"
+              />
+              <div
+                v-else-if="!compact && showGeminiTodayStats && todayStatsLoading"
+                class="mb-0.5 flex items-center justify-end gap-1 lg:justify-start"
+              >
+                <div class="skeleton h-3 w-10"></div>
+                <div class="skeleton h-3 w-8"></div>
+                <div class="skeleton h-3 w-12"></div>
+              </div>
+              <div v-if="loading" class="space-y-1">
+                <div class="flex items-center gap-1">
+                  <div class="skeleton h-3 w-[32px]"></div>
+                  <div class="skeleton h-1.5 w-8 rounded-full"></div>
+                  <div class="skeleton h-3 w-[32px]"></div>
+                </div>
+              </div>
+              <div v-else-if="error" class="text-xs text-red-500">
+                {{ error }}
+              </div>
+              <!-- Gemini: show daily usage bars when available -->
+              <div v-else-if="geminiUsageAvailable" class="space-y-1">
+                <UsageProgressBar
+                  v-for="bar in geminiUsageBars"
+                  :key="bar.key"
+                  :label="bar.label"
+                  :utilization="bar.utilization"
+                  :resets-at="bar.resetsAt"
+                  :window-stats="bar.windowStats"
+                  :color="bar.color"
+                />
+                <p class="mt-1 text-xs leading-tight text-gray-400 dark:text-gray-500 italic">
+                  * {{ t('admin.providers.gemini.quotaPolicy.simulatedNote') || 'Simulated quota' }}
+                </p>
+              </div>
+              <!-- A Gemini row with no available usage windows uses the unrestricted display label. -->
+              <div v-else class="text-xs text-gray-400">
+                {{ t('admin.providers.gemini.rateLimit.unlimited') }}
+              </div>
+            </div>
+          </template>
+
+          <!-- Other providers: no usage window -->
+          <template v-else>
+            <div
+              v-if="
+                provider.type !== 'apikey' ||
+                (!upstreamUsage &&
+                  !upstreamUsageError &&
+                  !upstreamUsageLoading &&
+                  !upstreamUsageDisabled)
+              "
+              class="text-xs text-gray-400"
+              >-</div
+            >
+          </template>
         </div>
-        <div v-if="loading" class="space-y-1">
-          <div class="flex items-center gap-1">
-            <div class="skeleton h-3 w-[32px]"></div>
-            <div class="skeleton h-1.5 w-8 rounded-full"></div>
-            <div class="skeleton h-3 w-[32px]"></div>
+
+        <!-- Non-OAuth/Setup-Token providers -->
+        <div v-else>
+          <div v-if="isGeminiThirdPartyProvider" class="space-y-1">
+            <ProviderUpstreamUsageCell
+              v-if="provider.type === 'apikey'"
+              :provider="provider"
+              :result="upstreamUsage"
+              :error="upstreamUsageError"
+              :loading="upstreamUsageLoading"
+              :show-query-button="false"
+              :request="requestUpstreamUsage"
+            />
+            <ProviderUsageStatsChips
+              v-if="!compact && showGeminiTodayStats && todayStats"
+              :stats="todayStats"
+              scope="today"
+            />
+            <div
+              v-else-if="!compact && showGeminiTodayStats && todayStatsLoading"
+              class="mb-0.5 flex items-center justify-end gap-1 lg:justify-start"
+            >
+              <div class="skeleton h-3 w-10"></div>
+              <div class="skeleton h-3 w-8"></div>
+              <div class="skeleton h-3 w-12"></div>
+            </div>
+            <div v-else-if="provider.type !== 'apikey'" class="text-xs text-gray-400">-</div>
+          </div>
+          <!-- Eligible non-API-key Gemini rows display their quota-window observations. -->
+          <ProviderQuotaInfo
+            v-else-if="provider.platform === 'gemini' && provider.type !== 'apikey'"
+            :provider="provider"
+          />
+          <!-- API-key rows combine explicit upstream observations, local statistics, and configured local spending quotas. -->
+          <div v-else class="space-y-1">
+            <ProviderUpstreamUsageCell
+              v-if="provider.type === 'apikey'"
+              :provider="provider"
+              :result="upstreamUsage"
+              :error="upstreamUsageError"
+              :loading="upstreamUsageLoading"
+              :show-query-button="false"
+              :request="requestUpstreamUsage"
+            />
+            <ProviderQuotaInfo
+              v-if="provider.platform === 'gemini' && provider.type === 'apikey'"
+              :provider="provider"
+            />
+            <OllamaCloudUsageCell
+              v-if="provider.ollama_cloud_usage?.eligible"
+              :provider="provider"
+              @updated="handleOllamaCloudUsageUpdated"
+            />
+            <!-- Daily accounting includes requests, tokens, provider USD cost, and optional user charges. -->
+            <ProviderUsageStatsChips
+              v-if="!compact && todayStats"
+              :stats="todayStats"
+              scope="today"
+            />
+            <!-- Loading skeleton for today stats -->
+            <div
+              v-else-if="!compact && todayStatsLoading"
+              class="mb-0.5 flex items-center justify-end gap-1 lg:justify-start"
+            >
+              <div class="skeleton h-3 w-10"></div>
+              <div class="skeleton h-3 w-8"></div>
+              <div class="skeleton h-3 w-12"></div>
+            </div>
+
+            <!-- Eligible API-key and Bedrock records display each positive local spending limit. -->
+            <UsageProgressBar
+              v-if="quotaDailyBar"
+              label="1d"
+              :utilization="quotaDailyBar.utilization"
+              :resets-at="quotaDailyBar.resetsAt"
+              color="indigo"
+            />
+            <UsageProgressBar
+              v-if="quotaWeeklyBar"
+              label="7d"
+              :utilization="quotaWeeklyBar.utilization"
+              :resets-at="quotaWeeklyBar.resetsAt"
+              color="emerald"
+            />
+            <UsageProgressBar
+              v-if="quotaMonthlyBar"
+              :label="provider.quota_monthly_reset_mode === 'fixed' ? 'M' : '30d'"
+              :utilization="quotaMonthlyBar.utilization"
+              :resets-at="quotaMonthlyBar.resetsAt"
+              color="emerald"
+            />
+            <UsageProgressBar
+              v-if="quotaTotalBar"
+              label="total"
+              :utilization="quotaTotalBar.utilization"
+              color="purple"
+            />
+
+            <!-- No data at all -->
+            <div
+              v-if="
+                !todayStats &&
+                !todayStatsLoading &&
+                !hasApiKeyQuota &&
+                !provider.ollama_cloud_usage?.eligible &&
+                provider.type !== 'apikey'
+              "
+              class="text-xs text-gray-400"
+              >-</div
+            >
           </div>
         </div>
-        <div v-else-if="error" class="text-xs text-red-500">
-          {{ error }}
-        </div>
-        <!-- Gemini: show daily usage bars when available -->
-        <div v-else-if="geminiUsageAvailable" class="space-y-1">
-          <UsageProgressBar
-            v-for="bar in geminiUsageBars"
-            :key="bar.key"
-            :label="bar.label"
-            :utilization="bar.utilization"
-            :resets-at="bar.resetsAt"
-            :window-stats="bar.windowStats"
-            :color="bar.color"
+        <!-- The explicit upstream-query action follows local statistics and quotas in the owning cell. -->
+        <div
+          v-if="!compact && isUpstreamUsageQueryEnabled(provider)"
+          class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start"
+        >
+          <ProviderUpstreamUsageQueryButton
+            :provider="provider"
+            :loading="upstreamUsageLoading"
+            :request="requestUpstreamUsage"
           />
-          <p class="mt-1 text-xs leading-tight text-gray-400 dark:text-gray-500 italic">
-            * {{ t('admin.providers.gemini.quotaPolicy.simulatedNote') || 'Simulated quota' }}
-          </p>
         </div>
-        <!-- A Gemini row with no available usage windows uses the unrestricted display label. -->
-        <div v-else class="text-xs text-gray-400">
-          {{ t('admin.providers.gemini.rateLimit.unlimited') }}
+        <div v-if="compact" class="mt-2 border-t border-gray-200 pt-2 dark:border-dark-600">
+          <p class="mb-1 font-medium">{{ t('admin.providers.columns.todayStats') }}</p>
+          <ProviderTodayStatsCell
+            :stats="todayStats"
+            :loading="todayStatsLoading"
+            :error="todayStatsError"
+          />
         </div>
-      </div>
-    </template>
-
-    <!-- Other providers: no usage window -->
-    <template v-else>
-      <div
-        v-if="
-          provider.type !== 'apikey' ||
-          (!upstreamUsage && !upstreamUsageError && !upstreamUsageLoading && !upstreamUsageDisabled)
-        "
-        class="text-xs text-gray-400"
-        >-</div
-      >
-    </template>
-  </div>
-
-  <!-- Non-OAuth/Setup-Token providers -->
-  <div ref="rootRef" v-else>
-    <div v-if="isGeminiThirdPartyProvider" class="space-y-1">
-      <ProviderUpstreamUsageCell
-        v-if="provider.type === 'apikey'"
-        :provider="provider"
-        :result="upstreamUsage"
-        :error="upstreamUsageError"
-        :loading="upstreamUsageLoading"
-        :show-query-button="false"
-        :request="requestUpstreamUsage"
-      />
-      <ProviderUsageStatsChips
-        v-if="showGeminiTodayStats && todayStats"
-        :stats="todayStats"
-        scope="today"
-      />
-      <div
-        v-else-if="showGeminiTodayStats && todayStatsLoading"
-        class="mb-0.5 flex items-center justify-end gap-1 lg:justify-start"
-      >
-        <div class="skeleton h-3 w-10"></div>
-        <div class="skeleton h-3 w-8"></div>
-        <div class="skeleton h-3 w-12"></div>
-      </div>
-      <div v-else-if="provider.type !== 'apikey'" class="text-xs text-gray-400">-</div>
+      </ProviderCellDetails>
     </div>
-    <!-- Eligible non-API-key Gemini rows display their quota-window observations. -->
-    <ProviderQuotaInfo
-      v-else-if="provider.platform === 'gemini' && provider.type !== 'apikey'"
-      :provider="provider"
-    />
-    <!-- API-key rows combine explicit upstream observations, local statistics, and configured local spending quotas. -->
-    <div v-else class="space-y-1">
-      <ProviderUpstreamUsageCell
-        v-if="provider.type === 'apikey'"
-        :provider="provider"
-        :result="upstreamUsage"
-        :error="upstreamUsageError"
-        :loading="upstreamUsageLoading"
-        :show-query-button="false"
-        :request="requestUpstreamUsage"
-      />
-      <ProviderQuotaInfo
-        v-if="provider.platform === 'gemini' && provider.type === 'apikey'"
-        :provider="provider"
-      />
-      <OllamaCloudUsageCell
-        v-if="provider.ollama_cloud_usage?.eligible"
-        :provider="provider"
-        @updated="handleOllamaCloudUsageUpdated"
-      />
-      <!-- Daily accounting includes requests, tokens, provider USD cost, and optional user charges. -->
-      <ProviderUsageStatsChips v-if="todayStats" :stats="todayStats" scope="today" />
-      <!-- Loading skeleton for today stats -->
-      <div
-        v-else-if="todayStatsLoading"
-        class="mb-0.5 flex items-center justify-end gap-1 lg:justify-start"
-      >
-        <div class="skeleton h-3 w-10"></div>
-        <div class="skeleton h-3 w-8"></div>
-        <div class="skeleton h-3 w-12"></div>
-      </div>
-
-      <!-- Eligible API-key and Bedrock records display each positive local spending limit. -->
-      <UsageProgressBar
-        v-if="quotaDailyBar"
-        label="1d"
-        :utilization="quotaDailyBar.utilization"
-        :resets-at="quotaDailyBar.resetsAt"
-        color="indigo"
-      />
-      <UsageProgressBar
-        v-if="quotaWeeklyBar"
-        label="7d"
-        :utilization="quotaWeeklyBar.utilization"
-        :resets-at="quotaWeeklyBar.resetsAt"
-        color="emerald"
-      />
-      <UsageProgressBar
-        v-if="quotaMonthlyBar"
-        :label="provider.quota_monthly_reset_mode === 'fixed' ? 'M' : '30d'"
-        :utilization="quotaMonthlyBar.utilization"
-        :resets-at="quotaMonthlyBar.resetsAt"
-        color="emerald"
-      />
-      <UsageProgressBar
-        v-if="quotaTotalBar"
-        label="total"
-        :utilization="quotaTotalBar.utilization"
-        color="purple"
-      />
-
-      <!-- No data at all -->
-      <div
-        v-if="
-          !todayStats &&
-          !todayStatsLoading &&
-          !hasApiKeyQuota &&
-          !provider.ollama_cloud_usage?.eligible &&
-          provider.type !== 'apikey'
-        "
-        class="text-xs text-gray-400"
-        >-</div
-      >
-    </div>
-  </div>
-  <!-- The explicit upstream-query action follows local statistics and quotas in the owning cell. -->
-  <div
-    v-if="isUpstreamUsageQueryEnabled(provider)"
-    class="mt-0.5 flex items-center justify-end gap-1.5 lg:justify-start"
-  >
-    <ProviderUpstreamUsageQueryButton
-      :provider="provider"
-      :loading="upstreamUsageLoading"
-      :request="requestUpstreamUsage"
+    <ProviderTodayStatsCell
+      v-if="compact"
+      compact
+      :stats="todayStats"
+      :loading="todayStatsLoading"
+      :error="todayStatsError"
     />
   </div>
 </template>
@@ -790,13 +882,17 @@ import type {
 import { buildOpenAIUsageRefreshKey } from '@/utils/providerUsageRefresh'
 import { isUpstreamUsageQueryEnabled } from '@/utils/upstreamUsage'
 import { enqueueUsageRequest } from '@/utils/usageLoadQueue'
-import { formatCompactNumber } from '@/utils/format'
+import { formatCompactDateTimeParts, formatCompactNumber } from '@/utils/format'
 import { useDesktopTableViewport } from '@/composables/useDesktopTableViewport'
 import Icon from '@/components/icons/Icon.vue'
 import {
   buildGeminiUsageBars,
   buildLocalQuotaBar,
   hasAntigravityIneligibleTiers,
+  normalizeUpstreamUsageResult,
+  resolveUpstreamUsageResult,
+  upstreamUsageLimits,
+  upstreamUsageUtilization,
   resolveQoderEnterpriseUrl,
   summarizeAntigravityUsageGroups,
   summarizeGeminiChannel,
@@ -811,6 +907,8 @@ import GrokQuotaProbeCell from './GrokQuotaProbeCell.vue'
 import OllamaCloudUsageCell from './OllamaCloudUsageCell.vue'
 import ProviderUpstreamUsageCell from './ProviderUpstreamUsageCell.vue'
 import ProviderUsageStatsChips from './ProviderUsageStatsChips.vue'
+import ProviderTodayStatsCell from './ProviderTodayStatsCell.vue'
+import ProviderCellDetails from './ProviderCellDetails.vue'
 import ProviderUpstreamUsageQueryButton from './ProviderUpstreamUsageQueryButton.vue'
 
 /**
@@ -850,6 +948,8 @@ const props = withDefaults(
     provider: Provider // current provider row record
     todayStats?: WindowStats | null // optional local daily observations
     todayStatsLoading?: boolean // parent daily statistics request activity
+    todayStatsError?: string | null // optional page statistics feedback
+    compact?: boolean // Show at most four windows and a one-line daily summary.
     /**
      * Changing this token requests a fresh eligible usage observation, delegating force to the
      * parent when batch loading is configured.
@@ -1138,6 +1238,108 @@ const grokRetryAfterLabel = computed(() => grokSummary.value.retryAfterLabel)
 const hasIneligibleTiers = computed(() =>
   hasAntigravityIneligibleTiers(props.provider.extra as Record<string, unknown> | undefined),
 )
+
+// CompactUsageWindow carries the portion of an applicable window shown in the row.
+type CompactUsageWindow = { label: string; utilization: number | null }
+
+// upstreamSummary uses the same manual and saved observations as the full details.
+const compactUpstreamResult = computed(() =>
+  isUpstreamUsageQueryEnabled(props.provider)
+    ? resolveUpstreamUsageResult(props.provider, props.upstreamUsage)
+    : null,
+)
+const compactUpstreamUsage = computed(() =>
+  normalizeUpstreamUsageResult(compactUpstreamResult.value),
+)
+
+// compactWindows preserves each platform's applicable periods and feeds the overflow count.
+const compactWindows = computed<CompactUsageWindow[]>(() => {
+  if (!props.compact) return []
+  const windows: CompactUsageWindow[] = []
+  const add = (label: string, bar?: { utilization: number } | null) => {
+    if (bar) windows.push({ label, utilization: bar.utilization })
+  }
+  const provider = props.provider
+  if (showUsageWindows.value) {
+    const usage = usageInfo.value
+    if (
+      provider.platform === 'antigravity' &&
+      !isForbidden.value &&
+      !needsReauth.value &&
+      !usage?.error
+    ) {
+      for (const group of antigravityUsageGroups.value) {
+        const family = t(group.labelKey)
+        add(family + ' 7d', group.weekly)
+        add(family + ' 5h', group.fiveHour)
+      }
+    } else if (provider.platform === 'gemini') {
+      for (const bar of geminiUsageBars.value) add(bar.label, bar)
+    } else if (provider.platform === 'grok' && !isForbidden.value && !needsReauth.value) {
+      if (grokIsFree.value) add('24h', grokFreeTokenBar.value)
+      else {
+        add('7d', grokWeeklyBillingBar.value)
+        add('30d', grokMonthlyBillingBar.value)
+      }
+    } else if (provider.platform === 'qoder' && usage?.qoder_quota?.display_mode !== 'enterprise') {
+      if (usage?.qoder_quota) add(t('admin.providers.compact.credits'), qoderQuotaUsageBar.value)
+    } else if (
+      provider.platform === 'anthropic' ||
+      (provider.platform === 'openai' && provider.type === 'oauth')
+    ) {
+      add('5h', usage?.five_hour)
+      add('7d', usage?.seven_day)
+      if (provider.platform === 'anthropic') {
+        add('7d S', usage?.seven_day_sonnet)
+        add('7d F', usage?.seven_day_fable)
+      }
+    }
+  } else {
+    const ollama = provider.ollama_cloud_usage?.snapshot?.data
+    if (ollama?.five_hour) windows.push({ label: '5h', utilization: ollama.five_hour.used_percent })
+    if (ollama?.seven_day) windows.push({ label: '7d', utilization: ollama.seven_day.used_percent })
+    for (const limit of upstreamUsageLimits(compactUpstreamUsage.value)) {
+      windows.push({ label: limit.name, utilization: upstreamUsageUtilization(limit) })
+    }
+    add('1d', quotaDailyBar.value)
+    add('7d', quotaWeeklyBar.value)
+    add(provider.quota_monthly_reset_mode === 'fixed' ? 'M' : '30d', quotaMonthlyBar.value)
+    add(t('admin.providers.compact.total'), quotaTotalBar.value)
+  }
+  return windows
+})
+
+// compactObservedAt shows the time of the same upstream observation used by the summary.
+const compactObservedAt = computed(() => {
+  const observed = compactUpstreamResult.value?.observed_at || usageInfo.value?.updated_at
+  const parts = formatCompactDateTimeParts(observed)
+  return parts.full ? parts.date + ' ' + parts.time.slice(0, 5) : ''
+})
+
+// compactUsageNotice preserves errors, entitlement, and wallet-only observations in the row.
+const compactUsageNotice = computed(() => {
+  if (error.value) return error.value
+  if (props.upstreamUsageError) return t('admin.providers.usageError')
+  if (needsReauth.value) return t('admin.providers.needsReauth')
+  if (isForbidden.value) return forbiddenLabel.value
+  if (usageInfo.value?.error) return usageErrorLabel.value
+  const wallet = compactUpstreamUsage.value
+  if (wallet?.balances?.length) {
+    return wallet.balances
+      .map((entry) => entry.currency + ' ' + formatCompactNumber(entry.remaining))
+      .join(' · ')
+  }
+  const remaining = wallet?.balance?.remaining
+  if (remaining != null) {
+    return t('admin.providers.upstreamUsage.remainingLine', {
+      remaining: [formatCompactNumber(remaining), wallet?.unit].filter(Boolean).join(' '),
+    })
+  }
+  if (wallet?.subscription) return wallet.subscription.plan_name
+  if (grokQuotaUnknown.value && props.provider.platform === 'grok')
+    return grokQuotaUnknownLabel.value
+  return ''
+})
 
 /**
  * Authorization feedback distinguishes forbidden verification or violation states, missing

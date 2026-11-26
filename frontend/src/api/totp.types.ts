@@ -40,8 +40,9 @@ export interface TotpEnableResponse {
 }
 
 // TotpDisableRequest supplies account ownership proof for removing authenticator
-// verification.
+// verification. A payment operator submits a fresh code from the current factor.
 export interface TotpDisableRequest {
+  totp_code?: string // Payment operator authenticator proof.
   email_code?: string // Email ownership proof.
   password?: string // Account authentication password.
 }

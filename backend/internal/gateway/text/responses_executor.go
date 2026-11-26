@@ -88,6 +88,8 @@ func (e *ResponsesExecutor) Execute(ctx context.Context, in execution.Request, s
 	options := e.standard
 	if in.Text.Kind == execution.TextOpenAIResponses {
 		options = e.responses
+	} else {
+		options.legacyRetryOutput = true
 	}
 	// Capture result/error observations around the opened session while forwarding
 	// optional lifecycle, group-fallback, and retry hooks to the dynamic session.

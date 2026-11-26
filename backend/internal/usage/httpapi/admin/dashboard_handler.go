@@ -138,7 +138,7 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 	// Report whole elapsed seconds since this handler was constructed.
 	uptime := int64(time.Since(h.startTime).Seconds())
 
-	response.Success(c, gin.H{
+	payload := gin.H{
 		// User counts.
 		"total_users":     stats.TotalUsers,
 		"today_new_users": stats.TodayNewUsers,
@@ -187,7 +187,12 @@ func (h *DashboardHandler) GetStats(c *gin.Context) {
 		"hourly_active_users": stats.HourlyActiveUsers,
 		"stats_updated_at":    stats.StatsUpdatedAt,
 		"stats_stale":         stats.StatsStale,
-	})
+	}
+	if stats.UserIDPoolAlert != nil {
+		payload["user_id_pool_alert"] = stats.UserIDPoolAlert
+	}
+
+	response.Success(c, payload)
 }
 
 // GetRealtimeMetrics returns fixed zero values for the dashboard's

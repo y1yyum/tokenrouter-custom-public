@@ -15,6 +15,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/apikey"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/openaiforward"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	providercore "github.com/TokenFlux/TokenRouter/internal/provider"
 	"github.com/TokenFlux/TokenRouter/internal/upstream"
@@ -568,27 +569,41 @@ func TestOpenAIResponsesRejectedFieldRetryStateForRequestAllowsSameTransformAcro
 	initialBody := []byte(`{"model":"gpt-5.5","truncation":"auto"}`)
 	retryBody := []byte(`{"model":"gpt-5.5"}`)
 
-	providerA := openAIResponsesRejectedFieldRetryStateForRequest(c, initialBody)
+	providerA := openAIResponsesRejectedFieldRetryStateForRequest(c, 57, initialBody)
 	require.True(t, providerA.Allow(retryBody))
 	require.False(t, providerA.Allow(retryBody), "one provider must not repeat the same transform")
 
-	providerB := openAIResponsesRejectedFieldRetryStateForRequest(c, initialBody)
+	providerB := openAIResponsesRejectedFieldRetryStateForRequest(c, 58, initialBody)
 	require.NotSame(t, providerA, providerB)
 	require.Same(t, providerA.Budget(), providerB.Budget())
 	require.True(t, providerB.Allow(retryBody), "a failover provider must be allowed to apply the same transform")
+	resumedA := openAIResponsesRejectedFieldRetryStateForRequest(c, 57, initialBody)
+	require.Same(t, providerA, resumedA)
+	require.False(t, resumedA.Allow(retryBody), "reselecting a provider must preserve its repair history")
 }
 
 // TestOpenAIResponsesRejectedFieldRetryStateForRequestSharesBoundedBudgetAcrossProviders
-// consumes one repair from each request-linked attempt state. It checks the
-// next state cannot admit another novel body after the shared allowance is
-// exhausted.
+// consumes repairs through the ordinary and passthrough adapter entry points.
+// The next candidate cannot admit another repair after their shared allowance
+// is exhausted.
 func TestOpenAIResponsesRejectedFieldRetryStateForRequestSharesBoundedBudgetAcrossProviders(t *testing.T) {
 	c, _ := gin.CreateTestContext(httptest.NewRecorder())
-	for attempt := range openai.MaxResponsesRejectedFieldRetries {
-		state := openAIResponsesRejectedFieldRetryStateForRequest(c, []byte(fmt.Sprintf(`{"provider":%d}`, attempt)))
-		require.True(t, state.Allow([]byte(`{"same":"retry"}`)))
+	executor := &OpenAIResponsesExecutor{Output: &OpenAIResponseOutput{}}
+	ordinary := gatewayprovider.NewExecutionProvider(&providercore.Record{ID: 57})
+	passthrough := gatewayprovider.NewExecutionProvider(&providercore.Record{ID: 58})
+	options := executor.nativeForwardHTTPOptions(t.Context(), c, ordinary, openaiforward.HTTPInput{}, openai.HTTPExchangeOptions{}, nil, nil)
+	a := options.RejectedFieldRetryState([]byte(`{"candidate":"a"}`))
+	adapter := &openAIPassthroughExecutionAdapter{
+		openAIMessagesExecutionAdapter: &openAIMessagesExecutionAdapter{c: c, provider: passthrough},
 	}
-	overflow := openAIResponsesRejectedFieldRetryStateForRequest(c, []byte(`{"provider":"overflow"}`))
+	b := adapter.RetryState([]byte(`{"candidate":"b"}`))
+	require.Same(t, a.Budget(), b.Budget())
+	states := []*openai.ResponsesRejectedFieldRetryState{a, b}
+	for attempt := range openai.MaxResponsesRejectedFieldRetries {
+		state := states[attempt%len(states)]
+		require.True(t, state.Allow([]byte(fmt.Sprintf(`{"variant":%d}`, attempt/len(states)))))
+	}
+	overflow := openAIResponsesRejectedFieldRetryStateForRequest(c, 99, []byte(`{"provider":"overflow"}`))
 	require.False(t, overflow.Allow([]byte(`{"new":"retry"}`)))
 }
 

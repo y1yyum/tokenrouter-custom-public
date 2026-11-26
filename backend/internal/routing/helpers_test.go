@@ -84,6 +84,11 @@ func (r *groupAvailabilityProbeRunnerRepoStub) GetSummaryByGroupIDs(context.Cont
 	return nil, nil
 }
 
+// GetImportedSummaryByGroupIDs supplies no imported history for runner fixtures.
+func (r *groupAvailabilityProbeRunnerRepoStub) GetImportedSummaryByGroupIDs(context.Context, []int64, int, int, string, time.Time) (map[int64]*GroupAvailabilitySummary, error) {
+	return nil, nil
+}
+
 // CleanupOldResults accepts retention maintenance so a round can reach
 // claiming.
 func (r *groupAvailabilityProbeRunnerRepoStub) CleanupOldResults(context.Context, time.Time) error {

@@ -2,6 +2,7 @@ package adminapi
 
 import (
 	"encoding/json"
+	"net/http"
 	"testing"
 
 	"github.com/gin-gonic/gin"
@@ -14,6 +15,7 @@ import (
 // types. Tests preserve partial updates, explicit null, dynamic maps, and
 // required-field validation while also preventing undocumented administrative
 // routes or invalid aliases from becoming available through the catalogue.
+// Direct-only route declarations are checked against the same startup rules.
 
 // schemaFixtureInput models the omission and binding rules used by management handlers.
 type schemaFixtureInput struct {
@@ -71,6 +73,37 @@ func TestCatalogRejectsMissingRoutesAndInvalidAliases(t *testing.T) {
 		_, err = NewCatalog([]*Operation{operation})
 		require.Error(t, err)
 	}
+}
+
+// TestDirectOnlyRouteDeclarationsMatchExactRoutes registers a direct-only method
+// and path. Only that mounted route can omit a delegation description; a
+// neighboring route, a different method, or a conflicting declaration still fails.
+func TestDirectOnlyRouteDeclarationsMatchExactRoutes(t *testing.T) {
+	const routePath = "/api/v1/admin/direct-only-fixture"
+	DefineDirectOnly(http.MethodGet, routePath)
+	t.Cleanup(func() {
+		declarationsMu.Lock()
+		defer declarationsMu.Unlock()
+		delete(declarations, http.MethodGet+" "+routePath)
+	})
+
+	router := gin.New()
+	router.GET(routePath, func(c *gin.Context) { c.Status(http.StatusNoContent) })
+	catalog, err := FromRoutes(router.Routes())
+	require.NoError(t, err)
+	require.Empty(t, catalog.Operations())
+
+	for _, route := range []gin.RouteInfo{
+		{Method: http.MethodPost, Path: routePath},
+		{Method: http.MethodGet, Path: routePath + "/child"},
+	} {
+		_, err := FromRoutes(append(router.Routes(), route))
+		require.ErrorContains(t, err, "missing management operation: "+route.Method+" "+route.Path)
+	}
+
+	require.PanicsWithValue(t, "duplicate administrative route description: GET "+routePath, func() {
+		Define(Operation{ID: "fixture.list", Method: http.MethodGet, Path: routePath, Input: Arguments(routePath, nil, nil)})
+	})
 }
 
 // TestOptionalEnumsMatchHTTPBinding compares actual Gin validation with catalogue admission.

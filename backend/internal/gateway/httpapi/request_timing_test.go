@@ -229,6 +229,71 @@ func TestTimingWriterFailureDoesNotPublishDelivery(t *testing.T) {
 	require.NotContains(t, stages.Snapshot(), "first_downstream_flush_ms")
 }
 
+// TestTimingWriterObservesAcceptedParameterTerminals splits an SSE terminal
+// across writes after visible output. A failed final write cannot establish a
+// terminal, and later write failure cannot erase one already accepted.
+func TestTimingWriterObservesAcceptedParameterTerminals(t *testing.T) {
+	for _, stage := range []string{"none", "before_terminal", "after_terminal"} {
+		t.Run(stage, func(t *testing.T) {
+			recorder := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(recorder)
+			_, stages := timing.WithStages(t.Context(), time.Now(), nil)
+			writer := &timingWriter{ResponseWriter: c.Writer, stages: stages}
+			writer.frames.observe = writer.observe
+			delivery := &parameterDelivery{endpoint: EndpointResponses}
+			writer.parameterStream.Store(delivery)
+			writer.Header().Set("Content-Type", "text/event-stream")
+			sink := ResponseSink{Writer: writer, timing: writer}
+			require.NoError(t, sink.Emit(upstream.OutputEvent{Data: []byte("data: {\"type\":\"response.output_text.delta\",\"delta\":\"yes\"}\n\n")}))
+			require.Contains(t, stages.Snapshot(), "first_visible_output_ms")
+			for _, part := range []string{"event: response.in", "complete\r", "\ndata: {\r\ndata: \"response\": {\"status\":\"incomplete\"}}\r\n\r"} {
+				// Preserve both a split event label and multiline data at the
+				// HTTP writer boundary before accepting the terminating CRLF.
+				_, err := writer.WriteString(part)
+				require.NoError(t, err)
+			}
+			outcome, disconnected := delivery.snapshot()
+			require.Empty(t, outcome)
+			require.False(t, disconnected)
+			if stage == "before_terminal" {
+				writer.ResponseWriter = timingFailedWriter{c.Writer}
+				_, err := writer.Write([]byte("\n"))
+				require.ErrorIs(t, err, io.ErrClosedPipe)
+				writer.ResponseWriter = c.Writer
+				_, err = writer.Write([]byte("\n"))
+				require.NoError(t, err)
+				outcome, disconnected = delivery.snapshot()
+				require.Empty(t, outcome)
+				require.True(t, disconnected)
+				return
+			}
+			_, err := writer.Write([]byte("\n"))
+			require.NoError(t, err)
+			if stage == "after_terminal" {
+				writer.ResponseWriter = timingFailedWriter{c.Writer}
+				_, err = writer.Write([]byte("data: [DONE]\n\n"))
+				require.ErrorIs(t, err, io.ErrClosedPipe)
+			}
+			outcome, disconnected = delivery.snapshot()
+			require.Equal(t, "incomplete", outcome)
+			require.Equal(t, stage == "after_terminal", disconnected)
+		})
+	}
+}
+
+// TestTimingFramesSkipsOversizedParameterEvent verifies that a large split
+// frame cannot publish evidence or mask the next valid frame. The configured
+// observation cap applies independently of the total bytes already delivered.
+func TestTimingFramesSkipsOversizedParameterEvent(t *testing.T) {
+	var observed []string
+	frames := timingFrames{maxBytes: 64, observe: func(data, _ string) { observed = append(observed, data) }}
+	frames.feed([]byte("data: {\"large\":\"" + strings.Repeat("a", 64)))
+	frames.feed([]byte("\"}\r\ndata: {\"ignored\": true}\r\n\r"))
+	frames.feed([]byte("\ndata: {\"valid\": true}\r\n\r\n"))
+	require.Equal(t, []string{`{"valid": true}`}, observed)
+	require.LessOrEqual(t, cap(frames.line), frames.maxBytes)
+}
+
 // TestTimingOutputProvenanceSurvivesWriterWrappers distinguishes upstream output
 // from local errors even after admission. Partial SSE writes pass through model
 // restoration before observation, and a local terminal flush can deliver earlier

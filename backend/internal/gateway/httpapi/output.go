@@ -1,12 +1,15 @@
 package httpapi
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 
 	"github.com/gin-gonic/gin"
 	"go.uber.org/zap"
 
+	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/upstream"
 )
 
@@ -85,6 +88,9 @@ func (s ResponseSink) Begin(head upstream.OutputHead) error {
 	for key, values := range head.Header {
 		headers[key] = append([]string(nil), values...)
 	}
+	if head.Status < http.StatusBadRequest && s.omittedToolLimit() > 0 {
+		headers.Del("Content-Length")
+	}
 	s.Writer.WriteHeader(head.Status)
 	if observe != nil {
 		observe(head.Header)
@@ -120,6 +126,13 @@ func (s ResponseSink) emit(event upstream.OutputEvent) error {
 		defer s.timing.upstreamWrites.Add(-1)
 	}
 	if len(event.Data) > 0 {
+		if limit := s.omittedToolLimit(); limit > 0 {
+			var err error
+			event.Data, err = restoreResponseToolLimit(event.Data, limit)
+			if err != nil {
+				return err
+			}
+		}
 		n, err := s.Writer.Write(event.Data)
 		if err != nil {
 			return err
@@ -134,6 +147,47 @@ func (s ResponseSink) emit(event upstream.OutputEvent) error {
 		}
 	}
 	return nil
+}
+
+// omittedToolLimit reads the outcome of the actual dispatch from the logical
+// request. A later provider can retain its limit and reset the earlier omission.
+func (s ResponseSink) omittedToolLimit() int64 {
+	if s.ctx == nil || s.ctx.Request == nil {
+		return 0
+	}
+	return gatewayprovider.ParameterToolLimitOmitted(s.ctx.Request.Context())
+}
+
+// restoreResponseToolLimit handles a complete JSON response or SSE data lines
+// delivered by the native and bridge readers. Event names, comments and the
+// original line endings remain in their existing order.
+func restoreResponseToolLimit(data []byte, limit int64) ([]byte, error) {
+	if compact := bytes.TrimSpace(data); len(compact) > 0 && compact[0] == '{' {
+		return requestpolicy.RestoreToolLimit(compact, limit)
+	}
+	var output []byte
+	for line := range bytes.SplitAfterSeq(data, []byte("\n")) {
+		payload, ok := bytes.CutPrefix(line, []byte("data:"))
+		if !ok {
+			output = append(output, line...)
+			continue
+		}
+		value := bytes.TrimSpace(payload)
+		restored, err := requestpolicy.RestoreToolLimit(value, limit)
+		if err != nil {
+			return nil, err
+		}
+		if !bytes.Equal(value, restored) {
+			start := bytes.Index(payload, value)
+			output = append(output, "data:"...)
+			output = append(output, payload[:start]...)
+			output = append(output, restored...)
+			output = append(output, payload[start+len(value):]...)
+		} else {
+			output = append(output, line...)
+		}
+	}
+	return output, nil
 }
 
 // InitialOutput clones current headers before reading writer commitment and

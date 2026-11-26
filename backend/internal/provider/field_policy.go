@@ -229,6 +229,7 @@ func buildExtraFieldPolicyEntries() []extraFieldPolicyEntry {
 		{key: "qoder_quota_snapshot", policy: ExtraFieldPolicy{ManagedConfiguration: true, DiscardOnDuplicate: true, IncludeInSchedulerMeta: true}},
 		{key: "qoder_quota_updated_at", policy: ExtraFieldPolicy{ManagedConfiguration: true, DiscardOnDuplicate: true, IncludeInSchedulerMeta: true}},
 		{key: QoderCatalogExtraKey, policy: ExtraFieldPolicy{ManagedConfiguration: true, DiscardOnDuplicate: true, IncludeInSchedulerMeta: true}},
+		{key: RequestParameterEvidenceExtraKey, policy: ExtraFieldPolicy{DiscardOnDuplicate: true, IncludeInSchedulerMeta: true}},
 		{key: OllamaCloudUsageSessionExtraKey, policy: ExtraFieldPolicy{ManagedConfiguration: true, DiscardOnAdminPatch: true, DiscardOnDuplicate: true}},
 		{key: OllamaCloudUsageAutoRefreshExtraKey, policy: ExtraFieldPolicy{ManagedConfiguration: true, DiscardOnAdminPatch: true, DiscardOnDuplicate: true}},
 		{key: OllamaCloudUsageSnapshotExtraKey, policy: ExtraFieldPolicy{ManagedConfiguration: true, DiscardOnAdminPatch: true, DiscardOnDuplicate: true}},

@@ -36,9 +36,9 @@ import (
 // budget has ended.
 // Cleanup errors turn a successful runner exit code into failure.
 
-// integrationDB and integrationEntClient share the migrated billing database
-// for package tests; runPostgresTests owns their setup and closes them after
-// m.Run.
+// integrationDB and integrationEntClient share the migrated billing database.
+// integrationPostgresDSN lets connection recovery tests open and close their
+// own pool while runPostgresTests owns the container and the shared pool.
 var (
 	// integrationDB remains available through package test cleanup and
 	// shares its pool with integrationEntClient, whose Close releases that
@@ -49,6 +49,8 @@ var (
 	// borrow it and keep their own transactions separate from its
 	// package-wide connection lifetime.
 	integrationEntClient *dbent.Client
+
+	integrationPostgresDSN string // connection string for independent pools
 )
 
 // TestMain starts the shared billing PostgreSQL fixture and exits with its
@@ -132,5 +134,6 @@ func runPostgresTests(m *testing.M) (exitCode int) {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
+	integrationPostgresDSN = dsn
 	return m.Run()
 }

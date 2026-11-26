@@ -1,0 +1,847 @@
+package httpapi
+
+import (
+	"context"
+	"encoding/csv"
+	"errors"
+	"io"
+	"net/http"
+	"net/url"
+	"os"
+	"reflect"
+	"sort"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/gin-gonic/gin"
+
+	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
+	"github.com/TokenFlux/TokenRouter/internal/identity"
+	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
+	"github.com/TokenFlux/TokenRouter/internal/server/httpx"
+)
+
+// handler.go adapts the crypto account, wallet, settings, and settlement
+// services to the payment console. The HTTP handler shares the same atomic
+// settings store that the wallet runtime uses, so settings edits compare the
+// stored snapshot before asking the runtime to reload. The normal config view
+// masks secrets while the private view requires payment verification.
+//
+// The deposit address endpoint resolves only the caller's account and emits
+// networks accepted by the scanner. The administrator endpoints hand off wallet
+// initialization, ledger queries, sweep execution, and RPC checks to the
+// underlying services. Routes apply operator and instance checks before dispatch.
+
+const (
+	// manualSweepDeadline bounds synchronous work while allowing the service's
+	// per-chain processing and job persistence to finish after a browser disconnects.
+	manualSweepDeadline = 30 * time.Minute
+)
+
+// CryptoHandler serves the built-in crypto deposit channel.
+type CryptoHandler struct {
+	addresses          *addresses.Service
+	store              cryptopay.SettingStore
+	service            *cryptopay.Service
+	security           cryptoAdminSecurityVerifier
+	securityConfig     *config.Config
+	mnemonicExporter   cryptoMnemonicExporter
+	privateKeyExporter cryptoAddressPrivateKeyExporter
+	operationNotifier  cryptoWalletOperationNotifier
+	depositConfirmer   cryptoDepositConfirmer
+	// signer and sweepGate are optional test seams for handler contract tests.
+	// In production sweepGate is wired from cryptopay.Service in the constructor.
+	signer    cryptoSignerService
+	sweepGate cryptoSweepGateReader
+}
+
+// NewCryptoHandler binds the restored crypto services and shared settings adapter.
+// Reuse the same security service as the identity graph so logout and credential
+// changes invalidate grants accepted by the wallet routes.
+func NewCryptoHandler(addressService *addresses.Service, store cryptopay.SettingStore, cryptoSvc *cryptopay.Service, security *identity.CryptoSecurityService, cfg *config.Config) *CryptoHandler {
+	var verifier cryptoAdminSecurityVerifier
+	if security != nil {
+		verifier = security
+	}
+	var mnemonicExporter cryptoMnemonicExporter
+	var privateKeyExporter cryptoAddressPrivateKeyExporter
+	var depositConfirmer cryptoDepositConfirmer
+	var operationNotifier cryptoWalletOperationNotifier
+	if cryptoSvc != nil {
+		mnemonicExporter = cryptoSvc
+		privateKeyExporter = cryptoSvc
+		depositConfirmer = cryptoSvc
+		operationNotifier = cryptoSvc
+	}
+	var sweepGate cryptoSweepGateReader
+	if cryptoSvc != nil {
+		sweepGate = cryptoSvc
+	}
+	return &CryptoHandler{
+		addresses:          addressService,
+		sweepGate:          sweepGate,
+		store:              store,
+		service:            cryptoSvc,
+		security:           verifier,
+		securityConfig:     cfg,
+		operationNotifier:  operationNotifier,
+		mnemonicExporter:   mnemonicExporter,
+		privateKeyExporter: privateKeyExporter,
+		depositConfirmer:   depositConfirmer,
+	}
+}
+
+// GetDepositAddresses returns (or lazily assigns) the caller's addresses.
+// GET /api/v1/crypto/deposit-addresses
+func (h *CryptoHandler) GetDepositAddresses(c *gin.Context) {
+	subject, ok := authctx.GetAuthSubjectFromContext(c)
+	if !ok {
+		httpx.Unauthorized(c, "User not authenticated")
+		return
+	}
+	cfg, err := cryptopay.LoadConfig(c.Request.Context(), h.store)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	if !cfg.Enabled {
+		httpx.ErrorWithDetails(c, http.StatusServiceUnavailable, "crypto deposit channel is disabled", "CRYPTO_DISABLED", nil)
+		return
+	}
+	if h.addresses == nil {
+		httpx.Error(c, http.StatusServiceUnavailable, "Deposit addresses unavailable")
+		return
+	}
+	families := make([]string, 0, 2)
+	for _, chain := range cfg.Chains {
+		if chain == cryptopay.ChainSolana {
+			families = append(families, addresses.FamilySolana)
+			continue
+		}
+		if cryptopay.IsEVMChain(chain) {
+			families = append(families, addresses.FamilyEVM)
+		}
+	}
+	h.addresses.SetFamilies(families)
+	assigned, err := h.addresses.GetOrAssign(c.Request.Context(), subject.UserID)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	// Offer addresses only for networks configured for scanning. NormalizeConfig
+	// currently admits EVM networks, so a legacy Solana assignment stays out of
+	// the response even if the database still retains it.
+	c.JSON(http.StatusOK, gin.H{"data": buildDepositAddressResponse(cfg.Chains, assigned)})
+}
+
+// buildDepositAddressResponse projects configured chains onto their assigned address families.
+func buildDepositAddressResponse(chains []string, assigned map[string]string) gin.H {
+	out := make([]gin.H, 0, len(chains))
+	solanaEnabled := false
+	for _, chain := range chains {
+		family := addresses.FamilyEVM
+		if chain == cryptopay.ChainSolana {
+			family = addresses.FamilySolana
+			solanaEnabled = true
+		}
+		out = append(out, gin.H{
+			"chain":   chain,
+			"address": assigned[family],
+		})
+	}
+	data := gin.H{
+		"evm":    assigned[addresses.FamilyEVM],
+		"chains": out,
+	}
+	if solanaEnabled {
+		data["solana"] = assigned[addresses.FamilySolana]
+	}
+	return data
+}
+
+// AdminGetConfig returns non-secret channel settings. RPC credentials are
+// available only from /config/private after fresh backend verification.
+// GET /api/v1/admin/crypto/config
+func (h *CryptoHandler) AdminGetConfig(c *gin.Context) {
+	cfg, err := cryptopay.LoadConfig(c.Request.Context(), h.store)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	configured := make([]string, 0, len(cfg.RPC))
+	for chain, endpoints := range cfg.RPC {
+		if cryptopay.IsEVMChain(chain) && strings.TrimSpace(endpoints) != "" {
+			configured = append(configured, chain)
+		}
+	}
+	sort.Strings(configured)
+	cfg.RPC = map[string]string{}
+	// RPCLimits is keyed by the full endpoint URL, which may embed provider
+	// credentials. Only the fresh-2FA private view may return it.
+	cfg.RPCLimits = nil
+	// The market feed may be a private mirror carrying credentials in its URL.
+	// Like RPC endpoints, the public settings view hides it; the fresh-2FA
+	// private view returns it. A blank value on save keeps the stored one
+	// because the console saves a diff, not the whole object.
+	cfg.NativePriceURL = ""
+	// The explorer key authenticates paid account-API quota: like RPC
+	// credentials it is returned only from the fresh-2FA private view. The
+	// endpoints themselves may embed a provider key in the path, so they are
+	// withheld from the public view too.
+	cfg.ExplorerAPIKey = ""
+	cfg.ExplorerAPIURL = nil
+	// The notification webhook URL embeds the receiver's bearer key (for Bark
+	// it is the device key in the path). The public settings view returns it
+	// blank and keeps only the non-secret channel switches; the fresh-2FA
+	// private view returns the real value. The console saves a diff, so a blank
+	// webhook_url in a save payload clears the channel only when explicitly
+	// intended.
+	if cfg.Notify != nil && cfg.Notify.WebhookURL != "" {
+		masked := *cfg.Notify
+		masked.WebhookURL = ""
+		cfg.Notify = &masked
+	}
+	cryptoNoStore(c)
+	c.JSON(http.StatusOK, gin.H{"data": struct {
+		cryptopay.CryptoConfig
+		RPCConfigured []string `json:"rpc_configured"`
+	}{CryptoConfig: cfg, RPCConfigured: configured}})
+}
+
+// AdminGetPrivateConfig is guarded by CryptoAdminSecurity's fresh-code check.
+// GET /api/v1/admin/crypto/config/private
+func (h *CryptoHandler) AdminGetPrivateConfig(c *gin.Context) {
+	cryptoNoStore(c)
+	cfg, err := cryptopay.LoadConfig(c.Request.Context(), h.store)
+	if httpx.ErrorFrom(c, err) {
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": cfg})
+}
+
+// AdminUpdateConfig validates and persists the channel config (admin).
+// PUT /api/v1/admin/crypto/config
+func (h *CryptoHandler) AdminUpdateConfig(c *gin.Context) {
+	// Merge over the stored config: a payload that omits keys (an older
+	// console, a scripted PUT) must not silently wipe them to zero values.
+	existing, expected, err := cryptopay.LoadConfigForUpdate(c.Request.Context(), h.store)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	var patch cryptopay.CryptoConfigPatch
+	if !decodeCryptoRequest(c, &patch, 256<<10, "Invalid config payload") {
+		return
+	}
+	merged := patch.Apply(existing)
+	if merged.HotIndex != 0 {
+		httpx.BadRequest(c, "Gas 钱包固定使用索引 0，不能通过配置改动钱包地址")
+		return
+	}
+	merged, err = cryptopay.NormalizeConfig(merged)
+	if err != nil {
+		httpx.BadRequest(c, "Invalid crypto configuration")
+		return
+	}
+	// The sweep destination is pinned once the signer shards exist. A host
+	// compromise that rewrites settings.crypto.config must not be able to move
+	// it through this ordinary save path: it has to pass the dedicated
+	// endpoint, which demands a fresh authenticator code and the risk phrase.
+	// This check runs before the step-up gate so the rejection is a clearly
+	// coded 409 rather than a generic second-factor prompt.
+	if err := merged.EnforceSweepDestinationLock(); err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	// A locked wallet must be recovered before the channel is switched back on.
+	// Accepting the save and letting the security monitor flip it back seconds
+	// later is exactly the silent revert this guard exists to prevent; signing
+	// and address issuance stay locked even if an operator writes the row by
+	// hand, so advertising the channel would show a page that cannot deliver.
+	if cryptoEnableNeedsUnlockedWallet(existing, merged) {
+		if locked, reason, lockedAt := h.walletSecurityLock(c); locked {
+			httpx.ErrorWithDetails(c, http.StatusConflict,
+				"充值钱包仍处于安全锁定状态，请先在安全面板完成 2FA 恢复后再开启充值通道",
+				"CRYPTO_WALLET_SECURITY_LOCKED",
+				map[string]string{"reason": reason, "locked_at": lockedAt, "recover_path": "/api/v1/admin/crypto/wallet/security/recover"})
+			return
+		}
+	}
+	// The handler checks the actual persisted change, after applying defaults.
+	// Client-side field lists and already-established step-up grants do not
+	// authorize RPC, destination, enablement, or other sensitive changes.
+	if cryptoConfigRequiresRisk(existing, merged) && !h.requireCryptoRisk(c) {
+		return
+	}
+	if (!strings.EqualFold(strings.TrimSpace(existing.HotWalletEVM), strings.TrimSpace(merged.HotWalletEVM)) ||
+		strings.TrimSpace(existing.HotWalletSolana) != strings.TrimSpace(merged.HotWalletSolana)) &&
+		!h.notifyWalletAction(c, "destination_change", "verified") {
+		return
+	}
+	if err := cryptopay.SaveConfigIfUnchanged(c.Request.Context(), h.store, merged, expected); err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	// Apply immediately: rebuild pools and restart the scan worker.
+	if h.service != nil {
+		h.service.Reload(c.Request.Context())
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"saved": true}})
+}
+
+// cryptoConfigRequiresRisk checks whether a normalized patch exceeds the threshold-only exception.
+func cryptoConfigRequiresRisk(before, after cryptopay.CryptoConfig) bool {
+	// This explicit exemption keeps every future configuration field protected
+	// by default. Only these operational thresholds need no fresh code.
+	after.SweepGlobalThreshold = before.SweepGlobalThreshold
+	after.SweepMinPerAddress = before.SweepMinPerAddress
+	after.ScanRange = before.ScanRange
+	after.ScanConcurrency = before.ScanConcurrency
+	after.CreditMinAmount = before.CreditMinAmount
+	after.CreditMaxAmount = before.CreditMaxAmount
+	before.HotWalletEVM = strings.ToLower(strings.TrimSpace(before.HotWalletEVM))
+	after.HotWalletEVM = strings.ToLower(strings.TrimSpace(after.HotWalletEVM))
+	before.HotWalletSolana = strings.TrimSpace(before.HotWalletSolana)
+	after.HotWalletSolana = strings.TrimSpace(after.HotWalletSolana)
+	return !reflect.DeepEqual(before, after)
+}
+
+// cryptoEnableNeedsUnlockedWallet reports whether this save turns a disabled
+// channel on. Saving unrelated fields while a wallet lock is active stays
+// allowed: only the enable transition has to wait for recovery.
+func cryptoEnableNeedsUnlockedWallet(before, after cryptopay.CryptoConfig) bool {
+	return !before.Enabled && after.Enabled
+}
+
+// walletSecurityLock reports the persistent wallet lock without revealing key
+// material. A status read error fails open: a brand-new deployment has no
+// wallet yet, and the durable security monitor still fails the channel closed
+// whenever it can observe the lock.
+func (h *CryptoHandler) walletSecurityLock(c *gin.Context) (locked bool, reason, lockedAt string) {
+	if h.service == nil {
+		return false, "", ""
+	}
+	status, err := h.service.WalletSecurity(c.Request.Context())
+	if err != nil {
+		return false, "", ""
+	}
+	return status.Locked, status.Reason, status.LockedAt
+}
+
+// AdminWalletStatus reports managed seed configuration and readiness.
+// GET /api/v1/admin/crypto/wallet/status
+func (h *CryptoHandler) AdminWalletStatus(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	st, err := h.service.WalletStatus(c.Request.Context())
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": st})
+}
+
+// AdminInitializeWallet imports the initial independent seeds after fresh 2FA.
+func (h *CryptoHandler) AdminInitializeWallet(c *gin.Context) {
+	cryptoVaultHeaders(c)
+	var body struct {
+		DepositMnemonic string `json:"deposit_mnemonic"`
+		HotMnemonic     string `json:"hot_mnemonic"`
+	}
+	if !decodeCryptoVaultRequest(c, &body) {
+		return
+	}
+	defer func() { body.DepositMnemonic, body.HotMnemonic = "", "" }()
+	if strings.TrimSpace(body.DepositMnemonic) == "" || strings.TrimSpace(body.HotMnemonic) == "" || len(body.DepositMnemonic) > 1024 || len(body.HotMnemonic) > 1024 {
+		httpx.BadRequest(c, "Two valid independent wallet mnemonics are required (maximum 1024 bytes each)")
+		return
+	}
+	if h.service == nil {
+		httpx.Error(c, http.StatusServiceUnavailable, "Wallet unavailable")
+		return
+	}
+	if err := h.service.InitializeWallet(cryptoAuditContext(c), body.DepositMnemonic, body.HotMnemonic); err != nil {
+		httpx.BadRequest(c, "Wallet initialization refused; check seed validity and whether a wallet already exists")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"saved": true}})
+}
+
+// AdminPoolStatus reports remaining unassigned addresses per family.
+// GET /api/v1/admin/crypto/pool
+func (h *CryptoHandler) AdminPoolStatus(c *gin.Context) {
+	if h.addresses == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	st, err := h.addresses.PoolStatus(c.Request.Context())
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": st})
+}
+
+// AdminHotWalletStatus reports gas readiness per chain.
+// GET /api/v1/admin/crypto/hot-wallet
+func (h *CryptoHandler) AdminHotWalletStatus(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	st, err := h.service.HotWalletStatuses(c.Request.Context())
+	if err != nil {
+		httpx.BadRequest(c, "Gas wallet status unavailable")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": st})
+}
+
+// AdminHotWalletAddress returns the address the hot wallet actually derives
+// to, so the operator can paste it into the sweep destination fields instead
+// of guessing (a wrong destination sends swept funds into the void).
+// GET /api/v1/admin/crypto/hot-wallet/address
+func (h *CryptoHandler) AdminHotWalletAddress(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	st, err := h.service.HotAddresses(c.Request.Context())
+	if err != nil {
+		httpx.BadRequest(c, "Gas wallet address unavailable")
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": st})
+}
+
+// csvCell neutralises spreadsheet formula injection: a wallet-controlled
+// address starting with = + - @ would otherwise execute on open.
+func csvCell(value string) string {
+	if value == "" {
+		return value
+	}
+	switch value[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + value
+	}
+	return value
+}
+
+// AdminExportDeposits prepares the ledger before sending the attachment. A
+// failed database page must not produce a successful, truncated CSV download.
+// GET /api/v1/admin/crypto/deposits.csv
+func (h *CryptoHandler) AdminExportDeposits(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	file, err := os.CreateTemp("", "tokenrouter-crypto-export-*.csv")
+	if err != nil {
+		httpx.Error(c, http.StatusServiceUnavailable, "Deposit export unavailable")
+		return
+	}
+	defer func() {
+		_ = file.Close()
+		_ = os.Remove(file.Name())
+	}()
+	err = writeCryptoDepositCSV(c.Request.Context(), file, func(ctx context.Context, beforeID int64, limit int) ([]cryptopay.DepositRecord, error) {
+		return h.service.ListDepositsExportPage(ctx, c.Query("chain"), c.Query("status"), beforeID, limit)
+	})
+	if err != nil {
+		httpx.Error(c, http.StatusServiceUnavailable, "Deposit export failed; retry the download")
+		return
+	}
+	if _, err := file.Seek(0, io.SeekStart); err != nil {
+		httpx.Error(c, http.StatusServiceUnavailable, "Deposit export unavailable")
+		return
+	}
+	c.Header("Content-Type", "text/csv; charset=utf-8")
+	c.Header("Content-Disposition", `attachment; filename="crypto-deposits.csv"`)
+	c.Header("X-Content-Type-Options", "nosniff")
+	http.ServeContent(c.Writer, c.Request, "crypto-deposits.csv", time.Time{}, file)
+}
+
+// writeCryptoDepositCSV emits ledger rows in descending ID order. It stops on
+// cancellation or a non-advancing cursor, so a failed page cannot leave the
+// caller waiting on the same records indefinitely.
+func writeCryptoDepositCSV(ctx context.Context, output io.Writer, fetch func(context.Context, int64, int) ([]cryptopay.DepositRecord, error)) error {
+	// Excel decides charset by BOM; without it Chinese and quotes mojibake.
+	if _, err := output.Write([]byte{0xEF, 0xBB, 0xBF}); err != nil {
+		return err
+	}
+	w := csv.NewWriter(output)
+	if err := w.Write([]string{
+		"id", "chain", "tx_hash", "log_index", "from", "to", "token", "amount", "status", "created_at",
+		"provisional", "provisional_amount", "credited_at", "revoked_at", "revoke_reason",
+	}); err != nil {
+		return err
+	}
+	const pageSize = 200
+	var beforeID int64
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		records, err := fetch(ctx, beforeID, pageSize)
+		if err != nil {
+			return err
+		}
+		previousID := beforeID
+		for _, r := range records {
+			if r.ID <= 0 || (previousID > 0 && r.ID >= previousID) {
+				return errors.New("deposit export cursor did not advance")
+			}
+			previousID = r.ID
+			if err := w.Write([]string{
+				csvCell(strconv.FormatInt(r.ID, 10)), csvCell(r.Chain), csvCell(r.TxHash),
+				strconv.Itoa(r.LogIndex), csvCell(r.FromAddress), csvCell(r.ToAddress),
+				csvCell(r.Token), csvCell(r.Amount), csvCell(r.Status), csvCell(r.CreatedAt),
+				strconv.FormatBool(r.Provisional), csvCell(strconv.FormatFloat(r.ProvisionalAmount, 'f', -1, 64)),
+				csvCell(r.CreditedAt), csvCell(r.RevokedAt), csvCell(r.RevokeReason),
+			}); err != nil {
+				return err
+			}
+		}
+		if len(records) == 0 {
+			break
+		}
+		beforeID = records[len(records)-1].ID
+		if len(records) < pageSize {
+			break
+		}
+	}
+	w.Flush()
+	return w.Error()
+}
+
+// AdminSweepPlan returns the current dry-run sweep plan.
+// GET /api/v1/admin/crypto/sweep/plan
+func (h *CryptoHandler) AdminSweepPlan(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	plan, err := h.service.BuildSweepPlan(c.Request.Context())
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": plan})
+}
+
+// AdminRunSweep previews or executes the requested sweep. The default is a
+// dry run, and dry_run=0 enables execution. A caller can request a run ID by
+// setting async=1 or wait for the legacy synchronous summary.
+func (h *CryptoHandler) AdminRunSweep(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	var runRequest struct {
+		Share string `json:"share"`
+	}
+	if c.Request.Body != nil && c.Request.Body != http.NoBody {
+		if !decodeCryptoRequest(c, &runRequest, 8<<10, "invalid sweep request") {
+			return
+		}
+	}
+	defer func() { runRequest.Share = "" }()
+	query, err := url.ParseQuery(c.Request.URL.RawQuery)
+	if err != nil {
+		httpx.BadRequest(c, "invalid sweep query")
+		return
+	}
+	// An omitted chain scope includes all enabled chains. Reject an explicitly
+	// empty scope before execution so an invalid filter cannot widen the sweep.
+	chains := parseChainScope(query["chain"])
+	if _, specified := query["chain"]; specified && len(chains) == 0 {
+		httpx.BadRequest(c, "at least one chain is required when specifying a sweep scope")
+		return
+	}
+	dryRun := query.Get("dry_run") != "0"
+	// A real sweep without a configured destination is operator error, not a
+	// server fault: say what is missing instead of surfacing a 500.
+	if !dryRun {
+		if err := h.service.SweepReadiness(); err != nil {
+			httpx.BadRequest(c, err.Error())
+			return
+		}
+	}
+	// A sweep outlives the HTTP request. Tying it to c.Request.Context() meant
+	// that as soon as the browser gave up — 60 addresses take minutes, far
+	// longer than a page waits — every in-flight job was cancelled with
+	// context.Canceled and the whole queue failed without a single transaction
+	// being sent. The run is already serialized by sweepMu and bounded by its
+	// own per-chain budget, so detaching it from the request is safe; the admin
+	// still gets the completed summary when it finishes within the deadline.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(cryptoAuditContext(c)), manualSweepDeadline)
+	defer cancel()
+	// New clients explicitly opt into asynchronous execution. Preserve the
+	// summary response for existing clients and already-open browser tabs.
+	if query.Get("async") == "1" {
+		state, startErr := h.service.StartSweepAsyncWithShare(dryRun, chains, runRequest.Share)
+		if writeCryptoSignerError(c, startErr) {
+			return
+		}
+		if startErr != nil {
+			httpx.ErrorFrom(c, startErr)
+			return
+		}
+		c.JSON(http.StatusAccepted, gin.H{"data": state})
+		return
+	}
+	summary, err := h.service.RunSweepChainsWithShare(ctx, dryRun, chains, runRequest.Share)
+	if writeCryptoSignerError(c, err) {
+		return
+	}
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": summary})
+}
+
+// AdminSweepRecords lists sweep history.
+// GET /api/v1/admin/crypto/sweep/records
+func (h *CryptoHandler) AdminSweepRecords(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	serveSweepRecords(c, h.service)
+}
+
+// AdminReconcileSweep checks one stuck sweep job against the chain without
+// releasing a reservation based only on a missing receipt.
+// POST /api/v1/admin/crypto/sweep/records/:id/reconcile
+// It never signs or broadcasts a transaction.
+func (h *CryptoHandler) AdminReconcileSweep(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil || id <= 0 {
+		httpx.BadRequest(c, "invalid sweep record id")
+		return
+	}
+	result, err := h.service.ReconcileSweep(c.Request.Context(), id)
+	if err != nil {
+		if status, message, ok := reconcileRefusal(err); ok {
+			httpx.Error(c, status, message)
+			return
+		}
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// reconcileRefusal maps the two expected "not now / not here" answers of a
+// reconcile to a 409 with a fixed message, instead of a bare 500.
+func reconcileRefusal(err error) (int, string, bool) {
+	switch {
+	case errors.Is(err, cryptopay.ErrScanBusy):
+		return http.StatusConflict, "A sweep is running; reconcile after it finishes", true
+	case errors.Is(err, sweeper.ErrLegacySweepRecord):
+		return http.StatusConflict, "This is an old record handled by hand and cannot be reconciled here", true
+	}
+	return 0, "", false
+}
+
+// AdminListBlockedSweeps lists jobs that hold a reserved transaction and are
+// therefore stopping the chain from sweeping further addresses.
+// GET /api/v1/admin/crypto/sweep/blocked
+func (h *CryptoHandler) AdminListBlockedSweeps(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	limit, _ := strconv.Atoi(c.DefaultQuery("limit", "50"))
+	list, err := h.service.ListBlockedSweeps(c.Request.Context(), limit)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	if list == nil {
+		list = []sweeper.BlockedJob{}
+	}
+	c.JSON(http.StatusOK, gin.H{"data": list})
+}
+
+// AdminListDeposits lists observed deposits for reconciliation.
+// GET /api/v1/admin/crypto/deposits
+func (h *CryptoHandler) AdminListDeposits(c *gin.Context) {
+	if h.service == nil {
+		httpx.BadRequest(c, "crypto channel unavailable")
+		return
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 50
+	}
+	deposits, summary, err := h.service.ListDepositsPaged(c.Request.Context(),
+		c.Query("chain"), c.Query("status"), pageSize, (page-1)*pageSize)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"items": deposits, "summary": summary}})
+}
+
+// AdminListAddresses lists assignments with optional family/status filters.
+// GET /api/v1/admin/crypto/addresses
+func (h *CryptoHandler) AdminListAddresses(c *gin.Context) {
+	// user_id is optional now: without it the console shows every address
+	// with aggregated credited/swept totals (the operator's main view).
+	var userID int64
+	if raw := c.Query("user_id"); raw != "" {
+		parsed, err := strconv.ParseInt(raw, 10, 64)
+		if err != nil {
+			httpx.BadRequest(c, "invalid user_id")
+			return
+		}
+		userID = parsed
+	}
+	page, _ := strconv.Atoi(c.DefaultQuery("page", "1"))
+	pageSize, _ := strconv.Atoi(c.DefaultQuery("page_size", "50"))
+	if page < 1 {
+		page = 1
+	}
+	if pageSize < 1 || pageSize > 200 {
+		pageSize = 50
+	}
+	family := c.Query("family")
+	list, total, err := h.addresses.AdminList(c.Request.Context(), userID, family, pageSize, (page-1)*pageSize,
+		c.Query("sort_by"), c.Query("sort_dir"))
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	// Summary covers the whole filtered set; a page-only total would
+	// misreport once the operator pages past the first screen.
+	summary, err := h.addresses.AdminSummary(c.Request.Context(), userID, family)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"items": list, "total": total, "summary": summary}})
+}
+
+// AdminSetAddressStatus enables/disables an assignment.
+// POST /api/v1/admin/crypto/addresses/:id/status
+func (h *CryptoHandler) AdminSetAddressStatus(c *gin.Context) {
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		httpx.BadRequest(c, "invalid id")
+		return
+	}
+	var body struct {
+		Status string `json:"status"`
+	}
+	if !decodeCryptoRequest(c, &body, 4<<10, "Invalid status payload") {
+		return
+	}
+	if err := h.addresses.SetStatus(c.Request.Context(), id, body.Status); err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"updated": true}})
+}
+
+// AdminTestRPC probes one RPC endpoint: it must answer eth_chainId (and the
+// chain's block number) within a short timeout. The console uses this to
+// validate endpoints before saving them into a chain's rotation list.
+// POST /api/v1/admin/crypto/rpc/test
+func (h *CryptoHandler) AdminTestRPC(c *gin.Context) {
+	var body struct {
+		Chain    string `json:"chain"`
+		Endpoint string `json:"endpoint"`
+	}
+	if !decodeCryptoRequest(c, &body, 16<<10, "Invalid test payload") {
+		return
+	}
+	result := cryptopay.ProbeRPCEndpoint(c.Request.Context(), body.Chain, body.Endpoint)
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// AdminChainlistCandidates fetches candidate RPC endpoints for a chain from
+// the public chainlist.org registry. The console shows them for one-click
+// adoption; saving still goes through the normal config PUT.
+// GET /api/v1/admin/crypto/rpc/candidates?chain=bsc
+func (h *CryptoHandler) AdminChainlistCandidates(c *gin.Context) {
+	chain := c.Query("chain")
+	if strings.TrimSpace(chain) == "" {
+		httpx.BadRequest(c, "chain is required")
+		return
+	}
+	result, err := cryptopay.FetchChainlistCandidates(c.Request.Context(), chain)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, gin.H{"data": result})
+}
+
+// AdminAutoPickRPC fetches the chain's public endpoints, probes them in
+// parallel and returns the fastest healthy ones, skipping endpoints already
+// configured. The console writes the returned list straight into the form.
+// POST /api/v1/admin/crypto/rpc/auto-pick
+func (h *CryptoHandler) AdminAutoPickRPC(c *gin.Context) {
+	var body struct {
+		Chain   string   `json:"chain"`
+		Want    int      `json:"want"`
+		Exclude []string `json:"exclude"`
+	}
+	if !decodeCryptoRequest(c, &body, 64<<10, "Invalid auto-pick payload") {
+		return
+	}
+	if strings.TrimSpace(body.Chain) == "" {
+		httpx.BadRequest(c, "chain is required")
+		return
+	}
+	// Probing dozens of public endpoints takes a while; give it room without
+	// letting a hung endpoint pin the request forever.
+	ctx, cancel := context.WithTimeout(c.Request.Context(), 45*time.Second)
+	defer cancel()
+	candidates, err := cryptopay.FetchChainlistCandidates(ctx, body.Chain)
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	picked := cryptopay.ProbeBestRPCEndpoints(ctx, body.Chain, candidates, body.Exclude, body.Want)
+	c.JSON(http.StatusOK, gin.H{"data": gin.H{"picked": picked, "probed": len(candidates)}})
+}
+
+// parseChainScope flattens ?chain=a&chain=b and ?chain=a,b into a lowercase
+// allowlist. It never validates against a hard-coded set: the sweeper already
+// rejects chains it has no plan for, and an unknown name must not silently
+// widen scope to "all chains".
+func parseChainScope(values []string) []string {
+	if len(values) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(values))
+	for _, raw := range values {
+		for part := range strings.SplitSeq(raw, ",") {
+			chain := strings.ToLower(strings.TrimSpace(part))
+			if chain != "" {
+				out = append(out, chain)
+			}
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}

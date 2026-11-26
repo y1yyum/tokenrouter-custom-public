@@ -3,6 +3,8 @@
 // phrases support summary cards, while the other namespaces provide account
 // actions, validation messages, and list controls used throughout user pages.
 
+import cryptoAccount from './cryptoAccount'
+
 export default {
   dashboard: {
     title: 'Dashboard',
@@ -461,6 +463,25 @@ export default {
     description: 'View and analyze your API usage history',
     costDetails: 'Cost Breakdown',
     tokenDetails: 'Token Breakdown',
+    compactTable: {
+      caller: { admin: 'Caller / Group', teamOwner: 'Member / Group', personal: 'Key / Group' },
+      route: 'Provider / Endpoint',
+      modelSpec: 'Model / Type',
+      performance: 'Latency / TPS',
+      requestTrace: 'Request Trace',
+      clientNetwork: 'Client / IP',
+      modelMapping: 'Model mapping',
+      modelDetails: 'Model details',
+      responseModel: 'Returned',
+      providerCost: 'Provider',
+      longContextBilling: 'Long-context pricing',
+      tokenInput: 'In',
+      tokenOutput: 'Out',
+      cacheRead: 'Read',
+      cacheWrite: 'Write',
+      copyUserAgent: 'Copy user agent',
+      copyUpstreamId: 'Copy upstream request ID',
+    },
     cacheTtlOverriddenHint: 'Cache TTL Override enabled',
     cacheTtlOverriddenLabel: 'TTL Override',
     cacheTtlOverridden5m: 'Billed as 5m',
@@ -814,6 +835,7 @@ export default {
   },
   // Profile
   profile: {
+    bark: cryptoAccount.bark,
     title: 'Profile Settings',
     description: 'Manage your account information and settings',
     accountBalance: 'Account Balance',
@@ -877,6 +899,8 @@ export default {
         'After disabling, you will no longer need a verification code to log in. This may reduce your account security.',
       enterPassword: 'Enter your current password to confirm',
       confirmDisable: 'Confirm Disable',
+      disablePaymentCodeHint:
+        'Enter a fresh six-digit code from your authenticator app to disable payment verification.',
       disableSuccess: 'Two-factor authentication disabled',
       disableFailed: 'Failed to disable, please check your password',
       loginTitle: 'Two-Factor Authentication',

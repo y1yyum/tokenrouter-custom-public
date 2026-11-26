@@ -17,10 +17,13 @@ import (
 	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
 	gatewaycapture "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	textflow "github.com/TokenFlux/TokenRouter/internal/gateway/text"
 	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
+	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/timing"
+	"github.com/TokenFlux/TokenRouter/internal/protocol"
 	providercore "github.com/TokenFlux/TokenRouter/internal/provider"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	"github.com/TokenFlux/TokenRouter/internal/routing/capability"
@@ -44,6 +47,9 @@ import (
 // client cancellation, and output recovery evidence. Completion captures
 // request/result values before submitting work that can run after HTTP handling
 // finishes.
+
+// errResponsesSelectionEmpty identifies an empty selection so the handler can distinguish routing capacity from model availability.
+var errResponsesSelectionEmpty = errors.New("no provider returned for Responses selection")
 
 // responsesAttemptBridge retains admitted request identity and current
 // provider-attempt state. The serial text loop changes provider resources and
@@ -126,6 +132,16 @@ type responsesAttemptBridge struct {
 	// usage- bearing partial failures. Complete reads it only after the
 	// text loop chooses completion handling.
 	result *forwardcore.OpenAIResult
+	// completionCalled guards the logical request's single completion handoff.
+	completionCalled bool
+	// settlementSeen retains pilot participation across a permitted pre-execution retry.
+	settlementSeen bool
+	// settlementFailed prevents a metered forwarding error from resetting provider protection.
+	settlementFailed bool
+	// settlementFinal accumulates the final observation before request-log persistence.
+	settlementFinal telemetry.ResponsesSettlementObservation
+	// settlementPricingAt fixes time-based pricing to the final forwarding attempt.
+	settlementPricingAt time.Time
 	// writerSizeBeforeForward measures adjusted output before this
 	// exchange. Heartbeat subtraction makes RetryReady compare
 	// meaningful bytes rather than committed keepalive traffic.
@@ -144,8 +160,8 @@ type responsesAttemptBridge struct {
 }
 
 // Select resolves the current request under transport, capability, and
-// continuation constraints. Selection errors return to the text loop; an absent
-// target writes diagnosed client output and returns unavailable. A selected
+// continuation constraints. Empty selections and errors return to the text
+// loop for terminal handling alongside any preceding upstream failure. A selected
 // target is retained for acquisition, forwarding, scheduling observations, and
 // cleanup.
 //
@@ -178,12 +194,7 @@ func (b *responsesAttemptBridge) Select(excluded map[int64]struct{}) (textflow.R
 		return textflow.ResponseSelection{}, err
 	}
 	if b.selection == nil || b.selection.Provider == nil {
-		cls := ClassifyOpenAICompatibleNoProviderErrorFromGin(b.c, b.binding().diagnoser, b.apiKey, b.reqModel, b.reqModel)
-		if !cls.ModelNotFound {
-			gatewayhttp.MarkOpsRoutingCapacityLimited(b.c)
-		}
-		b.binding().handleStreamingAwareError(b.c, cls.Status, cls.ErrType, cls.Message, *b.streamStarted)
-		return textflow.ResponseSelection{}, nil
+		return textflow.ResponseSelection{}, errResponsesSelectionEmpty
 	}
 	if b.previousResponseID != "" && b.selection != nil && b.selection.Provider != nil {
 		b.reqLog.Debug("openai.provider_selected_with_previous_response_id", zap.Int64("provider_id", b.selection.Provider.Record.ID))
@@ -235,26 +246,36 @@ func (b *responsesAttemptBridge) Select(excluded map[int64]struct{}) (textflow.R
 // exclusions, the last classified upstream failure takes
 // precedence over a simple 502 fallback.
 func (b *responsesAttemptBridge) SelectionFailure(err error, excludedCount int, last *textflow.AttemptFailure) {
-	if gatewayhttp.WriteOpenAIModelAttributeError(b.c, err, *b.streamStarted) {
-		return
-	}
 	var lastFailoverErr *forwardcore.UpstreamFailoverError
 	if last != nil {
 		errors.As(last.Cause, &lastFailoverErr)
 	}
-
-	if gatewayhttp.FailoverClientGone(b.c) {
-		b.reqLog.Info("openai.provider_select_aborted_client_disconnected", zap.Error(err))
+	// A retry may exhaust candidate capacity before another HTTP exchange. The
+	// last converted failure still owns the final status and Retry-After.
+	if lastFailoverErr != nil && lastFailoverErr.Reason == forwardcore.OpenAIResponsesCompatibilityReason && !routing.IsModelAttributeError(err) {
+		b.Exhausted(last)
+		return
+	}
+	started, writable := b.responseErrorOutputMode()
+	if !writable || gatewayhttp.WriteTextParameterCandidateError(b.c, protocol.ProtocolOpenAIResponses, err, started) || gatewayhttp.WriteOpenAIModelAttributeError(b.c, err, started) {
 		return
 	}
 	b.reqLog.Warn("openai.provider_select_failed",
 		zap.Error(gatewayhttp.OpenAICompatibleSelectionErrorForLog(err, b.requestPlatform)),
 		zap.Int("excluded_provider_count", excludedCount),
 	)
+	if errors.Is(err, errResponsesSelectionEmpty) {
+		cls := ClassifyOpenAICompatibleNoProviderErrorFromGin(b.c, b.binding().diagnoser, b.apiKey, b.reqModel, b.reqModel)
+		if !cls.ModelNotFound {
+			gatewayhttp.MarkOpsRoutingCapacityLimited(b.c)
+		}
+		b.binding().handleStreamingAwareError(b.c, cls.Status, cls.ErrType, cls.Message, started)
+		return
+	}
 	if excludedCount == 0 {
 		if b.legacyCompact && errors.Is(err, scheduler.ErrNoAvailableCompactProviders) {
 			gatewayhttp.MarkOpsRoutingCapacityLimitedIfNoAvailable(b.c, err)
-			b.binding().handleStreamingAwareError(b.c, http.StatusServiceUnavailable, "compact_not_supported", "No available providers support /responses/compact", *b.streamStarted)
+			b.binding().handleStreamingAwareError(b.c, http.StatusServiceUnavailable, "compact_not_supported", "No available providers support /responses/compact", started)
 			return
 		}
 		cls := ClassifyNoProviderErrorFromGin(b.c, b.binding().diagnoser, b.apiKey, b.reqModel, b.reqModel, b.requestPlatform)
@@ -262,31 +283,104 @@ func (b *responsesAttemptBridge) SelectionFailure(err error, excludedCount int, 
 		if !cls.ModelNotFound {
 			gatewayhttp.MarkOpsRoutingCapacityLimitedIfNoAvailable(b.c, err)
 		}
-		b.binding().handleStreamingAwareError(b.c, cls.Status, cls.ErrType, cls.Message, *b.streamStarted)
+		b.binding().handleStreamingAwareError(b.c, cls.Status, cls.ErrType, cls.Message, started)
 		return
 	}
-	if lastFailoverErr != nil {
-		b.binding().handleFailoverExhausted(b.c, lastFailoverErr, *b.streamStarted)
-	} else {
-		b.binding().handleFailoverExhaustedSimple(b.c, 502, *b.streamStarted)
-	}
+	b.Exhausted(last)
 }
 
-// Acquire tracks the selected session and adopts or waits for its provider
-// slot. Callers select a usable provider first. The returned bool determines
-// whether Forward can run; the stored release callback is retired by forwarding
-// cleanup.
+// Acquire tracks the selected session and adopts or waits for provider capacity.
+// An eligible Responses candidate with a wait plan defers acquisition until
+// Forward has prepared the exact tuple. A prefetched slot is adopted here so a
+// preparation failure still leaves it with the usual forwarding cleanup.
 func (b *responsesAttemptBridge) Acquire() bool {
 	if b.sessionAttempts != nil && b.binding().sessions.Track != nil {
 		b.binding().sessions.Track(b.sessionAttempts, b.provider, b.sessionHash)
 	}
+	if b.waitsAfterPreparation() {
+		return true
+	}
+	return b.acquireSelectedSlot(b.selection)
+}
+
+// waitsAfterPreparation reports whether capacity has yet to be acquired for a rewrite candidate.
+func (b *responsesAttemptBridge) waitsAfterPreparation() bool {
+	return b.selection != nil && !b.selection.Acquired && b.selection.WaitPlan != nil &&
+		gatewayhttp.ResponsesMayDrain(b.c, b.provider)
+}
+
+// acquireSelectedSlot takes ownership of the current selection's capacity.
+// The existing slot helper writes a local rejection when it refuses admission.
+// Forward owns the release on success.
+func (b *responsesAttemptBridge) acquireSelectedSlot(selection *gatewaycapture.SelectionResult) bool {
 	var acquired bool
-	b.providerReleaseFunc, acquired = b.binding().acquireResponsesProviderSlot(b.c, b.apiKey.GroupID, b.sessionHash, b.selection, b.reqStream, b.streamStarted, b.reqLog)
+	b.providerReleaseFunc, acquired = b.binding().acquireResponsesProviderSlot(b.c, b.apiKey.GroupID, b.sessionHash, selection, b.reqStream, b.streamStarted, b.reqLog)
+	if !acquired {
+		// Forward cannot run after failed admission. Retire any cleanup handed
+		// back with the rejection here so it has the same single owner.
+		b.releaseSelectedSlot()
+	}
 	return acquired
 }
 
+// releaseSelectedSlot returns the current lease before a local aggregation
+// wait or after the exchange. Clearing it keeps later cleanup harmless.
+func (b *responsesAttemptBridge) releaseSelectedSlot() {
+	if b.providerReleaseFunc != nil {
+		b.providerReleaseFunc()
+		b.providerReleaseFunc = nil
+	}
+}
+
+// responsesProviderCapacity preserves prefetch for an immediately admitted
+// conversion and yields it on contention. Readmission keeps the same target,
+// borrowing the configured alternate wait limits only when the prefetch had
+// no plan. All callbacks run on the serial forwarding goroutine.
+func (b *responsesAttemptBridge) responsesProviderCapacity() gatewayhttp.ResponsesProviderCapacity {
+	slotReady := !b.waitsAfterPreparation()
+	selected := b.selection
+	return gatewayhttp.ResponsesProviderCapacity{
+		Acquire: func(ctx context.Context) error {
+			if slotReady {
+				return nil
+			}
+			// Admission uses the same deadline for Redis, the wait counter and
+			// polling. Restore the inbound context for output and completion.
+			request := b.c.Request
+			b.c.Request = request.WithContext(ctx)
+			defer func() { b.c.Request = request }()
+			slotReady = b.acquireSelectedSlot(selected)
+			if err := context.Cause(ctx); err != nil {
+				return err
+			}
+			if !slotReady {
+				return textflow.ErrExecutionRejected
+			}
+			return nil
+		},
+		Yield: func() {
+			if b.providerReleaseFunc == nil {
+				return
+			}
+			// A spent prefetch cannot be adopted again. Preserve the immutable
+			// selection used by route feedback and admit a fresh slot for its provider.
+			b.releaseSelectedSlot()
+			retry := *selected
+			retry.Acquired, retry.ReleaseFunc = false, nil
+			if retry.WaitPlan == nil {
+				plan := b.binding().responsesReadmission
+				plan.ProviderID, plan.MaxConcurrency = b.provider.Record.ID, b.provider.Record.Concurrency
+				retry.WaitPlan = &plan
+			}
+			selected = &retry
+			slotReady = false
+		},
+	}
+}
+
 // Forward executes canonical-derived Responses input and returns observed
-// attempt state. Callers acquire the selected provider first. Provider cleanup
+// attempt state. Callers adopt prefetched capacity first and may defer a wait
+// until native request preparation. Provider cleanup
 // runs when forwarding returns, before Cyber policy recording and completion
 // capture, while the bridge retains provider and result metadata for those
 // later steps.
@@ -309,22 +403,28 @@ func (b *responsesAttemptBridge) Forward() textflow.ResponseOutcome {
 	// reasoning input. Rebuild from canonical bytes so a previous
 	// provider's sanitation does not replace future input.
 	attemptBody := b.binding().deriveOpenAIForwardAttemptBody(b.reqLog, b.forwardBody, b.provider, &b.passthroughFailoverState)
+	ctx := b.c.Request.Context()
+	if gatewayhttp.ResponsesMayDrain(b.c, b.provider) {
+		ctx = gatewayhttp.WithResponsesProviderCapacity(ctx, b.responsesProviderCapacity())
+	}
 	// Retire acquired provider capacity when the exchange returns on every
 	// path. Keep its result and identity available for subsequent Cyber and
 	// completion snapshot processing.
 	b.result, err = func() (*forwardcore.OpenAIResult, error) {
-		defer func() {
-			if b.providerReleaseFunc != nil {
-				b.providerReleaseFunc()
-			}
-		}()
-		return b.binding().forward(b.c.Request.Context(), b.c, b.provider, attemptBody)
+		defer b.releaseSelectedSlot()
+		return b.binding().forward(ctx, b.c, b.provider, attemptBody)
 	}()
+	if errors.Is(err, textflow.ErrExecutionRejected) {
+		return textflow.ResponseOutcome{Outcome: textflow.Outcome{Stop: true, Err: err}}
+	}
+	converted := b.observeResponsesSettlement(err, forwardStart)
 	var cyberBlockBodyHTTP []byte
 	if gatewayhttp.GetOpsCyberPolicy(b.c) != nil {
 		cyberBlockBodyHTTP = b.sessionHashBody
 	}
-	b.cyberPolicyHandled = b.binding().recordCyberPolicyIfMarked(b.c, b.apiKey, b.provider, b.subscription, b.reqModel, err != nil, cyberBlockBodyHTTP, gatewayhttp.ClientRequestedUsageFields(b.c, b.groupMapping, b.reqModel, ""), billing.HashUsageRequestPayload(b.body), b.nativeCompactionV2)
+	// For converted requests, moderation can still record policy decisions and
+	// block the session. The final metering owner alone may submit funds.
+	b.cyberPolicyHandled = b.binding().recordCyberPolicyIfMarked(b.c, b.apiKey, b.provider, b.subscription, b.reqModel, err != nil && !converted, cyberBlockBodyHTTP, gatewayhttp.ClientRequestedUsageFields(b.c, b.groupMapping, b.reqModel, ""), billing.HashUsageRequestPayload(b.body), b.nativeCompactionV2)
 	forwardDurationMs := time.Since(forwardStart).Milliseconds()
 	upstreamLatencyMs, _ := GetContextInt64(b.c, gatewayhttp.OpsUpstreamLatencyMsKey)
 	responseLatencyMs := forwardDurationMs
@@ -340,6 +440,7 @@ func (b *responsesAttemptBridge) Forward() textflow.ResponseOutcome {
 	out.NativePartial = err != nil && b.result != nil && b.result.NativeUsage != nil && (b.result.NativeUsage.HasObservedTokens() || b.result.ImageCount > 0)
 	out.Attempt.HTTPCommitted = b.c.Writer.Written()
 	if retry, ok := errors.AsType[*forwardcore.UpstreamFailoverError](err); ok {
+		out.ReplayClosed = retry.Reason == forwardcore.OpenAIResponsesCompatibilityReason && retry.NextProviderAction == forwardcore.NextProviderStop
 		out.Failure = &textflow.AttemptFailure{Cause: err, Policy: retry.RetryFailure()}
 		out.FirstOutputRecovery = retry.SafeToFailoverAfterWrite
 	}
@@ -347,14 +448,17 @@ func (b *responsesAttemptBridge) Forward() textflow.ResponseOutcome {
 }
 
 // Complete captures Responses usage and request metadata before submitting its
-// recording task. A nil result ends immediately. The task captures
-// completionInput and diagnostic identity values, allowing Recorder to run
-// after request state changes; recording errors are logged by the task rather
-// than replaying upstream execution.
+// recording task. A nil result ends immediately. A converted result passes
+// through the metering gate and freezes amounts before mandatory submission.
+// Other Responses callers retain their existing asynchronous pricing policy.
 func (b *responsesAttemptBridge) Complete() {
 	res := b.result
-
-	if res == nil {
+	if res == nil || b.completionCalled {
+		return
+	}
+	b.completionCalled = true
+	if res.ResponsesSettlement != nil {
+		b.completeConvertedResponses(res)
 		return
 	}
 	completionInput := b.captureCompletion(gatewaycapture.OpenAICapture{
@@ -417,8 +521,8 @@ func (b *responsesAttemptBridge) PartialImages(err error) {
 // client disconnection return false; Cyber warning handling is attempted before
 // checking adjusted output through OpenAIForwardMayFailover.
 //
-// When replay is closed, health failure is observed and terminal streaming
-// output is delegated before returning false. Allowed retries can retain
+// When replay is closed, health failure is observed before returning false.
+// RunResponses owns terminal delivery separately. Allowed retries can retain
 // committed headers; that sets the shared stream marker for exhaustion output.
 // Eligible scheduling failures are reported only after this replay decision
 // accepts another attempt.
@@ -428,7 +532,7 @@ func (b *responsesAttemptBridge) RetryReady(failure *textflow.AttemptFailure) bo
 	if !errors.As(err, &failoverErr) {
 		return false
 	}
-	if gatewayhttp.FailoverClientGone(b.c) {
+	if b.Context().Err() != nil {
 		b.reqLog.Info("openai.failover_aborted_client_disconnected",
 			zap.Int64("provider_id", b.provider.Record.ID),
 			zap.Int("upstream_status", failoverErr.StatusCode),
@@ -436,15 +540,15 @@ func (b *responsesAttemptBridge) RetryReady(failure *textflow.AttemptFailure) bo
 		return false
 	}
 	b.binding().recordOpenAICyberWarning(b.c, b.reqLog, b.apiKey, b.provider, b.reqModel, failoverErr.StatusCode, failoverErr.ResponseBody, err.Error())
-	if !OpenAIForwardMayFailover(b.c, b.writerSizeBeforeForward, failoverErr) {
+	_, writable := b.responseErrorOutputMode()
+	if !writable || !OpenAIForwardMayFailover(b.c, b.writerSizeBeforeForward, failoverErr) {
 		b.binding().observeOpenAIProviderHealthFailure(b.c.Request.Context(), b.provider, err)
-		b.binding().handleFailoverExhausted(b.c, failoverErr, true)
 		return false
 	}
 	// Replay may remain safe after headers were committed. Mark the stream
 	// before another attempt so exhausted recovery uses the protocol's
 	// streaming terminal error path.
-	if b.streamStarted != nil && b.c.Writer.Written() {
+	if b.streamStarted != nil && gatewayhttp.CommittedSSE(b.c) {
 		*b.streamStarted = true
 	}
 	if failoverErr.ShouldReportProviderScheduleFailure() {
@@ -497,10 +601,18 @@ func (b *responsesAttemptBridge) Switching(failure *textflow.AttemptFailure, swi
 // communicated error suppresses fallback. The selected output state is retained
 // for Failed to choose log severity.
 func (b *responsesAttemptBridge) OtherFailure(err error) {
+	if requestpolicy.IsCandidateError(err) {
+		if started, writable := b.responseErrorOutputMode(); writable {
+			b.wroteFallback = gatewayhttp.WriteTextParameterCandidateError(b.c, protocol.ProtocolOpenAIResponses, err, started)
+		}
+		return
+	}
 	// Attribute admission can fail before transport. Present it once and stop
 	// here so a local configuration rejection cannot reduce provider health scores.
 	if routing.IsModelAttributeError(err) {
-		b.wroteFallback = b.binding().ensureOpenAIForwardErrorResponse(b.c, *b.streamStarted, err)
+		if started, writable := b.responseErrorOutputMode(); writable {
+			b.wroteFallback = b.binding().ensureOpenAIForwardErrorResponse(b.c, started, err)
+		}
 		return
 	}
 	statusCode := 0
@@ -518,7 +630,9 @@ func (b *responsesAttemptBridge) OtherFailure(err error) {
 	// the communicated-error and adjusted-size evidence so supplying a
 	// fallback does not duplicate that output.
 	if !upstreamErrorAlreadyCommunicated && (!recordedWarning || gatewayhttp.HeartbeatAdjustedWrittenSize(b.c) == b.writerSizeBeforeForward) {
-		b.wroteFallback = b.binding().ensureOpenAIForwardErrorResponse(b.c, *b.streamStarted, err)
+		if started, writable := b.responseErrorOutputMode(); writable {
+			b.wroteFallback = b.binding().ensureOpenAIForwardErrorResponse(b.c, started, err)
+		}
 	}
 	b.fields = []zap.Field{
 		zap.Int64("provider_id", b.provider.Record.ID),
@@ -583,16 +697,36 @@ func (b *responsesAttemptBridge) selectedView() textflow.ResponseSelection {
 }
 
 // Exhausted writes terminal Responses recovery output for the last attempt
-// failure. A classified upstream cause uses its captured metadata. Missing or
-// unclassified failure data uses the simple 502 path with the current stream
-// marker.
+// failure. A classified upstream cause uses its captured metadata. A converted
+// failure retains its upstream Ops diagnosis even if the client cannot receive
+// another response. Missing classification uses the simple 502 path.
 func (b *responsesAttemptBridge) Exhausted(failure *textflow.AttemptFailure) {
 	var original *forwardcore.UpstreamFailoverError
-	if failure != nil && errors.As(failure.Cause, &original) {
-		b.binding().handleFailoverExhausted(b.c, original, *b.streamStarted)
-	} else {
-		b.binding().handleFailoverExhaustedSimple(b.c, 502, *b.streamStarted)
+	if failure != nil {
+		errors.As(failure.Cause, &original)
 	}
+	if original != nil && original.Reason == forwardcore.OpenAIResponsesCompatibilityReason {
+		b.binding().handleFailoverExhausted(b.c, original, false)
+		return
+	}
+	started, writable := b.responseErrorOutputMode()
+	if !writable {
+		return
+	}
+	if original != nil {
+		b.binding().handleFailoverExhausted(b.c, original, started)
+		return
+	}
+	b.binding().handleFailoverExhaustedSimple(b.c, http.StatusBadGateway, started)
+}
+
+// responseErrorOutputMode permits terminal output only on a live writable
+// response. Native streams and Compact can append one SSE terminal after the
+// writer has actually committed SSE. Synchronous requests and already
+// terminated streams leave existing bytes intact, regardless of the slot's
+// stream marker.
+func (b *responsesAttemptBridge) responseErrorOutputMode() (started, writable bool) {
+	return gatewayhttp.ResponsesErrorOutputMode(b.c, b.reqStream || b.requireCompact || b.nativeCompactionV2)
 }
 
 // Switched abandons the previous provider's session and records its selection

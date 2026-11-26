@@ -314,6 +314,41 @@ func (s *UserRepoSuite) TestListWithFilters_SortByLastUsedAtDesc_UsesUsageLogsNo
 	s.Require().Equal(nilUsage.ID, users[2].ID)
 }
 
+// TestList_DefaultSortOutOfOrderRandomIDsUsesCreatedAt inserts accounts whose
+// explicit IDs run opposite their creation timestamps, confirming that empty,
+// unknown, and explicit id sort parameters behave predictably under PostgreSQL.
+func (s *UserRepoSuite) TestList_DefaultSortOutOfOrderRandomIDsUsesCreatedAt() {
+	t1 := time.Date(2026, 4, 1, 9, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	t3 := t2.Add(time.Hour)
+
+	_, err := s.db.ExecContext(
+		s.ctx,
+		`INSERT INTO users (id, email, password_hash, role, status, concurrency, created_at, updated_at)
+		 VALUES
+		   (9900, 'sort-oldest-high@example.com', 'hash', 'user', 'active', 5, $1, $1),
+		   (5500, 'sort-middle@example.com', 'hash', 'user', 'active', 5, $2, $2),
+		   (1200, 'sort-newest-low@example.com', 'hash', 'user', 'active', 5, $3, $3)`,
+		t1, t2, t3,
+	)
+	s.Require().NoError(err)
+
+	defaultUsers, _, err := s.repo.List(s.ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
+	s.Require().NoError(err)
+	s.Require().Len(defaultUsers, 3)
+	s.Require().Equal([]int64{1200, 5500, 9900}, []int64{defaultUsers[0].ID, defaultUsers[1].ID, defaultUsers[2].ID})
+
+	explicitIDUsers, _, err := s.repo.ListWithFilters(s.ctx, pagination.PaginationParams{
+		Page:      1,
+		PageSize:  10,
+		SortBy:    "id",
+		SortOrder: pagination.SortOrderDesc,
+	}, identity.UserListFilters{})
+	s.Require().NoError(err)
+	s.Require().Len(explicitIDUsers, 3)
+	s.Require().Equal([]int64{9900, 5500, 1200}, []int64{explicitIDUsers[0].ID, explicitIDUsers[1].ID, explicitIDUsers[2].ID})
+}
+
 // TestUserRepoSortSuiteSmoke is an empty entry in the identity sort test
 // package. It performs no setup or assertions, so it supplies no sorting or
 // storage coverage.

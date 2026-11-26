@@ -15,6 +15,7 @@ import (
 	gatewaycapture "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	textflow "github.com/TokenFlux/TokenRouter/internal/gateway/text"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
+	"github.com/TokenFlux/TokenRouter/internal/protocol"
 	"github.com/TokenFlux/TokenRouter/internal/provider"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
 	"github.com/TokenFlux/TokenRouter/internal/scheduler"
@@ -112,6 +113,9 @@ func (b *openAIMessageAttemptBridge) SelectionFailure(err error, excludedCount i
 
 	if gatewayhttp.FailoverClientGone(b.c) {
 		b.reqLog.Info("openai_messages.provider_select_aborted_client_disconnected", zap.Error(err))
+		return
+	}
+	if gatewayhttp.WriteTextParameterCandidateError(b.c, protocol.ProtocolAnthropicMessages, err, *b.streamStarted) {
 		return
 	}
 	b.reqLog.Warn("openai_messages.provider_select_failed",
@@ -346,6 +350,9 @@ func (b *openAIMessageAttemptBridge) Switching(failure *textflow.AttemptFailure,
 // suppress it. Diagnostics retain the selected fallback and communication
 // observations.
 func (b *openAIMessageAttemptBridge) OtherFailure(err error) {
+	if gatewayhttp.WriteTextParameterCandidateError(b.c, protocol.ProtocolAnthropicMessages, err, *b.streamStarted) {
+		return
+	}
 	// A mixed-platform native executor can already have delivered a local
 	// capability error. No provider failure or upstream warning follows that refusal.
 	if gatewayhttp.IsResponseCommitted(b.c) && routing.IsModelAttributeError(err) {

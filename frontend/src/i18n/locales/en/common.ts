@@ -6,6 +6,9 @@
 export default {
   // Common
   common: {
+    apply: 'Apply',
+    creating: 'Creating…',
+    required: 'is required',
     submitting: 'Submitting…',
     sending: 'Sending…',
     tryAgain: 'Try again',
@@ -46,6 +49,8 @@ export default {
     all: 'All',
     selectAll: 'Select all',
     reorderColumn: 'Drag to move {column}, or use the left and right arrow keys',
+    sortAscending: 'Ascending',
+    sortDescending: 'Descending',
     none: 'None',
     or: 'or',
     noData: 'No data',
@@ -174,6 +179,8 @@ export default {
   },
   // Navigation
   nav: {
+    cryptoDeposit: 'Crypto deposit',
+    cryptoDeposits: 'Crypto deposit management',
     dashboard: 'Dashboard',
     modelMarketplace: 'Models',
     usageRanking: 'Usage Ranking',

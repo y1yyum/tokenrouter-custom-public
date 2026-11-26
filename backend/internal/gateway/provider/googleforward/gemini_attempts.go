@@ -18,6 +18,7 @@ import (
 	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/media"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	logger "github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
@@ -213,6 +214,9 @@ func (s *Gemini) Forward(ctx context.Context, output Output, provider *gatewaypr
 		return gatewayprovider.FilterSignatureSensitiveBlocksForRetry(originalClaudeBody, originalModel)
 	}
 	options.ConvertRetry = func(stripped []byte) ([]byte, error) {
+		if _, strict := requestpolicy.StrictIntent(ctx); strict {
+			return nil, fmt.Errorf("strict parameter policy cannot verify downgraded Gemini history")
+		}
 		// A provider rejected the original signature. Rebuild with the
 		// compatibility marker so the retry does not send that signature again.
 		converted, err := convertClaudeMessagesToGeminiGenerateContent(stripped)

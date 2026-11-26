@@ -38,12 +38,18 @@ import (
 // candidate handling; the unsigned merchant hint only chooses verification
 // candidates and does not itself authenticate a callback.
 func (s *ProviderBindings) GetWebhookProviders(ctx context.Context, providerKey, outTradeNo string) ([]Provider, error) {
+	if isCryptoPaymentType(providerKey) {
+		return nil, ErrCryptoWebhookUnsupported
+	}
 	if outTradeNo != "" {
 		// Use the unsigned merchant hint only to narrow verification candidates. A
 		// failed exact order read falls through to candidate discovery, while a
 		// successful pinned resolution retains its merchant errors.
 		order, err := s.store.OrderByTradeNumber(ctx, outTradeNo)
 		if err == nil {
+			if IsCryptoDepositOrder(order) {
+				return nil, ErrCryptoWebhookUnsupported
+			}
 			if PsHasPinnedProviderInstance(order) {
 				prov, err := s.GetPinnedOrderProvider(ctx, order)
 				if err != nil {
@@ -177,7 +183,8 @@ func (s *ProviderBindings) GetEnabledWebhookProvidersByKey(ctx context.Context, 
 }
 
 // GetOrderProvider resolves a nonnil order's historical instance and
-// constructs its provider with current configuration. A resolution error
+// constructs its provider with current configuration. A chain deposit uses
+// its display adapter and frozen currency. A resolution error
 // returns before fallback, and a resolved instance is used even when currently
 // disabled.
 //
@@ -188,6 +195,11 @@ func (s *ProviderBindings) GetEnabledWebhookProvidersByKey(ctx context.Context, 
 // this compatibility path does not assign a new persisted historical binding
 // to the order.
 func (s *ProviderBindings) GetOrderProvider(ctx context.Context, o *Order) (Provider, error) {
+	if IsCryptoDepositOrder(o) {
+		// Direct deposits have no checkout merchant. Construct the display
+		// adapter from the frozen currency without selecting another provider.
+		return s.runtime.Factory(TypeCrypto, "", map[string]string{"currency": PaymentOrderCurrency(o)})
+	}
 	inst, err := s.GetOrderProviderInstance(ctx, o)
 	if err != nil {
 		return nil, fmt.Errorf("load order provider instance: %w", err)
@@ -493,6 +505,9 @@ func PsLegacyOrderMatchesInstance(orderPaymentType string, inst *ProviderInstanc
 // binding returns an error; this path delegates refund resolution and does not
 // select a registered replacement merchant.
 func (s *ProviderBindings) GetRefundProvider(ctx context.Context, o *Order) (Provider, error) {
+	if IsCryptoDepositOrder(o) {
+		return nil, ErrCryptoRefundUnsupported
+	}
 	inst, err := s.GetRefundOrderProviderInstance(ctx, o)
 	if err != nil {
 		return nil, err

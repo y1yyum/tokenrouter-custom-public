@@ -98,10 +98,9 @@ func (s CompletionSubmission) SubmitMandatory(c *gin.Context, task completion.Us
 	completion.SubmitTask(s.pool, completionSource(c), task, true, s.options)
 }
 
-// SubmitImages marks completion mandatory when a positive image count has been confirmed.
-// Nonpositive counts use ordinary submission policy. Positive counts enable
-// SubmitTask's fallback for a dropped task. Source identifies the completed
-// request or socket turn independently of any later Gin request context changes.
-func (s CompletionSubmission) SubmitImages(source context.Context, images int, task completion.UsageRecordTask) {
-	completion.SubmitTask(s.pool, source, task, images > 0, s.options)
+// SubmitResult preserves completed upstream work when the queue rejects a task.
+// Pricing runs inside the task, so token counts alone cannot establish that a
+// completion is free. A missing result retains the ordinary overflow policy.
+func (s CompletionSubmission) SubmitResult(source context.Context, hasResult bool, task completion.UsageRecordTask) {
+	completion.SubmitTask(s.pool, source, task, hasResult, s.options)
 }

@@ -41,7 +41,7 @@ func (r *Runtime) buildRequest(ctx context.Context, output HTTPBoundary, state *
 	if err != nil {
 		return nil, nil, err
 	}
-	body, err = gatewayadapter.ApplyModelAttributeParameters(body, attributes)
+	body, err = gatewayadapter.ApplyRequestModelAttributeParameters(ctx, body, attributes)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -111,7 +111,7 @@ func (r *Runtime) buildPassthroughRequest(ctx context.Context, output HTTPBounda
 	if err != nil {
 		return nil, nil, err
 	}
-	body, err = gatewayadapter.ApplyModelAttributeParameters(body, attributes)
+	body, err = gatewayadapter.ApplyRequestModelAttributeParameters(ctx, body, attributes)
 	if err != nil {
 		return nil, nil, err
 	}

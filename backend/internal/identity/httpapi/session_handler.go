@@ -2,6 +2,7 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"strings"
 
@@ -25,8 +26,9 @@ import (
 // Second-factor completion can also finish a pending provider binding. It
 // reloads the account before binding and challenge deletion, and pending
 // binding can persist before a later user reload or token response fails.
-// Challenge deletion and logout revocation errors are tolerated at their
-// respective cleanup stages. Refresh rotation runs before the HTTP
+// Logout accepts absent or invalid credentials so the browser can clear its
+// state, while storage failures can interrupt verified grant revocation.
+// Refresh rotation runs before the HTTP
 // backend-mode role check, so a refused refresh response can follow completed
 // credential rotation.
 
@@ -723,10 +725,9 @@ func (h *SessionHandler) RefreshToken(c *gin.Context) {
 	})
 }
 
-// Logout accepts optional refresh JSON and attempts revocation before
-// configured pending browser cleanup. Malformed JSON and revocation errors are
-// tolerated, and the handler returns success after invoking its optional
-// logout callback.
+// Logout revokes payment grants for any valid Bearer JWT and optional refresh
+// credential before browser cleanup. Omitted or invalid inputs permit
+// cleanup, while a revocation storage failure requires the caller to retry.
 func (h *SessionHandler) Logout(c *gin.Context) {
 	var req LogoutRequest
 	// Cookie-only logout clients can omit JSON. Discard decoding errors and
@@ -734,12 +735,23 @@ func (h *SessionHandler) Logout(c *gin.Context) {
 	// refresh value was decoded.
 	_ = c.ShouldBindJSON(&req)
 
+	if fields := strings.Fields(c.GetHeader("Authorization")); len(fields) == 2 && strings.EqualFold(fields[0], "Bearer") {
+		err := h.authService.RevokeCryptoGrantSessionForAccessToken(c.Request.Context(), fields[1])
+		if err != nil && !errors.Is(err, identity.ErrInvalidToken) &&
+			!errors.Is(err, identity.ErrTokenExpired) && !errors.Is(err, identity.ErrTokenTooLarge) {
+			response.ErrorFrom(c, identity.ErrServiceUnavailable)
+			return
+		}
+	}
 	if req.RefreshToken != "" {
 		if err := h.authService.RevokeRefreshToken(c.Request.Context(), req.RefreshToken); err != nil {
-			slog.Debug("failed to revoke refresh token", "error", err)
-			// A revocation failure is diagnosed while the browser logout callback still
-			// runs, allowing its pending-session consumption and cookie expiration to
-			// complete.
+			// Invalid refresh credentials carry no session; an unavailable store
+			// prevents confirming that the session's payment grants were revoked.
+			if !errors.Is(err, identity.ErrRefreshTokenInvalid) && !errors.Is(err, identity.ErrRefreshTokenNotFound) {
+				slog.Debug("failed to revoke refresh token", "error", err)
+				response.ErrorFrom(c, identity.ErrServiceUnavailable)
+				return
+			}
 		}
 	}
 	if h.options.LogoutPending != nil {
@@ -751,10 +763,9 @@ func (h *SessionHandler) Logout(c *gin.Context) {
 	})
 }
 
-// RevokeAllSessions requests refresh-session revocation for the authenticated
-// Gin account. Service failures produce an internal response; successful
-// return uses the completion message while access-token validity follows its
-// separate checks.
+// RevokeAllSessions revokes payment grants and refresh sessions across the
+// authenticated account. Service failures produce an internal response.
+// Access-token validation still follows the account's ordinary JWT rules.
 func (h *SessionHandler) RevokeAllSessions(c *gin.Context) {
 	subject, ok := authctx.GetAuthSubjectFromContext(c)
 	if !ok {
@@ -762,7 +773,7 @@ func (h *SessionHandler) RevokeAllSessions(c *gin.Context) {
 		return
 	}
 
-	if err := h.authService.RevokeAllUserTokens(c.Request.Context(), subject.UserID); err != nil {
+	if err := h.authService.RevokeAllUserSessions(c.Request.Context(), subject.UserID); err != nil {
 		slog.Error("failed to revoke all sessions", "user_id", subject.UserID, "error", err)
 		response.InternalError(c, "Failed to revoke sessions")
 		return

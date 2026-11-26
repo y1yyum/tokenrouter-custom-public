@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -258,7 +259,7 @@ func (r *Store) fillDashboardEntityStats(ctx context.Context, stats *DashboardSt
 		FROM providers
 		WHERE deleted_at IS NULL
 	`
-	return r.runDashboardQueries(
+	if err := r.runDashboardQueries(
 		ctx,
 		func(queryCtx context.Context) error {
 			return scanSingleRow(queryCtx, r.sql, userStatsQuery, []any{todayUTC}, &stats.TotalUsers, &stats.TodayNewUsers)
@@ -274,7 +275,82 @@ func (r *Store) fillDashboardEntityStats(ctx context.Context, stats *DashboardSt
 				&stats.RateLimitProviders, &stats.OverloadProviders,
 			)
 		},
+	); err != nil {
+		return err
+	}
+
+	r.fillUserIDPoolAlert(ctx, stats)
+	return nil
+}
+
+// fillUserIDPoolAlert loads eight-digit user ID pool consumption into stats
+// when tier metadata is available and fills UserIDPoolAlert above fifty
+// percent capacity. Missing or empty tier rows are ignored so dashboard entity
+// counters remain available in partial or legacy database schemas.
+func (r *Store) fillUserIDPoolAlert(ctx context.Context, stats *DashboardStats) {
+	if stats == nil || r.sql == nil {
+		return
+	}
+
+	var tier8Used, tier8Cap int64
+	err := scanSingleRow(
+		ctx,
+		r.sql,
+		`SELECT used_count, capacity FROM user_id_pool_tiers WHERE tier_digit = 8`,
+		nil,
+		&tier8Used,
+		&tier8Cap,
 	)
+	if err != nil {
+		// Suppress missing-table or no-row pool lookup errors because capacity alerts
+		// are advisory and must not fail administrator dashboard statistics.
+		return
+	}
+
+	stats.UserIDPoolAlert = buildUserIDPoolAlert(tier8Used, tier8Cap)
+}
+
+// buildUserIDPoolAlert classifies eight-digit pool usage against fixed warning
+// and critical percentage gates. Nonpositive capacity or usage under fifty
+// percent returns nil; otherwise the highest crossed gate selects severity,
+// threshold, and the operator alert text.
+func buildUserIDPoolAlert(usedCount, capacity int64) *usage.UserIDPoolAlert {
+	if capacity <= 0 {
+		return nil
+	}
+
+	pct := float64(usedCount) / float64(capacity) * 100.0
+	var (
+		threshold int
+		severity  string
+		message   string
+	)
+	switch {
+	case pct >= 90.0:
+		threshold = 90
+		severity = "critical"
+		message = fmt.Sprintf("8位数账号ID池使用已超过 90%% (%d/%d)，请注意扩容或规划后续ID策略！", usedCount, capacity)
+	case pct >= 75.0:
+		threshold = 75
+		severity = "warning"
+		message = fmt.Sprintf("8位数账号ID池使用已超过 75%% (%d/%d)！", usedCount, capacity)
+	case pct >= 50.0:
+		threshold = 50
+		severity = "warning"
+		message = fmt.Sprintf("8位数账号ID池使用已超过 50%% (%d/%d)！", usedCount, capacity)
+	default:
+		return nil
+	}
+
+	return &usage.UserIDPoolAlert{
+		TierDigit:    8,
+		UsedCount:    usedCount,
+		Capacity:     capacity,
+		UsagePercent: pct,
+		Threshold:    threshold,
+		Severity:     severity,
+		Message:      message,
+	}
 }
 
 // fillDashboardUsageStatsAggregated fills administrator usage from retained

@@ -13,8 +13,10 @@ import (
 	"github.com/tidwall/sjson"
 
 	"github.com/TokenFlux/TokenRouter/internal/gateway/compact"
+	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/media"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/timing"
@@ -54,9 +56,12 @@ type PassthroughInput struct {
 	// sets it when initial provider model replacement changes the prepared
 	// request.
 	ImageIntentInvalidated bool
-	ReasoningEffort        *string   // previously recorded effective effort
-	Stream                 bool      // incoming streaming mode choice
-	StartedAt              time.Time // request arrival timestamp
+	ReasoningEffort        *string // previously recorded effective effort
+	ClientStream           bool    // incoming streaming mode choice
+	// PrepareSend resolves conversion from each completed passthrough request.
+	// Nil preserves the selected credential's existing send and read modes.
+	PrepareSend PrepareResponsesSend
+	StartedAt   time.Time // request arrival timestamp
 	// SanitizedToolSchemasPlatform, SanitizedReasoningReplay, and SanitizedInputItemIDs
 	// forward prelude completion state so CompatibilityBodyWithSkip avoids repeating
 	// multi-megabyte scans when input and tool schemas remain unchanged.
@@ -90,7 +95,8 @@ type ImageBilling struct {
 func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts) (*Result, error) {
 	profile := p.Profile()
 	body, canonicalImageIntentBody, reqModel := in.Body, in.CanonicalImageIntentBody, in.Model
-	attemptImageIntentInvalidated, reasoningEffort, reqStream, startTime := in.ImageIntentInvalidated, in.ReasoningEffort, in.Stream, in.StartedAt
+	attemptImageIntentInvalidated, reasoningEffort, startTime := in.ImageIntentInvalidated, in.ReasoningEffort, in.StartedAt
+	outputStream := in.ClientStream
 	skipSchemasPlatform := in.SanitizedToolSchemasPlatform
 	skipReasoningReplay := in.SanitizedReasoningReplay
 	skipInputItemIDs := in.SanitizedInputItemIDs
@@ -175,7 +181,7 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 			skipReasoningReplay = false
 			skipInputItemIDs = false
 		}
-		reqStream = wirejson.ParseView(body).Get("stream").Bool()
+		outputStream = wirejson.ParseView(body).Get("stream").Bool()
 
 		// Namespace raw metadata before deriving the fingerprint; header construction
 		// later consumes the staged IDs for the same selected provider attempt.
@@ -309,9 +315,9 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 		profile.Name,
 		profile.Type,
 		reqModel,
-		reqStream,
+		outputStream,
 	)
-	if reqStream {
+	if outputStream {
 		p.WarnTimeoutHeaders(ctx)
 	}
 
@@ -331,9 +337,11 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 
 	responseID := ""
 	imageCount := 0
+	searchCount := 0
 	imageFrameCount := 0
 	var deliveryErr error
 	var imageOutputSizes []string
+	var resolvedCompatibility *openai.ResponsesStreamAttempt
 	for {
 		// Every Compact recovery reenters this loop. Apply the replacement model's
 		// instruction rules once, even if the first model left the field absent.
@@ -361,14 +369,42 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 			prepareRecorded = true
 			timing.ObserveProviderPrepare(ctx, time.Since(startTime))
 		}
+		var compatibility *openai.ResponsesStreamAttempt
+		if in.PrepareSend != nil {
+			// Each build uses the current candidate or repaired body. A conversion
+			// applies to the ready request and does not alter outputStream or retry bytes.
+			compatibility, buildErr = in.PrepareSend(upstreamReq)
+			if buildErr != nil {
+				// The upstream owns the request body only after the hook allows handoff.
+				// Close it here when admission or cancellation prevents that handoff.
+				if upstreamReq.Body != nil {
+					_ = upstreamReq.Body.Close()
+				}
+				return nil, classifyResponsesSendPreparation(buildErr, profile.Platform)
+			}
+		}
 		upstreamStart := time.Now()
-		resp, err = p.SendPass(upstreamReq)
+		if compatibility != nil {
+			resp, err = compatibility.Exchange(ctx, upstreamReq, p.SendPass)
+		} else {
+			resp, err = p.SendPass(upstreamReq)
+		}
 		p.Latency(time.Since(upstreamStart))
 		if err != nil {
+			if requestpolicy.IsWireMismatch(err) {
+				return nil, err
+			}
+			if compatibility != nil {
+				if resp != nil && resp.Body != nil {
+					_ = resp.Body.Close()
+				}
+				compatibility.BlockReplay()
+				return nil, responsesCompatibilityFailure(resp, err, profile.Platform, forwardcore.NextProviderStop)
+			}
 			// Transport failures request outer failover; the shared handler also unschedules persistent faults.
 			return nil, p.TransportErrorPass(ctx, err)
 		}
-		if resp.StatusCode >= 400 {
+		if resp.StatusCode >= 400 && compatibility == nil {
 			// Capture failure evidence and close its network body before recovery; a
 			// replay reader keeps the same bytes available for later policy and final
 			// error presentation.
@@ -380,7 +416,7 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 			// this attempt's recovery state.
 			if retryBody, reason, changed, retryErr := openai.NormalizeOpenAIResponsesRejectedFieldRetryBody(resp.StatusCode, body, probeBody); retryErr != nil {
 				return nil, fmt.Errorf("normalize passthrough rejected Responses field retry body: %w", retryErr)
-			} else if changed && rejectedFieldRetryState.Allow(retryBody) {
+			} else if changed && requestpolicy.AllowsRepair(ctx, body, retryBody) && rejectedFieldRetryState.Allow(retryBody) {
 				body = retryBody
 				logging.LegacyPrintf("service.openai_gateway", "[OpenAI] Retrying passthrough request after %s (provider: %s)", reason, profile.Name)
 				continue
@@ -425,7 +461,7 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 
 		p.WrapResponseBody(resp)
 
-		if reqStream {
+		if outputStream {
 			result, handleErr := openai.ReadPassthroughStreaming(ctx, resp, upstream.NewOutputContext(p.Sink()), p.ResponseOptions(ctx), startTime, reqModel, upstreamPassthroughModel)
 			if handleErr != nil && !errors.Is(handleErr, wire.ErrGIFResultInvalid) {
 				// The installed Compact signal helper closes a rejected response when it
@@ -459,8 +495,30 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 			imageFrameCount = result.ImageFrameCount
 			imageOutputSizes = result.ImageOutputSizes
 		} else {
-			result, handleErr := openai.ReadPassthroughNonStreaming(ctx, resp, p.Sink(), p.ResponseOptions(ctx), reqModel, upstreamPassthroughModel)
-			if handleErr != nil && !errors.Is(handleErr, wire.ErrGIFResultInvalid) {
+			options := p.ResponseOptions(ctx)
+			options.NonStream.Compatibility = compatibility
+			result, handleErr := openai.ReadPassthroughNonStreaming(ctx, resp, p.Sink(), options, reqModel, upstreamPassthroughModel)
+			if compatibility != nil {
+				// The strict reader has stopped. Close its network body before
+				// spending a repair ticket or returning control to provider selection.
+				closeErr := resp.Body.Close()
+				if handleErr != nil {
+					if closeErr != nil {
+						compatibility.BlockReplay()
+						handleErr = errors.Join(handleErr, closeErr)
+					}
+					repaired, decision := recoverResponsesExchange(ctx, p.Sink(), compatibility, resp, handleErr, body, rejectedFieldRetryState, profile.Platform)
+					if repaired != nil {
+						body = repaired
+						continue
+					}
+					if result == nil || compatibility.Snapshot().ReplayAllowed {
+						return nil, decision
+					}
+					handleErr = decision
+				}
+				resolvedCompatibility = compatibility
+			} else if handleErr != nil && !errors.Is(handleErr, wire.ErrGIFResultInvalid) {
 				// The installed Compact signal helper closes a rejected response when it
 				// adopts recovery, releasing its body before this loop constructs the
 				// replacement exchange.
@@ -490,12 +548,19 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 			imageCount = result.ImageCount
 			imageFrameCount = result.ImageFrameCount
 			imageOutputSizes = result.ImageOutputSizes
+			if compatibility != nil {
+				searchCount = result.SearchCount
+			}
 		}
 		break
 	}
-	defer func() { _ = resp.Body.Close() }()
+	if resolvedCompatibility == nil {
+		defer func() { _ = resp.Body.Close() }()
+	}
 	serviceTier := requeststate.ExtractOpenAIServiceTierFromBody(body)
-	p.BindOwner(ctx, responseID)
+	if resolvedCompatibility == nil || deliveryErr == nil {
+		p.BindOwner(ctx, responseID)
+	}
 
 	if !profile.Shadow {
 		p.UpdateCodexUsage(ctx, resp.Header)
@@ -518,11 +583,13 @@ func RunPassthrough(ctx context.Context, in PassthroughInput, p PassthroughPorts
 		UpstreamResponseServiceTier: p.ObservedServiceTier(),
 		ServiceTier:                 p.ResolvedServiceTier(serviceTier),
 		ReasoningEffort:             reasoningEffort,
-		Stream:                      reqStream,
+		Stream:                      outputStream,
 		OpenAIWSMode:                false,
 		Duration:                    time.Since(startTime),
 		Timings:                     nil,
+		SearchCount:                 searchCount,
 	}
+	attachResponsesSettlement(forwardResult, resolvedCompatibility, serviceTier)
 	// Observed image output supplies the image billing identity and size evidence,
 	// allowing completion to use media pricing for the returned generated-image
 	// count.

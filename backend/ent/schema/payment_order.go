@@ -57,12 +57,13 @@ func (PaymentOrder) Fields() []ent.Field {
 		// amount is the balance credit after the configured recharge multiplier,
 		// or the subscription plan price. pay_amount stores the channel charge after
 		// fees and any subscription currency conversion, so the amounts can differ.
+		// Direct deposits can retain three fractional digits.
 		// Entitlement amount snapshot.
 		field.Float("amount").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
+			SchemaType(map[string]string{dialect.Postgres: "numeric(21,3)"}),
 		// Channel payment amount.
 		field.Float("pay_amount").
-			SchemaType(map[string]string{dialect.Postgres: "decimal(20,2)"}),
+			SchemaType(map[string]string{dialect.Postgres: "numeric(21,3)"}),
 		// fee_rate, fee_fixed, fee_rate_amount, and fee_amount preserve the
 		// checkout fee breakdown. Percentage and fixed fees contribute to fee_amount,
 		// which is included in pay_amount at the channel currency precision.

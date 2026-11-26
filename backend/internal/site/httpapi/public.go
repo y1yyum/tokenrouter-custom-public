@@ -131,6 +131,7 @@ func (h *PublicHandler) GetPublicSettings(c *gin.Context) {
 		GoogleOAuthClientID:                 settings.GoogleOAuthClientID,
 		BackendModeEnabled:                  settings.BackendModeEnabled,
 		PaymentEnabled:                      settings.PaymentEnabled,
+		CryptoEnabled:                       settings.CryptoEnabled,
 		TeamEnabled:                         settings.TeamEnabled,
 		TeamSelfServiceEnabled:              settings.TeamSelfServiceEnabled,
 		CreativeEnabled:                     settings.CreativeEnabled,

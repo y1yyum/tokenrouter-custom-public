@@ -254,6 +254,7 @@ export default {
   },
   // Redeem Codes
   redeem: {
+    expiryDaysRequired: 'Enter an expiry date.',
     requiresPayment: 'Requires a previous payment',
     requiresPaymentHint:
       'Users need at least one successful payment of any amount to redeem this code.',
@@ -548,6 +549,24 @@ export default {
   },
   // Usage Records
   usage: {
+    imported: {
+      local: 'Local records',
+      tab: 'raks history',
+      allHistory: 'All history',
+      selectedDates: 'Selected dates',
+      groups: 'raks history by group',
+      minutes: 'raks history by minute',
+      billing: 'These raks calls are shown for reporting and are separate from local billing.',
+      minute: 'Minute (local time)',
+      exactModel: 'Model (exact match)',
+      platform: 'Source platform',
+      success: 'Successful requests',
+      errors: 'Failed requests',
+      duration: 'Mean duration (ms)',
+      ttft: 'Mean time to first token (ms)',
+      empty: 'No matching raks records in this range',
+      failedToLoad: 'Could not load raks history',
+    },
     requestSource: 'Request source',
     sourcesAll: 'All requests',
     requestSources: {

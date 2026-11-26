@@ -102,6 +102,13 @@ func (s *OrderLifecycle) ForceExpireOrder(ctx context.Context, orderID int64, re
 		return infraerrors.BadRequest("INVALID_FORCE_EXPIRE_REASON", "force expiration reason is invalid")
 	}
 
+	order, err := s.store.Order(ctx, orderID)
+	if err == nil && IsCryptoDepositOrder(order) {
+		return ErrCryptoRetryRequiresLedger
+	}
+	if err != nil && !s.store.IsNotFound(err) {
+		return fmt.Errorf("read order before force expiration: %w", err)
+	}
 	return s.store.ForceExpire(ctx, orderID, reason)
 }
 
@@ -120,6 +127,9 @@ func (s *OrderLifecycle) ForceExpireOrder(ctx context.Context, orderID int64, re
 // cancel capability, or both PaymentTradeNo and PaymentType empty, can still
 // reach conditional close without a channel cancellation call.
 func (s *OrderLifecycle) CancelCore(ctx context.Context, o *Order, fs, op, ad string) (string, error) {
+	if IsCryptoDepositOrder(o) {
+		return "", ErrCryptoRetryRequiresLedger
+	}
 	if o.PaymentTradeNo != "" || o.PaymentType != "" {
 		prov, queryRef, resp, err := s.QueryPaymentOrderProvider(ctx, o)
 		if err != nil {
@@ -279,6 +289,9 @@ func PaymentStatusUnavailableError(cause error) error {
 // outcome with nil error, while application errors remain visible to
 // verification/recovery callers.
 func (s *OrderLifecycle) CheckPaid(ctx context.Context, o *Order) (string, error) {
+	if IsCryptoDepositOrder(o) {
+		return "", nil
+	}
 	prov, queryRef, resp, err := s.QueryPaymentOrderProvider(ctx, o)
 	// Keep the saved order usable when upstream resolution/query is unavailable.
 	// Return empty outcome with nil error after diagnostics; cancellation uses
@@ -296,6 +309,9 @@ func (s *OrderLifecycle) CheckPaid(ctx context.Context, o *Order) (string, error
 // returns an error; a resolved provider/reference accompanies the delegated
 // query result/error so cancellation can record useful diagnostics.
 func (s *OrderLifecycle) QueryPaymentOrderProvider(ctx context.Context, o *Order) (Provider, string, *QueryOrderResponse, error) {
+	if IsCryptoDepositOrder(o) {
+		return nil, "", nil, ErrCryptoRetryRequiresLedger
+	}
 	prov, err := s.bindings.GetOrderProvider(ctx, o)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("resolve order provider: %w", err)
@@ -350,6 +366,9 @@ func (s *OrderLifecycle) QueryPaymentOrderWithProvider(ctx context.Context, prov
 // notification, while queried failure returns its label without invoking
 // failure handling here. Other statuses return empty,nil.
 func (s *OrderLifecycle) ApplyQueriedPaymentStatus(ctx context.Context, o *Order, prov Provider, queryRef string, resp *QueryOrderResponse) (string, error) {
+	if IsCryptoDepositOrder(o) {
+		return "", ErrCryptoRetryRequiresLedger
+	}
 	if resp == nil {
 		return "", fmt.Errorf("missing provider query response")
 	}
@@ -826,6 +845,9 @@ func (s *OrderLifecycle) ReconcilePaidFulfillmentOrdersAt(ctx context.Context, n
 		// Skip this count and continue selected IDs, retaining their
 		// order/code/source evidence for another recovery attempt.
 		if err := s.ExecuteFulfillment(ctx, orderID); err != nil {
+			if errors.Is(err, ErrCryptoRetryRequiresLedger) {
+				continue
+			}
 			s.runtime.Log("warn", "retry paid order fulfillment failed", "orderID", orderID, "error", err)
 			continue
 		}

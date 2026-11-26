@@ -10,6 +10,7 @@ import (
 
 	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/ops"
@@ -180,6 +181,11 @@ func (s *Antigravity) Forward(ctx context.Context, output Output, provider *gate
 				return nil, c.ClaudeError(http.StatusBadGateway, "client_disconnected", "Client disconnected before upstream response")
 			}
 			return nil, c.ClaudeError(http.StatusBadGateway, "upstream_error", "Upstream request failed after retries")
+		}
+		// The legacy rectifier can discard thinking or tool history and raise
+		// the caller's limits. This bridge cannot prove those repairs equivalent.
+		if _, strict := requestpolicy.StrictIntent(ctx); strict {
+			return result.Resp, nil
 		}
 		options := antigravity.ClaudeRecoveryOptions{
 			Retry: func(body []byte) (*http.Response, error) {

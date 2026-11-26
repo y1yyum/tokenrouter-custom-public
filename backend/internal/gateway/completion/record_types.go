@@ -248,8 +248,8 @@ type Input struct {
 	// RecordOpenAI maps CyberBlocked to RequestType and copies NativeCompactionV2 into
 	// its row; RecordAnthropic leaves both classifications unset in its analysis row.
 	ForceCacheBilling, QuotaUpdates, CyberBlocked, NativeCompactionV2 bool
-	// PricingAt fixes OpenAI turn pricing when nonzero; RecordAnthropic chooses
-	// recording time independently, so callers use the protocol-specific timing rule.
+	// PricingAt fixes prepared Responses and OpenAI turn pricing when nonzero.
+	// Ordinary RecordAnthropic chooses recording time independently.
 	PricingAt          time.Time
 	PricingUsageFields // captured routing and billing choices
 }
@@ -556,6 +556,25 @@ func (s *Recorder) Record(ctx context.Context, input *Input, openAI bool) (err e
 		return s.RecordOpenAI(ctx, input)
 	}
 	return s.RecordAnthropic(ctx, input, &PricingOptions{})
+}
+
+// PrepareOpenAI freezes the priced command under a detached budget before submission.
+// The returned function only applies that command and persists its usage row.
+// Native usage keeps its separate token buckets and existing pricing rules.
+func (s *Recorder) PrepareOpenAI(ctx context.Context, input *Input) (func(context.Context) error, error) {
+	input = Snapshot(input)
+	if input == nil || input.Result == nil || input.APIKey == nil || input.User == nil || input.Provider == nil {
+		return nil, fmt.Errorf("openai settlement requires a result, api key, user, and provider")
+	}
+	pricingCtx, cancel := detachedBillingContext(ctx)
+	defer cancel()
+	var prepared preparedRecord
+	if input.Result.NativeUsage {
+		err := s.recordAnthropic(pricingCtx, input, &PricingOptions{}, &prepared)
+		return prepared, err
+	}
+	err := s.recordOpenAI(pricingCtx, input, &prepared)
+	return prepared, err
 }
 
 // printf formats recorder diagnostics for the optional observation callback.

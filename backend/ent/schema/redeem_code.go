@@ -14,13 +14,14 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/billing"
 )
 
-// redeem_code.go defines redemption credentials and the entitlement granted to
-// each eligible recipient. Use counters, expiration, and recipient receipts
-// let RedeemService check availability before issuing balance, concurrency, or
-// subscription benefits, while the code retains its latest recipient and
-// redemption time.
+// redeem_code.go defines redemption credentials and records balance adjustments.
+// Use counters, expiration, and recipient receipts let RedeemService check
+// availability before issuing balance, concurrency, or subscription benefits.
+// The code retains the latest recipient and redemption time. A chain deposit
+// reversal shares this history table and records its source separately from
+// the required code field.
 
-// RedeemCode stores entitlement definitions and their current redemption availability.
+// RedeemCode stores entitlement definitions, redemption availability, and balance adjustments.
 // Deletes physically remove code rows; this entity has no soft-delete mixin.
 type RedeemCode struct {
 	ent.Schema // generated entity definition
@@ -33,7 +34,8 @@ func (RedeemCode) Annotations() []schema.Annotation {
 	}
 }
 
-// Fields describes code identity, entitlement, eligibility, counters, and expiry.
+// Fields describes code identity, entitlement, eligibility, counters, expiry,
+// and the optional source identity of a chain deposit reversal.
 // Generated Ent inserts start unused with a balance entitlement and one use.
 // Code validation counts Unicode code points, matching the API's 32-character
 // limit across ASCII and multibyte text.
@@ -98,6 +100,12 @@ func (RedeemCode) Fields() []ent.Field {
 			Optional().
 			Nillable().
 			SchemaType(map[string]string{dialect.Postgres: "text"}),
+		// source_ref identifies the exact deposit event behind a reversal. Ordinary
+		// redemption rows leave it NULL, and the reversal index protects its uniqueness.
+		field.String("source_ref").
+			MaxLen(160).
+			Optional().
+			Comment("Synthetic ledger row source reference, e.g. crypto_deposit:<deposit_id>:<chain>:<tx_hash>:<log_index>"),
 		// Immutable creation timestamp.
 		field.Time("created_at").
 			Immutable().
@@ -138,14 +146,22 @@ func (RedeemCode) Edges() []ent.Edge {
 	}
 }
 
-// Indexes supports code availability, expiration, latest-recipient, and plan lookups.
-// The code field declares its unique constraint separately, while receipt
-// uniqueness belongs to RedeemCodeUsage's code-user pair.
+// Indexes supports code availability, expiration, latest-recipient, and plan
+// lookups. The partial reversal indexes enforce one adjustment per source and
+// support recent reversal lookups by recipient. The code field declares its
+// unique constraint separately, and RedeemCodeUsage owns receipt uniqueness.
 func (RedeemCode) Indexes() []ent.Index {
 	return []ent.Index{
 		index.Fields("status"),
 		index.Fields("expires_at"),
 		index.Fields("used_by"),
 		index.Fields("plan_id"),
+		index.Fields("source_ref").
+			Unique().
+			StorageKey("uq_redeem_codes_crypto_revoke_source").
+			Annotations(entsql.IndexWhere("type = 'crypto_revoke' AND source_ref IS NOT NULL")),
+		index.Fields("used_by", "used_at").
+			StorageKey("idx_redeem_codes_crypto_revoke_user").
+			Annotations(entsql.DescColumns("used_at"), entsql.IndexWhere("type = 'crypto_revoke'")),
 	}
 }

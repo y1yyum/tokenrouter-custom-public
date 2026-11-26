@@ -665,16 +665,10 @@ func (p *openAIWSEntryAdapter) CompletionObserver() func(int64, string, error) {
 	}
 }
 
-// SubmitCompletion queues the supplied turn task through the shared
-// image-aware submission service. A nil result supplies zero images; nonnil
-// results supply ImageCount, while the service owns its background or overflow
-// execution policy.
+// SubmitCompletion retains the completed turn for pricing if its queue is full.
+// A turn without an upstream result follows the ordinary observation policy.
 func (p *openAIWSEntryAdapter) SubmitCompletion(source context.Context, result *gatewayws.ForwardResult, task func(context.Context)) {
-	images := 0
-	if result != nil {
-		images = result.ImageCount
-	}
-	p.bindings.Common.Support.Submission.SubmitImages(source, images, task)
+	p.bindings.Common.Support.Submission.SubmitResult(source, result != nil, task)
 }
 
 // MappedModel resolves the selected provider's effort-aware mapped model for

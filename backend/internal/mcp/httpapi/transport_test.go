@@ -51,13 +51,18 @@ type tokenFixture struct {
 	sealed string            // encrypted fixture credential
 }
 
-// accountFixture represents the current active administrator consulted by token admission.
+// accountFixture supplies current roles for the accounts consulted by token admission.
 type accountFixture struct {
-	role atomic.Value // current global role string
+	// ownerID and otherUserID are the only principals this reader recognizes.
+	// Both follow the same role switch while retaining distinct identities for ownership checks.
+	ownerID     int64        // credential owner identifier
+	otherUserID int64        // alternate browser identifier
+	role        atomic.Value // current global role string
 }
 
 // grantFixture represents the current browser TOTP authorization state.
 type grantFixture struct {
+	ownerID int64       // browser grant owner
 	enabled bool        // configured step-up policy
 	granted atomic.Bool // current browser grant availability
 }
@@ -137,9 +142,10 @@ func (f *tokenFixture) FindHash(ctx context.Context, digest string) (*identity.M
 // Touch accepts usage observation independently of the fixture's token settings version.
 func (*tokenFixture) Touch(context.Context, int64) error { return nil }
 
-// GetByID returns current role state for the fixture's owning administrator.
+// GetByID returns the current role for either configured fixture account.
+// Unknown identifiers return an error so authorization can reject unrecognized callers.
 func (f *accountFixture) GetByID(_ context.Context, id int64) (*identity.User, error) {
-	if id != 1 && id != 2 {
+	if id != f.ownerID && id != f.otherUserID {
 		return nil, errors.New("unknown fixture account")
 	}
 	role, _ := f.role.Load().(string)
@@ -151,7 +157,7 @@ func (f *grantFixture) IsStepUpEnabled(context.Context) bool { return f.enabled 
 
 // HasStepUpGrant checks the verified browser session and its current grant availability.
 func (f *grantFixture) HasStepUpGrant(_ context.Context, userID int64, sessionID string) (bool, error) {
-	return userID == 1 && sessionID == "fixture-session" && f.granted.Load(), nil
+	return userID == f.ownerID && sessionID == "fixture-session" && f.granted.Load(), nil
 }
 
 // RoundTrip clones requests before installing the fixture's Bearer authentication header.
@@ -161,12 +167,23 @@ func (b bearerTransport) RoundTrip(request *http.Request) (*http.Response, error
 	return http.DefaultTransport.RoundTrip(cloned)
 }
 
-// newMCPFixture mounts real SDK transport and route admission around bounded test handlers.
-// Browser authentication is a fixture, while token checks, schema validation,
-// approval storage, and SDK serialization use the production implementations.
+// newMCPFixture mounts the MCP transport with two synthetic account identifiers.
+// Use it for tests whose owner and alternate browser live entirely in the in-memory fixture.
 func newMCPFixture(t *testing.T) *mcpFixture {
 	t.Helper()
-	fixture := &mcpFixture{repo: &tokenFixture{}, accounts: &accountFixture{}, grants: &grantFixture{enabled: true}}
+	return newMCPFixtureForUsers(t, 1, 2)
+}
+
+// newMCPFixtureForUsers mounts real SDK transport and route admission around bounded test handlers.
+// The supplied identifiers bind browser sessions, token ownership, account lookups,
+// and step-up checks to the same users.
+func newMCPFixtureForUsers(t *testing.T, ownerID, otherUserID int64) *mcpFixture {
+	t.Helper()
+	fixture := &mcpFixture{
+		repo:     &tokenFixture{},
+		accounts: &accountFixture{ownerID: ownerID, otherUserID: otherUserID},
+		grants:   &grantFixture{ownerID: ownerID, enabled: true},
+	}
 	fixture.accounts.role.Store(identity.RoleAdmin)
 	fixture.grants.granted.Store(true)
 	cache := miniredis.RunT(t)
@@ -178,9 +195,9 @@ func newMCPFixture(t *testing.T) *mcpFixture {
 	fixture.handler = NewHandler(tokens, mcpredis.NewState(redisClient, cipher), fixture.grants, fixture.accounts, fixture.grants, Options{Origins: func(context.Context) []string { return []string{"https://management.example"} }})
 	router := gin.New()
 	normal := func(c *gin.Context) {
-		id := int64(1)
+		id := ownerID
 		if c.GetHeader("Authorization") == "Bearer other-browser" {
-			id = 2
+			id = otherUserID
 		} else if c.GetHeader("Authorization") != "Bearer browser" {
 			c.AbortWithStatus(http.StatusUnauthorized)
 			return
@@ -214,7 +231,7 @@ func newMCPFixture(t *testing.T) *mcpFixture {
 	require.NoError(t, err)
 	fixture.handler.router = router
 	router.Any("/mcp", gin.WrapH(http.HandlerFunc(fixture.handler.serveMCP)))
-	fixture.token, fixture.credential, err = tokens.Create(t.Context(), 1, identity.MCPTokenInput{Name: "SDK fixture", Enabled: true, Permissions: []string{"fixture.get", "fixture.create", "fixture.protected", "mcp.confirmations.approve"}})
+	fixture.token, fixture.credential, err = tokens.Create(t.Context(), ownerID, identity.MCPTokenInput{Name: "SDK fixture", Enabled: true, Permissions: []string{"fixture.get", "fixture.create", "fixture.protected", "mcp.confirmations.approve"}})
 	require.NoError(t, err)
 	fixture.server = httptest.NewServer(router)
 	t.Cleanup(fixture.server.Close)

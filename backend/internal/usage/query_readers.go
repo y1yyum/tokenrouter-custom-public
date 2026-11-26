@@ -79,6 +79,7 @@ type QueryReaders struct {
 	ModelStatsBySourceRepo         ModelStatsBySourceRepo         // scalar model dimension reader
 	GroupStatsWithUsageFiltersRepo GroupStatsWithUsageFiltersRepo // unified group totals reader
 	UserStatsReader                UserStatsReader                // reduced user summary reader
+	ImportedCallReader             ImportedCallReader             // isolated external usage history
 }
 
 // queryReaders discovers optional query capabilities implemented by the
@@ -92,5 +93,6 @@ func queryReaders(repo UsageLogRepository) QueryReaders {
 	out.ModelStatsBySourceRepo, _ = repo.(ModelStatsBySourceRepo)
 	out.GroupStatsWithUsageFiltersRepo, _ = repo.(GroupStatsWithUsageFiltersRepo)
 	out.UserStatsReader, _ = repo.(UserStatsReader)
+	out.ImportedCallReader, _ = repo.(ImportedCallReader)
 	return out
 }

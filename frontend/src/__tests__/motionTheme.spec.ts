@@ -1,7 +1,7 @@
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import postcss from 'postcss'
-import tailwindcss from 'tailwindcss'
+import tailwindcss from 'tailwindcss-v3'
 import theme from '../../tailwind.config.js'
 import { cssRules, readSource } from './helpers/sourceSyntax'
 

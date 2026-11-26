@@ -5,7 +5,7 @@
     rel="noopener noreferrer"
     class="inline-flex h-7 items-center gap-2 rounded-full border border-gray-200 px-3 text-xs text-gray-500 transition hover:border-primary-600 hover:text-primary-600 focus-visible:border-primary-600 focus-visible:text-primary-600 dark:border-dark-600 dark:text-dark-400 dark:hover:border-primary-500 dark:hover:text-primary-500 dark:focus-visible:border-primary-500 dark:focus-visible:text-primary-500"
   >
-    <img src="/logo.svg" alt="" class="h-4 w-4 shrink-0 select-none" />
+    <img :src="logoPath" alt="" class="h-4 w-4 shrink-0 select-none" />
     <i18n-t keypath="home.footer.poweredBy" tag="span" scope="global">
       <template #name>
         <span class="font-semibold">TokenRouter</span>
@@ -31,4 +31,6 @@ import GitHubMark from '@/components/auth/GitHubMark.vue'
 // TOKENROUTER_REPO_URL is the public repository opened when a visitor follows the
 // footer credit.
 const TOKENROUTER_REPO_URL = 'https://github.com/TokenFlux/TokenRouter'
+// The public asset URL is resolved by the browser at the site root.
+const logoPath = '/logo.svg'
 </script>

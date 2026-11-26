@@ -118,6 +118,7 @@ export interface PublicSettings {
   home_content: string // Homepage content markup.
   hide_ccs_import_button: boolean // CCS import hiding switch.
   payment_enabled: boolean // Payment checkout availability.
+  crypto_enabled?: boolean // Standalone chain deposit availability. Absence leaves the entry closed.
   team_enabled?: boolean // Team feature availability.
   team_self_service_enabled?: boolean // Self-service team creation availability.
   // Older public settings may omit creative_enabled; callers disable the creative entry

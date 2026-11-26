@@ -6,6 +6,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/apikey"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/modelidentity"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/routing/capability"
 )
 
@@ -54,7 +55,7 @@ func WithAPIKeyForceClaude1hCache(ctx context.Context, enabled bool) context.Con
 // native Anthropic OAuth, Bedrock, or Vertex service-account targets qualify.
 // @project-doc docs/interfaces/anthropic_upstream.md#claude_cache_ttl_policy
 func ShouldForceClaude1hCache(ctx context.Context, target *ExecutionProvider, models ...string) bool {
-	if !APIKeyForceClaude1hCache(ctx) || target == nil {
+	if !APIKeyForceClaude1hCache(ctx) || target == nil || requestpolicy.HasClientCache(ctx) {
 		return false
 	}
 	switch target.Record.Platform {

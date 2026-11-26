@@ -63,6 +63,7 @@ docker compose -f deploy/docker-compose.dev.yml up --build
 
 - 规则组成：`catalog.go` 登记技术库、模块协作、纯叶子包、平台和文件许可；`policy.go` 按目录角色复用约束；arch-go 执行静态依赖检查。同一模块同时运行[后端文件布局检查](#backend_file_layout)。
 - 继承与登记：辅助子包继承父目录角色；未登记的顶层模块与平台仅允许极少基础标准库，新增业务或 I/O 依赖需先登记。任意嵌套命名（如 `postgres`）不会自动获得适配层权限。
+- 未登记模块的测试可按完整 `_test.go` 路径登记实际使用的标准库、第三方库和仓库内包。许可只适用于登记文件和目标包，废弃包与应用装配边界继续生效。登记模块角色时，按模块约束重新审查这些测试依赖。
 - 扫描范围：读取全部手写 Go 文件（含测试、构建标签、平台文件和 `wireinject`），跳过生成代码。静态检查不代替各构建组合的实际编译与运行验证。
 - 执行入口：`make lint-go` 第一步以 `-count=1` 运行架构检查（避免跨模块源码缓存命中），并验证正反例夹具、扫描覆盖和许可使用方测试。CI 的 `go-lint` 和推送前快检均运行此步骤；架构白名单不放进 golangci-lint。
 
@@ -94,6 +95,7 @@ docker compose -f deploy/docker-compose.dev.yml up --build
 | `identity`、`team`、`apikey` | 仅测试使用的私有转接放进匹配标签的 `_test.go`，生产代码不保留算法副本 |
 | `usage`、`audit`、`ops` | 用户、Key、团队用量 SQL 参与函数复用调用方连接（禁逐条查或分页后排序）；核心不依赖旧实体、Gin 或具体存储；`querycache` 与 `logevent` 按纯包约束；历史许可精确到文件与 import |
 | `upstream` | 具体平台互不导入，不接收旧 Provider、Gin 或完整 config；共享 Google 认证在 `upstream/internal/googleauth`，纯报文转换在 `protocol`，授权会话与凭据持久化在 `provider`，重试时机由 `gateway` 决策 |
+| `cryptopay` | 按扫描、账本、钱包、归集和 HTTP 适配包分别登记生产与测试依赖。密钥分片编解码不访问数据库；宿主资金存储、设置与迁移夹具限于各自的接入文件。新增子包须单独登记。 |
 | `notification`、`site`、`moderation`、`search` | 邮件凭据归 `identity`，阈值归 `billing`，审核跨身份事务复用 SQL 连接，文件读取归 `site/filesystem`，搜索 HTTP 与 Redis 分离；适配层不复制核心状态或算法 |
 | `gateway` | `gateway/execution` 叶子包定义请求值与 `Execute`，禁反导根执行器、`text` 或适配层；提供商循环、同提供商恢复与协议转换各保唯一实现；执行适配层仅负责单步调用与数据整理 |
 | `scheduler` | 评分、排序、会话与等待不依赖旧实体、Gin 或存储客户端；`scheduler/rediscache/codec` 维护缓存编解码格式，详见[提供商调度与缓存一致性](../architecture/provider_scheduling_and_cache.md) |

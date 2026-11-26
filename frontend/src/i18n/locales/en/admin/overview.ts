@@ -303,6 +303,7 @@ export default {
   },
   // Users
   users: {
+    passwordCopied: 'Password copied.',
     title: 'User Management',
     description: 'Manage users and their permissions',
     createUser: 'Create User',

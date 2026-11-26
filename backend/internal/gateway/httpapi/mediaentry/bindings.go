@@ -137,16 +137,10 @@ type Runtime struct {
 // usable.
 func New(b Bindings) *Runtime { return &Runtime{bindings: b} }
 
-// submitOpenAIUsageRecordTask submits completion using the result's observed
-// image count. Nil results contribute zero; positive image counts require
-// mandatory submission, while other outcomes use the configured ordinary
-// worker submission policy.
+// submitOpenAIUsageRecordTask retains measured media work on queue overflow.
+// The recorder determines the applicable price from the captured result.
 func (h *Runtime) submitOpenAIUsageRecordTask(c *gin.Context, result *forward.OpenAIResult, task completion.UsageRecordTask) {
-	images := 0
-	if result != nil {
-		images = result.ImageCount
-	}
-	h.bindings.Common.Support.Submission.SubmitImages(c.Request.Context(), images, task)
+	h.bindings.Common.Support.Submission.SubmitResult(c.Request.Context(), result != nil, task)
 }
 
 // checkContentModeration runs the shared media content check with a copied

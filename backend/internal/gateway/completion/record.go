@@ -8,6 +8,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/billing"
 	"github.com/TokenFlux/TokenRouter/internal/billing/pricing"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/querycache"
 	"github.com/TokenFlux/TokenRouter/internal/usage"
 )
 
@@ -46,6 +47,9 @@ type preliminaryFunding struct {
 	balanceMultiplier      float64 // preliminary balance allocation factor
 }
 
+// preparedRecord captures a priced completion before a worker can observe a new rate card.
+type preparedRecord func(context.Context) error
+
 // RecordAnthropic records usage whose ordinary input and cache buckets are already
 // separate. Callers provide complete nonnil input, result, key, payer, provider,
 // and pricing dependencies and own result mutation for normalization.
@@ -58,6 +62,11 @@ type preliminaryFunding struct {
 // return after an unsettled zero-ActualCost row is attempted, and log errors are
 // observed without replacing the funds result.
 func (s *Recorder) RecordAnthropic(ctx context.Context, input *Input, opts *PricingOptions) error {
+	return s.recordAnthropic(ctx, input, opts, nil)
+}
+
+// recordAnthropic prices the native buckets and either persists or returns frozen work.
+func (s *Recorder) recordAnthropic(ctx context.Context, input *Input, opts *PricingOptions, prepared *preparedRecord) error {
 	if opts == nil {
 		opts = &PricingOptions{}
 	}
@@ -91,6 +100,9 @@ func (s *Recorder) RecordAnthropic(ctx context.Context, input *Input, opts *Pric
 	// RatesForMode later supplies the applicable peak scale for transaction allocation.
 	// The stored user/group base remains reusable across different recording instants.
 	rateNow := s.now()
+	if prepared != nil && !input.PricingAt.IsZero() {
+		rateNow = input.PricingAt
+	}
 	opts.PricingAt = rateNow
 	multiplier, imageMultiplier := ComputePeakAwareMultipliers(apiKey, funding.baseMultiplier, rateNow)
 
@@ -151,9 +163,7 @@ func (s *Recorder) RecordAnthropic(ctx context.Context, input *Input, opts *Pric
 	subscriptionMultiplier, balanceMultiplier, subscriptionMultiplierScale := RatesForMode(
 		apiKey, cost, funding.subscriptionMultiplier, funding.balanceMultiplier, rateNow,
 	)
-	// Commit or deduplicate the financial command before writing analysis, so a
-	// later log retry can reuse this row without submitting another funds operation.
-	_, billingErr := s.Apply(ctx, input.SettlementKey(), usageLog, &usageBillingParams{
+	return s.finishRecord(ctx, input.SettlementKey(), usageLog, &usageBillingParams{
 		Cost:                            cost,
 		User:                            user,
 		APIKey:                          apiKey,
@@ -165,17 +175,7 @@ func (s *Recorder) RecordAnthropic(ctx context.Context, input *Input, opts *Pric
 		SubscriptionRateMultiplierScale: subscriptionMultiplierScale,
 		BalanceRateMultiplier:           balanceMultiplier,
 		QuotaUpdates:                    input.QuotaUpdates,
-	})
-
-	if billingErr != nil {
-		// The failed funds result leaves measured work and calculated base buckets useful
-		// for reconciliation; mark the unsuccessful charge zero before attempting its row write.
-		usageLog.ActualCost = 0
-		s.WriteUsage(ctx, usageLog, "service.gateway")
-		return billingErr
-	}
-	s.WriteUsage(ctx, usageLog, "service.gateway")
-	return nil
+	}, "service.gateway", prepared)
 }
 
 // BuildRecordUsageLog constructs native-bucket analysis metadata before settlement.
@@ -305,6 +305,11 @@ func (s *Recorder) BuildRecordUsageLog(
 // a settlement error writes measured work with ActualCost zero and is returned,
 // while log errors are observed after the financial result and do not resettle.
 func (s *Recorder) RecordOpenAI(ctx context.Context, input *Input) error {
+	return s.recordOpenAI(ctx, input, nil)
+}
+
+// recordOpenAI prices ordinary Responses buckets and can defer only persistence.
+func (s *Recorder) recordOpenAI(ctx context.Context, input *Input, prepared *preparedRecord) error {
 	if input == nil {
 		return errors.New("openai usage input is nil")
 	}
@@ -392,6 +397,9 @@ func (s *Recorder) RecordOpenAI(ctx context.Context, input *Input) error {
 			return err
 		}
 		s.observeEvent(BillingEvent{Kind: "pricing_missing", Component: "service.openai_gateway", Models: billingModels, RequestedModel: input.OriginalModel, MappedModel: input.GroupMappedModel, UpstreamModel: result.UpstreamModel, KeyID: apiKey.ID, ProviderID: provider.ID, Err: err})
+		if prepared != nil {
+			return err
+		}
 		// Missing selected-model pricing still leaves observed media and tokens to record;
 		// retain the attempted mode and continue with a zero-cost financial command.
 		mode := string(BillingModeToken)
@@ -420,6 +428,9 @@ func (s *Recorder) RecordOpenAI(ctx context.Context, input *Input) error {
 		)
 		if standardErr != nil {
 			if !IsUsagePricingUnavailableError(standardErr) {
+				return standardErr
+			}
+			if prepared != nil {
 				return standardErr
 			}
 			// A missing standard price makes the user allocation base zero; premium TotalCost
@@ -583,35 +594,47 @@ func (s *Recorder) RecordOpenAI(ctx context.Context, input *Input) error {
 	subscriptionMultiplier, balanceMultiplier, subscriptionMultiplierScale := RatesForMode(
 		apiKey, cost, funding.subscriptionMultiplier, funding.balanceMultiplier, rateNow,
 	)
-	// Financial application precedes the analysis write even for zero-cost or partial
-	// records; only an applied transaction can replace provisional allocation metadata.
-	billingErr := func() error {
-		_, err := s.Apply(ctx, input.SettlementKey(), usageLog, &usageBillingParams{
-			Cost:                            cost,
-			User:                            user,
-			APIKey:                          apiKey,
-			Provider:                        provider,
-			Subscription:                    subscription,
-			RequestPayloadHash:              input.RequestPayloadHash,
-			ProviderRateMultiplier:          providerRateMultiplier,
-			SubscriptionRateMultiplier:      subscriptionMultiplier,
-			SubscriptionRateMultiplierScale: subscriptionMultiplierScale,
-			BalanceRateMultiplier:           balanceMultiplier,
-			QuotaUpdates:                    input.QuotaUpdates,
-			BillingBaseAmountUSD:            billingBaseAmountUSD,
-		})
-		return err
-	}()
+	return s.finishRecord(ctx, input.SettlementKey(), usageLog, &usageBillingParams{
+		Cost:                            cost,
+		User:                            user,
+		APIKey:                          apiKey,
+		Provider:                        provider,
+		Subscription:                    subscription,
+		RequestPayloadHash:              input.RequestPayloadHash,
+		ProviderRateMultiplier:          providerRateMultiplier,
+		SubscriptionRateMultiplier:      subscriptionMultiplier,
+		SubscriptionRateMultiplierScale: subscriptionMultiplierScale,
+		BalanceRateMultiplier:           balanceMultiplier,
+		QuotaUpdates:                    input.QuotaUpdates,
+		BillingBaseAmountUSD:            billingBaseAmountUSD,
+	}, "service.openai_gateway", prepared)
+}
 
-	if billingErr != nil {
-		// The failed funds result leaves measured work and calculated base buckets useful
-		// for reconciliation; mark the unsuccessful charge zero before attempting its row write.
-		usageLog.ActualCost = 0
-		s.WriteUsage(ctx, usageLog, "service.openai_gateway")
-		return billingErr
+// finishRecord freezes the command before dispatch and writes analysis after Apply.
+// Each replay uses its own row so an allocation or storage error cannot change
+// the command or the provisional cost captured for another invocation.
+func (s *Recorder) finishRecord(ctx context.Context, key string, row *UsageLog, params *usageBillingParams, component string, prepared *preparedRecord) error {
+	cmd := BuildCommand(key, row, params)
+	if prepared == nil {
+		return s.persistRecord(ctx, cmd, row, params, component)
 	}
-	s.WriteUsage(ctx, usageLog, "service.openai_gateway")
+	if cmd == nil || cmd.RequestID == "" {
+		return errors.New("prepared usage billing command is invalid")
+	}
+	*prepared = func(worker context.Context) error {
+		return s.persistRecord(worker, cmd, querycache.Clone(row), params, component)
+	}
 	return nil
+}
+
+// persistRecord keeps measured usage after a billing error and records zero actual cost.
+func (s *Recorder) persistRecord(ctx context.Context, cmd *billing.UsageBillingCommand, row *UsageLog, params *usageBillingParams, component string) error {
+	_, err := s.applyCommand(ctx, cmd, row, params)
+	if err != nil {
+		row.ActualCost = 0
+	}
+	s.WriteUsage(ctx, row, component)
+	return err
 }
 
 // resolvePreliminaryFunding selects subscription evidence and the rates used

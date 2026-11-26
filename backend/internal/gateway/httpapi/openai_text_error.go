@@ -128,9 +128,11 @@ func (h *OpenAITextHandler) recoverResponsesPanic(c *gin.Context, started *bool)
 	if value == nil {
 		return
 	}
-	// Panic recovery can occur after wait output. Let the backend inspect its
-	// actual heartbeat/commit state before recording whether fallback output was invoked.
-	wrote := h.backend.EnsureFallback(c, started != nil && *started)
+	// Panic recovery can occur after wait output or after a terminal write.
+	// Foreground JSON can only be replaced before its writer commits.
+	streamClient := !c.GetBool(responsesForegroundJSONKey) && (CommittedSSE(c) || (started != nil && *started))
+	streamCommitted, writable := ResponsesErrorOutputMode(c, streamClient)
+	wrote := writable && h.backend.EnsureFallback(c, streamCommitted)
 	RequestLogger(c, "handler.openai_gateway.responses").Error("openai.responses_panic_recovered", zap.Bool("fallback_error_response_written", wrote), zap.Any("panic", value), zap.ByteString("stack", debug.Stack()))
 }
 

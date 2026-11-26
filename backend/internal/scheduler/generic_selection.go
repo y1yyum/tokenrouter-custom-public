@@ -226,6 +226,9 @@ type GenericSelectionPorts struct {
 	IsModelSupportedByProviderWithContext func(ctx context.Context, provider *FlowProvider, requestedModel string) bool
 	// provider-layer final model rejection
 	IsUpstreamModelRestrictedByGroup func(ctx context.Context, groupID int64, provider *FlowProvider, requestedModel string) bool
+	// AllowsRequestParameters checks hard constraints on a group-admitted route.
+	// Nil retains ordinary scheduling. The chosen target is checked again after hydration.
+	AllowsRequestParameters func(ctx context.Context, groupID *int64, provider *FlowProvider, requestedModel string) bool
 	// ListSchedulableProviders supplies metadata associated with this invocation,
 	// plus the mixed-platform eligibility flag consumed by
 	// IsProviderAllowedForPlatform.
@@ -511,7 +514,7 @@ func (s *GenericSelector) Select(ctx context.Context, input SelectionInput) (*Fl
 	// that group policy.
 	needsUpstreamCheck := s.ports.NeedsUpstreamGroupRestrictionCheck(ctx, groupID)
 	isUpstreamAllowed := func(provider *FlowProvider) bool {
-		return !needsUpstreamCheck || !s.ports.IsUpstreamModelRestrictedByGroup(ctx, *groupID, provider, requestedModel)
+		return s.allowsUpstreamRoute(ctx, groupID, provider, requestedModel, needsUpstreamCheck)
 	}
 	// Routed and ordinary pools stop at the first failed gate, preserving callback and
 	// privacy-write order. Their callers own exclusions, missing routed IDs, and

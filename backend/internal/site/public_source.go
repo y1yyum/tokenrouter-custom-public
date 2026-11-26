@@ -26,6 +26,10 @@ type PublicInputOptions struct {
 	// is blank; nil leaves origin selection to the HTML response renderer.
 	FrontendURL func() string // deployment frontend URL fallback
 
+	// CryptoEnabled extracts the customer-facing switch from the private
+	// channel configuration using this installation's ability to serve deposits.
+	CryptoEnabled func(string) bool
+
 	// Auth and Usage receive the same raw storage map, in that order. InputSource
 	// copies display values first, so callback mutations can affect the later
 	// converter but cannot rewrite the Values map already prepared for PublicService.
@@ -68,7 +72,10 @@ func (s *InputSource) LoadSitePublicInputs(ctx context.Context) (PublicInputs, e
 	if strings.TrimSpace(values[SettingKeyFrontendURL]) == "" && s.options.FrontendURL != nil {
 		values[SettingKeyFrontendURL] = s.options.FrontendURL()
 	}
-	return PublicInputs{Values: values, Auth: s.options.Auth(raw), Usage: s.options.Usage(raw)}, nil
+	// Only the availability result leaves the input source. The channel
+	// document can contain RPC credentials and operator notification settings.
+	cryptoEnabled := s.options.CryptoEnabled != nil && s.options.CryptoEnabled(raw["crypto.config"])
+	return PublicInputs{Values: values, Auth: s.options.Auth(raw), Usage: s.options.Usage(raw), CryptoEnabled: cryptoEnabled}, nil
 }
 
 // PublicVersion calls the injected build-label source when its value is requested.
@@ -154,6 +161,7 @@ func PublicInputKeys() []string {
 		"wechat_connect_frontend_redirect_url",
 		"backend_mode_enabled",
 		"payment_enabled",
+		"crypto.config",
 		"oidc_connect_enabled",
 		"oidc_connect_provider_name",
 		"github_oauth_enabled",

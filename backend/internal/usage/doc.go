@@ -21,5 +21,6 @@
 // signed download tickets and streaming encoders. provider*.go describes
 // provider costs and token windows. ranking.go, runtime_settings.go,
 // settings_participant.go and admin_settings_read.go control ranking visibility
-// and user error views.
+// and user error views. imported_calls.go defines administrator-only external
+// call reports and their independent request, token, and latency counters.
 package usage

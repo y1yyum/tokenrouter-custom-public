@@ -28,6 +28,22 @@ type responseFixture struct {
 	failures, failed, successes                                          int     // OtherFailure callback invocations, Failed callback invocations and Success callback invocations
 }
 
+// retryExitFixture makes retry denial or cancellation observable at the actual
+// recovery decision, while reusing the serial response callback counters.
+type retryExitFixture struct {
+	responseFixture
+	ctx    context.Context    // retry wait context
+	cancel context.CancelFunc // cancels the request during the retry wait
+	deny   bool               // rejects provider replay before waiting
+}
+
+// replayClosedFixture exposes a group fallback willing to replay any error.
+// A closed attempt must terminate before asking the group or provider policy.
+type replayClosedFixture struct {
+	responseFixture
+	fallbackCalls int // attempts to change group after upstream work
+}
+
 // Context returns an active background context for Responses fixture waiting.
 func (*responseFixture) Context() context.Context { return context.Background() }
 
@@ -151,6 +167,35 @@ func TestResponsesPartialImagesDoNotRetry(t *testing.T) {
 	require.Equal(t, 1, p.partial)
 	require.Zero(t, p.switched)
 	require.Equal(t, 1, p.completed)
+	require.Equal(t, 1, p.exhausted)
+	require.Equal(t, 1, p.failed)
+	require.Zero(t, p.successes)
+}
+
+// TryGroupFallback records an otherwise eligible group retry for the fixture.
+func (p *replayClosedFixture) TryGroupFallback(error) (bool, bool) {
+	p.fallbackCalls++
+	return true, true
+}
+
+// TestResponsesReplayClosedPrecedesFallback checks the ordering using an
+// upstream failure with retained work and an otherwise retryable provider.
+func TestResponsesReplayClosedPrecedesFallback(t *testing.T) {
+	cause := errors.New("upstream overloaded after tool execution")
+	p := &replayClosedFixture{}
+	p.outcomes = []ResponseOutcome{{
+		ReplayClosed: true, Images: true,
+		Outcome: Outcome{Err: cause, HasResult: true, Failure: &AttemptFailure{
+			Cause: cause, Policy: &failover.FailureInfo{RetryNext: true},
+		}},
+	}}
+	RunResponses(ResponseOptions{MaxSwitches: 2}, p)
+	require.Equal(t, []int64{1}, p.providers)
+	require.Zero(t, p.fallbackCalls)
+	require.Zero(t, p.successes)
+	require.Equal(t, 1, p.exhausted)
+	require.Equal(t, 1, p.completed)
+	require.Equal(t, 1, p.failed)
 }
 
 // TestResponsesFirstOutputRecoveryHasSeparateBudget supplies repeated
@@ -166,4 +211,54 @@ func TestResponsesFirstOutputRecoveryHasSeparateBudget(t *testing.T) {
 	require.Equal(t, 1, p.switched)
 	require.Equal(t, 1, p.exhausted)
 	require.Zero(t, p.completed)
+}
+
+// TestResponsesClassifiedEarlyExitCompletesRetainedResult covers three final
+// exits after a classified attempt has returned a result. Each exit presents
+// the terminal classification once before observing completion and never
+// reports successful generation.
+func TestResponsesClassifiedEarlyExitCompletesRetainedResult(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		deny bool
+		wait bool
+	}{
+		{name: "retry_denied", deny: true},
+		{name: "switch_budget_exhausted"},
+		{name: "retry_wait_canceled", wait: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			cause := errors.New("temporary capacity failure")
+			failure := &AttemptFailure{Cause: cause, Policy: &failover.FailureInfo{
+				RetryNext: true, RetryableOnSameProvider: tc.wait, SameProviderRetryMax: 1, SameProviderRetryDelay: time.Second,
+			}}
+			p := &retryExitFixture{ctx: ctx, cancel: cancel, deny: tc.deny}
+			p.outcomes = []ResponseOutcome{{Outcome: Outcome{Err: cause, Failure: failure, HasResult: true}}}
+			RunResponses(ResponseOptions{MaxSwitches: 0}, p)
+			require.Equal(t, []int64{1}, p.providers)
+			require.Equal(t, 1, p.exhausted)
+			require.Equal(t, 1, p.completed)
+			require.Equal(t, 1, p.failed)
+			require.Zero(t, p.successes)
+			if tc.wait {
+				require.Equal(t, 1, p.waited)
+				require.ErrorIs(t, ctx.Err(), context.Canceled)
+			}
+		})
+	}
+}
+
+// Context supplies the cancellable request used by the retry delay.
+func (p *retryExitFixture) Context() context.Context { return p.ctx }
+
+// RetryReady exposes the configured decision without publishing a terminal.
+func (p *retryExitFixture) RetryReady(*AttemptFailure) bool { return !p.deny }
+
+// RetryWait cancels at entry to the delay so the loop sees an interrupted
+// wait before making another selection.
+func (p *retryExitFixture) RetryWait(*AttemptFailure, int, int, time.Duration) {
+	p.waited++
+	p.cancel()
 }

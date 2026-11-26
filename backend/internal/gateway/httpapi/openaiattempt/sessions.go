@@ -89,6 +89,7 @@ func (b *responsesAttemptBridge) Begin() {
 // again on another eligible invocation; its failure is logged after session
 // finishing.
 func (b *responsesAttemptBridge) Finish(served bool) {
+	b.finishResponsesSettlement()
 	if b.sessionAttempts != nil {
 		// Resolve registration retention before the soft-RPM update so
 		// a failed diagnostic counter write cannot leave this request's

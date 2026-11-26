@@ -14,6 +14,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/gateway/httpapi/openaiattempt"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/promptpolicy"
 	gatewayadapter "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	textflow "github.com/TokenFlux/TokenRouter/internal/gateway/text"
 	"github.com/TokenFlux/TokenRouter/internal/moderation"
@@ -41,7 +42,22 @@ func provideOpenAIHTTPResources(concurrency *scheduler.ConcurrencyService, cfg *
 		// Waiting response heartbeats use the configured ping interval in seconds.
 		ping = time.Duration(cfg.Gateway.Streaming.WaitPingIntervalSeconds) * time.Second
 	}
-	return &gatewayhttp.OpenAIHTTPResources{Concurrency: gatewayhttp.NewConcurrencyHelper(concurrency, gatewayhttp.SSEPingFormatComment, ping), Images: &scheduler.ImageConcurrencyLimiter{}, ImageOptions: imageOptions}
+	return &gatewayhttp.OpenAIHTTPResources{
+		Concurrency: gatewayhttp.NewConcurrencyHelper(concurrency, gatewayhttp.SSEPingFormatComment, ping),
+		Images:      &scheduler.ImageConcurrencyLimiter{}, ImageOptions: imageOptions,
+		ResponsesReadmission: openAIResponsesReadmission(cfg),
+	}
+}
+
+// openAIResponsesReadmission uses the alternate-provider wait policy for a
+// yielded prefetch. Slot identity and physical capacity come from the selected
+// record, so readmission never selects a new provider or changes routing.
+func openAIResponsesReadmission(cfg *config.Config) scheduler.ProviderWaitPlan {
+	if cfg == nil {
+		return scheduler.ProviderWaitPlan{}
+	}
+	wait := cfg.Scheduling.AlternateProviderWait
+	return scheduler.ProviderWaitPlan{MaxWaiting: wait.MaxWaiting, Timeout: time.Duration(wait.TimeoutSeconds) * time.Second}
 }
 
 // openAIImageAdmissionOptions returns nil for absent configuration or copied
@@ -77,8 +93,13 @@ func provideOpenAITextHTTP(
 	messages *messageHTTPBindings,
 	subscriptions *billing.SubscriptionService,
 	verdicts *providerpostgres.ProviderStore,
+	parameters *requestpolicy.Service,
 ) *gatewayhttp.OpenAITextHandler {
 	options := openAITextOptions(cfg)
+	options.ParameterPolicy = parameters
+	if source != nil {
+		options.CompatibilityCohorts = source.Cohorts
+	}
 	if cfg != nil && cfg.Gateway.OpenAI.PlanModelRestrictions {
 		options.PlanModelRestrictions = verdicts.ActivePlanModelRestrictions
 	}

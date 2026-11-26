@@ -111,7 +111,7 @@ func locate(filename string) location {
 		l.role = "redis"
 	case within(dir, "internal/gateway/ws/httpapi"), len(parts) > 2 && parts[2] == "httpapi", l.module == "internal/server", l.module == "internal/web":
 		l.role = "http"
-	case len(parts) > 2 && parts[2] == "provider", l.module == "internal/config",
+	case l.dir == "internal/notification/bark", len(parts) > 2 && parts[2] == "provider", l.module == "internal/config",
 		within(dir, "internal/gateway/media/provider"), within(dir, "internal/notification/smtp"), within(dir, "internal/site/filesystem"):
 		l.role = "provider"
 	case l.module == "internal/upstream":
@@ -213,16 +213,21 @@ func allowsReqV3(l location) bool {
 // Rules remain conjunctive: allowing one module dependency cannot bypass a
 // storage boundary, a retired namespace, or a core implementation prohibition.
 // Standard-library restrictions separately include permitted golang.org/x imports
-// because arch-go classifies them as standard. Exact file exceptions are applied
-// only at their declared boundary and do not authorize neighboring source files.
+// because arch-go classifies them as standard. Chain payment adapters have
+// explicit package contracts for database, chain SDK and host dependencies.
 // @project-doc docs/operations/development_workflow.md#backend_dependency_rules
 func rulesFor(filename, standardLibrary string) []*dependencyRule {
 	l := locate(filename)
+	if boundary, ok := chainPaymentPackages[l.dir]; ok {
+		return chainPaymentRules(boundary, l.test)
+	}
 	if l.role == "" {
-		return []*dependencyRule{{ShouldOnlyDependsOn: &dependencies{
+		allowed := dependencies{
 			Internal: closed(nil), External: closed(nil),
 			Standard: expressions(strings.Fields("bytes context errors fmt strings testing"), false),
-		}}}
+		}
+		rules := []*dependencyRule{{ShouldOnlyDependsOn: &allowed}}
+		return rules
 	}
 
 	// arch-go classifies golang.org/x as standard, so add only declared libraries instead of permitting every package under that namespace.
@@ -245,6 +250,11 @@ func rulesFor(filename, standardLibrary string) []*dependencyRule {
 	if filename == "tests/integration/mcp/management_authorization_scenario_test.go" {
 		external = append(external, expression("github.com/modelcontextprotocol/go-sdk/mcp"))
 	}
+	// The wallet batch adapter sums quantized debits and reads PostgreSQL NUMERIC
+	// balances with the same decimal library used by the billing domain.
+	if filename == "internal/billing/postgres/wallet_batch.go" || filename == "internal/payment/postgres/provisional_revoke.go" {
+		external = append(external, expression("github.com/shopspring/decimal"))
+	}
 	rules := []*dependencyRule{{ShouldOnlyDependsOn: &dependencies{
 		Internal: []string{"^" + regexp.QuoteMeta(modulePath) + "(/|$)"},
 		External: closed(external), Standard: standard,
@@ -265,11 +275,7 @@ func rulesFor(filename, standardLibrary string) []*dependencyRule {
 		rules = append(rules, denyProject(platforms))
 	}
 
-	retired := strings.Fields("internal/service internal/repository internal/handler internal/domain internal/model internal/platform internal/routes internal/app/legacybridge")
-	for i := range retired {
-		retired[i] += "/..."
-	}
-	rules = append(rules, denyProject(retired))
+	rules = append(rules, denyProject(retiredPackages))
 	if strings.HasPrefix(filename, "internal/") && l.module != "internal/app" && filename != "internal/setup/setup.go" {
 		rules = append(rules, denyProject([]string{"internal/app/..."}))
 	}

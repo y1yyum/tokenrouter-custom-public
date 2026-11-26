@@ -108,9 +108,10 @@ type PublicSource interface {
 type PublicInputs struct {
 	// Values is the display input map. PublicService copies it before resolving
 	// text and navigation, leaving a source's raw map available for later reads.
-	Values map[string]string
-	Auth   PublicAuth  // converted authentication settings
-	Usage  PublicUsage // converted ranking settings
+	Values        map[string]string
+	Auth          PublicAuth  // converted authentication settings
+	Usage         PublicUsage // converted ranking settings
+	CryptoEnabled bool        // local deposit entry availability
 }
 
 // PublicAuth contains browser-facing login, team, WebAuthn, and challenge parameters supplied by app.
@@ -329,6 +330,7 @@ func (s *PublicService) GetPublicSettings(ctx context.Context) (*PublicSettings,
 		WeChatOAuthMobileEnabled:    input.Auth.WeChatMobile,
 		BackendModeEnabled:          settings[SettingKeyBackendModeEnabled] == "true",
 		PaymentEnabled:              settings[SettingPaymentEnabled] == "true",
+		CryptoEnabled:               input.CryptoEnabled,
 		OIDCOAuthEnabled:            input.Auth.OIDC,
 		OIDCOAuthProviderName:       locale.ResolveSettingText(settings, "oidc_connect_provider_name", input.Auth.OIDCName, locale.FromContext(ctx)),
 		GitHubOAuthEnabled:          input.Auth.GitHub,
@@ -655,6 +657,7 @@ func (s *PublicService) GetPublicSettingsForInjection(ctx context.Context) (any,
 		WeChatOAuthMobileEnabled            bool                         `json:"wechat_oauth_mobile_enabled"`             // WeChat mobile-login availability
 		BackendModeEnabled                  bool                         `json:"backend_mode_enabled"`                    // backend mode switch
 		PaymentEnabled                      bool                         `json:"payment_enabled"`                         // payment entry switch
+		CryptoEnabled                       bool                         `json:"crypto_enabled"`                          // customer deposit entry availability
 		TeamEnabled                         bool                         `json:"team_enabled"`                            // team feature availability
 		TeamSelfServiceEnabled              bool                         `json:"team_self_service_enabled"`               // team self-service availability
 		CreativeEnabled                     bool                         `json:"creative_enabled"`                        // creative studio availability
@@ -749,6 +752,7 @@ func (s *PublicService) GetPublicSettingsForInjection(ctx context.Context) (any,
 		WeChatOAuthMobileEnabled:            settings.WeChatOAuthMobileEnabled,
 		BackendModeEnabled:                  settings.BackendModeEnabled,
 		PaymentEnabled:                      settings.PaymentEnabled,
+		CryptoEnabled:                       settings.CryptoEnabled,
 		TeamEnabled:                         settings.TeamEnabled,
 		TeamSelfServiceEnabled:              settings.TeamSelfServiceEnabled,
 		CreativeEnabled:                     settings.CreativeEnabled,

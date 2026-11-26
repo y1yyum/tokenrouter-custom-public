@@ -1,0 +1,739 @@
+package rpc
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net/http"
+	"net/url"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/ethereum/go-ethereum/common/hexutil"
+)
+
+// CallEndpoint is Call plus the endpoint that supplied the result. A caller
+// that must not trust an answer from a node that has not caught up can then ask
+// that exact node instead of guessing which member of the rotation replied.
+const perEndpointCallTimeout = 15 * time.Second
+
+// Pool rotates through a chain's endpoints, preferring the last healthy one.
+type Pool struct {
+	mu           sync.RWMutex
+	endpoints    []string
+	next         atomic.Uint64
+	client       *http.Client
+	verification *verificationPolicy
+	health       *endpointHealthTracker
+	// chainID is the EIP-155 chain this pool proved it serves, 0 when no caller
+	// ever verified it. GasPrice uses it to apply that chain's gas price floor.
+	chainID atomic.Uint64
+	// gasMu guards a short-lived quote cache. A sweep run asks for the same
+	// chain price once per address; sampling the whole pool for every job would
+	// multiply provider quota for one number that does not move within a block.
+	gasMu    sync.Mutex
+	gasAt    time.Time
+	gasValue *big.Int
+}
+
+type rpcRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      int    `json:"id"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+type rpcResponse struct {
+	Result json.RawMessage `json:"result"`
+	Error  *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
+}
+
+// NewPool builds a pool from a comma-separated endpoint list.
+func NewPool(endpoints string) *Pool {
+	p := &Pool{client: NewPublicHTTPClient(15 * time.Second)}
+	p.SetEndpoints(endpoints)
+	return p
+}
+
+// NewPoolWithHTTPClient supplies an explicit transport for trusted in-process
+// fixtures. Configured endpoints always use NewPool and its public-IP checks;
+// no environment variable or stored config can select this constructor.
+func NewPoolWithHTTPClient(endpoints string, client *http.Client) *Pool {
+	p := NewPool(endpoints)
+	if client != nil {
+		p.client = client
+	}
+	return p
+}
+
+// Snapshot atomically captures endpoints and their verification provenance.
+// In-flight work cannot combine an automatic list with a newer manual policy.
+func (p *Pool) Snapshot() *Pool {
+	health := p.healthTracker() // before the read lock: it takes the write lock
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	snapshot := NewPoolWithHTTPClient(strings.Join(p.endpoints, ","), p.client)
+	snapshot.verification = p.verification
+	snapshot.health = health
+	snapshot.chainID.Store(p.chainID.Load())
+	return snapshot
+}
+
+// WithEndpoints takes an independent endpoint snapshot while retaining the
+// original transport, including public-address validation and DNS pinning.
+func (p *Pool) WithEndpoints(endpoints string) *Pool {
+	health := p.healthTracker()
+	p.mu.RLock()
+	policy := p.verification
+	p.mu.RUnlock()
+	snapshot := NewPoolWithHTTPClient(endpoints, p.client)
+	snapshot.verification = policy // immutable policy, including for single-node verification
+	// One health record per endpoint for the life of the worker. Every scan pass
+	// derives its own pool; with a tracker per derived pool a node that just said
+	// "daily limit reached" was forgotten at the next pass (five seconds later)
+	// and asked again, and so were the span limits the pool had learned.
+	snapshot.health = health
+	snapshot.chainID.Store(p.chainID.Load())
+	return snapshot
+}
+
+// WithChainID returns a snapshot that knows which chain it serves, so GasPrice
+// can apply that chain's minimum gas price. Callers that verified the chain id
+// against every endpoint (ForChain) set it implicitly; this is for pools built
+// directly from a per-chain configuration.
+func (p *Pool) WithChainID(chainID uint64) *Pool {
+	snapshot := p.Snapshot()
+	snapshot.chainID.Store(chainID)
+	snapshot.clearGasPriceCache()
+	return snapshot
+}
+
+// ChainID reports the EIP-155 chain this pool proved it serves, 0 if unproven.
+func (p *Pool) ChainID() uint64 { return p.chainID.Load() }
+
+// SetEndpoints replaces the endpoint list (admin config change).
+func (p *Pool) SetEndpoints(endpoints string) {
+	// Denied hosts are dropped here so every path — the operator's configured
+	// list, automatic chainlist discovery and any reload — obeys one rule.
+	p.mu.Lock()
+	p.endpoints = filterRPCList(endpoints)
+	p.mu.Unlock()
+}
+
+// Endpoints returns the current list (for status display).
+func (p *Pool) Endpoints() []string {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return append([]string(nil), p.endpoints...)
+}
+
+// MaxBlockNumber returns the highest head reported by any configured
+// endpoint. Confirmation checks must not stall because one node in the pool
+// lags behind the chain tip.
+func (p *Pool) MaxBlockNumber(ctx context.Context) (uint64, error) {
+	p.mu.RLock()
+	endpoints := append([]string(nil), p.endpoints...)
+	p.mu.RUnlock()
+	if len(endpoints) == 0 {
+		return 0, fmt.Errorf("no rpc endpoints configured")
+	}
+	var best uint64
+	var lastErr error
+	for _, endpoint := range endpoints {
+		result, err := p.callOne(ctx, endpoint, "eth_blockNumber", nil)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		var raw string
+		if err := json.Unmarshal(result, &raw); err != nil {
+			lastErr = err
+			continue
+		}
+		head, err := hexutil.DecodeUint64(raw)
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		if head > best {
+			best = head
+		}
+	}
+	if best == 0 && lastErr != nil {
+		return 0, lastErr
+	}
+	return best, nil
+}
+
+// MaxBlockTagHeight returns the highest height any endpoint reports for a
+// finality tag. A single lagging node must not keep an old transaction
+// unconfirmed forever, which is what rotating Call would do.
+//
+// The boolean is false when no configured endpoint serves the tag at all: JSON
+// null, an explicit rejection, an HTTP error, or an answer that is not a block
+// header. That is "this node does not expose the tag", not a reason to fail the
+// caller's confirmation check, so the caller keeps the depth rule that governed
+// confirmation before the tag existed.
+//
+// A returned error is always a *Failure. A provider that answers the tag with
+// something that does not decode used to surface its raw JSON/quantity error,
+// which no durable-record boundary recognises; that error was then rewritten to
+// the generic "Payment operation failed" sentence and the real cause was lost.
+func (p *Pool) MaxBlockTagHeight(ctx context.Context, tag string) (uint64, bool, error) {
+	p.mu.RLock()
+	endpoints := append([]string(nil), p.endpoints...)
+	p.mu.RUnlock()
+	if len(endpoints) == 0 {
+		return 0, false, &Failure{Kind: "request"}
+	}
+	var best uint64
+	var answered bool
+	var failure *Failure
+	for _, endpoint := range endpoints {
+		result, err := p.callOne(ctx, endpoint, "eth_getBlockByNumber", []any{tag, false})
+		if err != nil {
+			var observed *Failure
+			if errors.As(err, &observed) && failure == nil {
+				failure = observed
+			} else if failure == nil {
+				failure = &Failure{Kind: "response", Host: endpointHost(endpoint)}
+			}
+			continue
+		}
+		trimmed := bytes.TrimSpace(result)
+		if len(trimmed) == 0 || string(trimmed) == "null" {
+			continue
+		}
+		var header struct {
+			Number string `json:"number"`
+		}
+		if err := json.Unmarshal(trimmed, &header); err != nil || header.Number == "" {
+			if failure == nil {
+				failure = &Failure{Kind: "response", Host: endpointHost(endpoint)}
+			}
+			continue
+		}
+		height, err := hexutil.DecodeUint64(header.Number)
+		if err != nil {
+			if failure == nil {
+				failure = &Failure{Kind: "response", Host: endpointHost(endpoint)}
+			}
+			continue
+		}
+		answered = true
+		if height > best {
+			best = height
+		}
+	}
+	if answered {
+		return best, true, nil
+	}
+	if failure != nil {
+		return 0, false, failure
+	}
+	return 0, false, nil
+}
+
+// healthTracker lazily initialises the endpoint health state so pools built
+// before this field existed keep working (and tests can construct literals).
+func (p *Pool) healthTracker() *endpointHealthTracker {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.health == nil {
+		p.health = newEndpointHealthTracker()
+	}
+	return p.health
+}
+
+// Call runs one JSON-RPC method, rotating endpoints on transport, RPC, or
+// response-contract failure. A successful HTTP exchange alone does not prove
+// that the endpoint supplied usable data for the requested method.
+//
+// Endpoints inside a cooldown window are skipped, and a transient failure of
+// the whole rotation is retried with exponential backoff (up to maxCallRounds
+// rounds) before the batch reports "all rpc endpoints failed".
+func (p *Pool) Call(ctx context.Context, method string, params any) (json.RawMessage, error) {
+	result, _, err := p.CallEndpoint(ctx, method, params)
+	return result, err
+}
+
+func (p *Pool) CallEndpoint(ctx context.Context, method string, params any) (json.RawMessage, string, error) {
+	p.mu.RLock()
+	endpoints := append([]string(nil), p.endpoints...)
+	policy := p.verification
+	p.mu.RUnlock()
+	if len(endpoints) == 0 {
+		return nil, "", fmt.Errorf("no rpc endpoints configured")
+	}
+	health := p.healthTracker()
+	// An eth_getLogs span some endpoints are known to refuse. Public providers cap
+	// it differently (50, 100, 1000 blocks) and answer with HTTP 400 or a JSON-RPC
+	// error; sending the same oversized query to each of them in turn costs a
+	// full round-trip per node and, once the healthy ones are rate limited, ends
+	// the call on whichever refused last. Remember the limits, route around them.
+	span, hasSpan := getLogsSpan(method, params)
+	// lastHardErr is the last failure that is not a range rejection: an outage, a
+	// rate limit, a quota. It is what the caller must see when the call fails, so
+	// a node's "range too wide" can never mask the real reason nobody answered.
+	var lastErr, lastHardErr error
+	sawRangeLimit := false
+	for round := range maxCallRounds {
+		candidates := health.eligible(endpoints)
+		if hasSpan {
+			capable := health.capableOfSpan(endpoints, span)
+			if len(capable) == 0 {
+				// Every configured endpoint is known to refuse a query this wide.
+				// Say so as the splittable failure it is rather than burning a
+				// request on each of them to hear it again.
+				return nil, "", fmt.Errorf("all rpc endpoints failed: %w", rangeLimitFailure(health.widestLimit(endpoints)))
+			}
+			if narrowed := intersectEndpoints(candidates, capable); len(narrowed) > 0 {
+				candidates = narrowed
+			} else {
+				// Every node that can serve a query this wide is cooling down (a rate
+				// limit, a spent quota) while the healthy ones only take narrower ones.
+				// (When the whole pool is cooling, eligible() already returned all of it,
+				// so the capable nodes would have been kept above.) Do not probe the
+				// cooling nodes: that returns their hard error, which the scanner cannot
+				// act on, keeps them rate limited and defeats the quota cooldown. Say the
+				// query is too wide instead; the scanner splits it into pieces the
+				// healthy nodes accept, which is what happened before limits were learned.
+				return nil, "", fmt.Errorf("all rpc endpoints failed: %w", rangeLimitFailure(health.widestLimit(candidates)))
+			}
+		}
+		start := int(p.next.Add(1)-1) % len(candidates)
+		for i := range candidates {
+			endpoint := candidates[(start+i)%len(candidates)]
+			result, err := p.callOne(ctx, endpoint, method, params)
+			if err == nil && policy != nil && needsIndependentEvidence(method) {
+				result, err = p.verifyIndependentEvidence(ctx, policy, endpoint, method, params, result)
+			}
+			if err == nil {
+				health.succeed(endpoint)
+				return result, endpoint, nil
+			}
+			health.fail(endpoint, err)
+			if isRangeLimitFailure(err) {
+				sawRangeLimit = true
+				if limit := SpanLimitOf(err); hasSpan && limit > 0 && limit < span {
+					health.learnSpan(endpoint, limit)
+				}
+			} else {
+				lastHardErr = err
+			}
+			lastErr = err
+			if ctx.Err() != nil {
+				return nil, "", fmt.Errorf("all rpc endpoints failed: %w", lastErr)
+			}
+		}
+		if !isRetryableWithoutResponse(lastErr) || round == maxCallRounds-1 {
+			break
+		}
+		if err := sleepWithContext(ctx, callRetryDelay(round)); err != nil {
+			break
+		}
+	}
+	switch {
+	case lastHardErr != nil:
+		return nil, "", fmt.Errorf("all rpc endpoints failed: %w", lastHardErr)
+	case sawRangeLimit && hasSpan:
+		// Nobody answered and every refusal was about the query's size: a
+		// narrower query can succeed, so report the splittable cause.
+		return nil, "", fmt.Errorf("all rpc endpoints failed: %w", rangeLimitFailure(health.widestLimit(endpoints)))
+	}
+	return nil, "", fmt.Errorf("all rpc endpoints failed: %w", lastErr)
+}
+
+// isRangeLimitFailure reports a node refusing a query because of its size.
+func isRangeLimitFailure(err error) bool {
+	var failure *Failure
+	return errors.As(err, &failure) && (failure.SpanLimit > 0 || failure.Reason == ReasonRangeLimit)
+}
+
+// rangeLimitFailure is what a pool reports when only a narrower query can
+// succeed. It carries no node text, so it is safe for every durable record.
+func rangeLimitFailure(limit uint64) *Failure {
+	return &Failure{Kind: "remote", RPCCode: -32602, Reason: ReasonRangeLimit, SpanLimit: limit}
+}
+
+// intersectEndpoints keeps the members of a, in a's order, that are also in b.
+func intersectEndpoints(a, b []string) []string {
+	in := make(map[string]struct{}, len(b))
+	for _, endpoint := range b {
+		in[endpoint] = struct{}{}
+	}
+	out := make([]string, 0, len(a))
+	for _, endpoint := range a {
+		if _, ok := in[endpoint]; ok {
+			out = append(out, endpoint)
+		}
+	}
+	return out
+}
+
+// getLogsSpan returns the block span of an eth_getLogs request.
+func getLogsSpan(method string, params any) (uint64, bool) {
+	if method != "eth_getLogs" {
+		return 0, false
+	}
+	raw, err := json.Marshal(params)
+	if err != nil {
+		return 0, false
+	}
+	var args []struct {
+		FromBlock string `json:"fromBlock"`
+		ToBlock   string `json:"toBlock"`
+	}
+	if json.Unmarshal(raw, &args) != nil || len(args) == 0 {
+		return 0, false
+	}
+	from, fromErr := hexutil.DecodeUint64(args[0].FromBlock)
+	to, toErr := hexutil.DecodeUint64(args[0].ToBlock)
+	if fromErr != nil || toErr != nil || to < from {
+		return 0, false
+	}
+	return to - from + 1, true
+}
+
+// EndpointHead reads eth_blockNumber from exactly one endpoint, without
+// rotating: the answer is evidence about that node, not about the pool's
+// healthiest member.
+func (p *Pool) EndpointHead(ctx context.Context, endpoint string) (uint64, error) {
+	result, err := p.callOne(ctx, endpoint, "eth_blockNumber", nil)
+	if err != nil {
+		return 0, err
+	}
+	var raw string
+	if err := json.Unmarshal(result, &raw); err != nil {
+		return 0, &Failure{Kind: "response", Host: endpointHost(endpoint)}
+	}
+	head, err := hexutil.DecodeUint64(raw)
+	if err != nil {
+		return 0, &Failure{Kind: "response", Host: endpointHost(endpoint)}
+	}
+	return head, nil
+}
+
+// RequireSyncedTo proves the node that supplied an answer had already reached
+// height when it answered, and returns that observed head.
+//
+// A node behind the tip reports only the blocks it has: eth_getLogs then
+// returns an empty (or short) array for a range it never saw, which is
+// indistinguishable from "no transfers in that range". Placing the node on the
+// normal endpoint cooldown is what makes the rotation move to a peer that has
+// caught up instead of failing the same batch on every pass.
+func (p *Pool) RequireSyncedTo(ctx context.Context, endpoint string, height uint64) (uint64, error) {
+	head, err := p.EndpointHead(ctx, endpoint)
+	if err != nil {
+		p.healthTracker().fail(endpoint, err)
+		return 0, err
+	}
+	if head < height {
+		failure := &Failure{Kind: "stale", Host: endpointHost(endpoint)}
+		p.healthTracker().fail(endpoint, failure)
+		return head, failure
+	}
+	return head, nil
+}
+
+func (p *Pool) callOne(ctx context.Context, endpoint, method string, params any) (json.RawMessage, error) {
+	// Every caller (rotation, EndpointHead, ConfirmedNonce, GasPrice, receipts)
+	// must be bounded: a node that accepts the connection but never answers
+	// otherwise holds the sweep and its advisory lock for the whole run budget.
+	callCtx, cancel := context.WithTimeout(ctx, perEndpointCallTimeout)
+	defer cancel()
+	ctx = callCtx
+	host := endpointHost(endpoint)
+	// Pace per endpoint before building anything: a burst that the provider
+	// answers with 429 costs a full round-trip and, because Call rotates on
+	// failure, burns the next endpoint too.
+	if throttle := ThrottleFor(endpoint); throttle != nil {
+		if err := throttle.Wait(ctx); err != nil {
+			failure := NewTransportFailure(err)
+			failure.Host = host
+			return nil, failure
+		}
+	}
+	body, err := json.Marshal(rpcRequest{JSONRPC: "2.0", ID: 1, Method: method, Params: params})
+	if err != nil {
+		return nil, &Failure{Kind: "request", Host: host}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(body))
+	if err != nil {
+		return nil, &Failure{Kind: "request", Host: host}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := p.client.Do(req)
+	if err != nil {
+		failure := NewTransportFailure(err)
+		failure.Host = host
+		return nil, failure
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		failure := &Failure{Kind: "http", HTTPStatus: resp.StatusCode, Host: host}
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		// Providers refuse an oversized eth_getLogs with HTTP 400/413/422 and say
+		// the limit in the body ("ranges over 100 blocks are not supported on
+		// free plan"), and answer 402/429/503 when the daily allowance or the
+		// prepaid balance is gone ("daily request limit reached", "Insufficient RU
+		// balance"). Keep what they said: the pool learns limits and quota from it.
+		switch resp.StatusCode {
+		case http.StatusBadRequest, http.StatusPaymentRequired, http.StatusRequestEntityTooLarge,
+			http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusServiceUnavailable:
+			annotateFromErrorBody(failure, body)
+		}
+		return nil, failure
+	}
+	var decoded rpcResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 8<<20)).Decode(&decoded); err != nil {
+		return nil, &Failure{Kind: "response", Host: host}
+	}
+	if decoded.Error != nil {
+		// Keep the node's text only as a sanitised diagnostic: Error() stays a
+		// fixed phrase so a durable record can never carry endpoint credentials.
+		// The node controls this text: bound it before anything runs over it.
+		message := truncateNodeMessage(decoded.Error.Message)
+		reason, limit := classifyRemoteDetail(message)
+		return nil, &Failure{
+			Kind: "remote", RPCCode: decoded.Error.Code,
+			Reason: reason, Message: message, Host: host, SpanLimit: limit,
+		}
+	}
+	if method == "eth_getLogs" && !validLogsResult(decoded.Result) {
+		return nil, &Failure{Kind: "response", Host: host}
+	}
+	return decoded.Result, nil
+}
+
+// endpointHost extracts the hostname of a configured endpoint for safe logging.
+// Anything unparsable yields the empty string rather than the raw value.
+func endpointHost(endpoint string) string {
+	parsed, err := url.Parse(endpoint)
+	if err != nil || parsed.Host == "" {
+		return ""
+	}
+	return parsed.Hostname()
+}
+
+// eth_getLogs must return an array, including [] when no logs match. In
+// particular, JSON null decodes into a nil Go slice without error and must not
+// be mistaken for a successful empty scan. Validate before Call returns so an
+// unhealthy endpoint cannot prevent failover to the next configured endpoint.
+func validLogsResult(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 || trimmed[0] != '[' {
+		return false
+	}
+	var logs []map[string]json.RawMessage
+	if err := json.Unmarshal(trimmed, &logs); err != nil || logs == nil {
+		return false
+	}
+	for _, log := range logs {
+		if log == nil {
+			return false
+		}
+		for _, field := range []string{"address", "data", "blockNumber", "blockHash", "transactionHash", "logIndex"} {
+			var value string
+			if json.Unmarshal(log[field], &value) != nil || value == "" {
+				return false
+			}
+			switch field {
+			case "address":
+				decoded, err := hexutil.Decode(value)
+				if err != nil || len(decoded) != 20 {
+					return false
+				}
+			case "blockHash", "transactionHash":
+				decoded, err := hexutil.Decode(value)
+				if err != nil || len(decoded) != 32 {
+					return false
+				}
+			case "blockNumber", "logIndex":
+				if _, err := hexutil.DecodeUint64(value); err != nil {
+					return false
+				}
+			case "data":
+				if _, err := hexutil.Decode(value); err != nil {
+					return false
+				}
+			}
+		}
+		var topics []string
+		if json.Unmarshal(log["topics"], &topics) != nil || topics == nil || len(topics) > 4 {
+			return false
+		}
+		for _, topic := range topics {
+			decoded, err := hexutil.Decode(topic)
+			if err != nil || len(decoded) != 32 {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// BlockNumber returns the latest block number (EVM chains).
+func (p *Pool) BlockNumber(ctx context.Context) (uint64, error) {
+	result, err := p.Call(ctx, "eth_blockNumber", nil)
+	if err != nil {
+		return 0, err
+	}
+	var hex string
+	if err := json.Unmarshal(result, &hex); err != nil {
+		return 0, &Failure{Kind: "response"}
+	}
+	number, err := hexutil.DecodeUint64(hex)
+	if err != nil {
+		return 0, &Failure{Kind: "response"}
+	}
+	return number, nil
+}
+
+// Balance returns an address's native balance in wei.
+func (p *Pool) Balance(ctx context.Context, address string) (*big.Int, error) {
+	result, err := p.Call(ctx, "eth_getBalance", []any{address, "latest"})
+	if err != nil {
+		return nil, err
+	}
+	var hex string
+	if err := json.Unmarshal(result, &hex); err != nil {
+		return nil, &Failure{Kind: "response"}
+	}
+	value, err := hexutil.DecodeBig(hex)
+	if err != nil {
+		return nil, &Failure{Kind: "response"}
+	}
+	return value, nil
+}
+
+// Nonce returns the account's next nonce including pending transactions;
+// gas top-up and sweep for one address are serial, so pending is correct.
+func (p *Pool) Nonce(ctx context.Context, address string) (uint64, error) {
+	return p.transactionCount(ctx, address, "pending")
+}
+
+// ConfirmedNonce is the number of transactions the account has had mined. A
+// transaction still waiting in a node's pool is not counted, so a reserved nonce
+// below this value was used by something else and can never be mined again.
+func (p *Pool) ConfirmedNonce(ctx context.Context, address string) (uint64, error) {
+	return p.transactionCount(ctx, address, "latest")
+}
+
+func (p *Pool) transactionCount(ctx context.Context, address, tag string) (uint64, error) {
+	result, err := p.Call(ctx, "eth_getTransactionCount", []any{address, tag})
+	if err != nil {
+		return 0, err
+	}
+	var hex string
+	if err := json.Unmarshal(result, &hex); err != nil {
+		return 0, &Failure{Kind: "response"}
+	}
+	nonce, err := hexutil.DecodeUint64(hex)
+	if err != nil {
+		return 0, &Failure{Kind: "response"}
+	}
+	return nonce, nil
+}
+
+// GasPrice returns the current gas price in wei.
+//
+// It is the median of what the healthy endpoints answer, clamped to the floor
+// of the chain this pool proved it serves (GasPriceFloor). A single endpoint
+// reporting a nonsense fee — 0x1 on BSC — can therefore neither set the price
+// nor be signed: a fee below the floor is the one defect that produces a
+// transaction which is valid, broadcast, and impossible to mine.
+func (p *Pool) GasPrice(ctx context.Context) (*big.Int, error) {
+	floor := GasPriceFloor(p.chainID.Load())
+	if cached := p.cachedGasPrice(); cached != nil {
+		return clampGasPrice(cached, floor), nil
+	}
+	quote, err := p.robustGasPrice(ctx)
+	if err != nil {
+		return nil, err
+	}
+	price := clampGasPrice(quote, floor)
+	p.storeGasPrice(price)
+	return price, nil
+}
+
+// SendRawTransaction broadcasts a signed transaction and returns its hash.
+// A node that already has the transaction returns the same hash, so retrying
+// a broadcast is safe.
+func (p *Pool) SendRawTransaction(ctx context.Context, rawTx string) (string, error) {
+	result, err := p.Call(ctx, "eth_sendRawTransaction", []any{rawTx})
+	if err != nil {
+		return "", err
+	}
+	var hash string
+	if err := json.Unmarshal(result, &hash); err != nil {
+		return "", &Failure{Kind: "response"}
+	}
+	if hash == "" {
+		return "", fmt.Errorf("empty transaction hash")
+	}
+	return hash, nil
+}
+
+// TransactionByHash reports whether a node in the rotation can see the
+// transaction. A JSON null is a definitive absence from that node, not an
+// error; transport failures stay errors so a caller never treats "the endpoint
+// timed out" as "the transaction does not exist".
+func (p *Pool) TransactionByHash(ctx context.Context, hash string) (bool, error) {
+	result, err := p.Call(ctx, "eth_getTransactionByHash", []any{hash})
+	if err != nil {
+		return false, err
+	}
+	trimmed := bytes.TrimSpace(result)
+	if len(trimmed) == 0 || string(trimmed) == "null" {
+		return false, nil
+	}
+	var tx struct {
+		Hash string `json:"hash"`
+	}
+	if err := json.Unmarshal(trimmed, &tx); err != nil {
+		return false, &Failure{Kind: "response"}
+	}
+	if !strings.EqualFold(tx.Hash, hash) {
+		return false, &Failure{Kind: "response"}
+	}
+	return true, nil
+}
+
+// TightestLimits returns the most restrictive limits across the pool, so a
+// caller can size a query that every endpoint in the rotation will accept.
+// Unknown endpoints do not constrain: a pool with no configured limits keeps
+// the previous behaviour exactly.
+func (p *Pool) TightestLimits() (EndpointLimits, bool) {
+	p.mu.RLock()
+	endpoints := append([]string(nil), p.endpoints...)
+	p.mu.RUnlock()
+	var tight EndpointLimits
+	found := false
+	for _, endpoint := range endpoints {
+		limits, ok := EndpointLimitsFor(endpoint)
+		if !ok {
+			continue
+		}
+		found = true
+		if limits.MaxBlocks > 0 && (tight.MaxBlocks == 0 || limits.MaxBlocks < tight.MaxBlocks) {
+			tight.MaxBlocks = limits.MaxBlocks
+		}
+		if limits.MaxAddresses > 0 && (tight.MaxAddresses == 0 || limits.MaxAddresses < tight.MaxAddresses) {
+			tight.MaxAddresses = limits.MaxAddresses
+		}
+	}
+	if !found {
+		return EndpointLimits{}, false
+	}
+	return tight, true
+}

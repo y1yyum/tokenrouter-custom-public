@@ -1,0 +1,178 @@
+package cryptopay
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"testing"
+
+	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
+	"github.com/TokenFlux/TokenRouter/internal/settings"
+)
+
+type configCASStore struct {
+	value    *string
+	expected *string
+	writes   int
+}
+
+type nonAtomicConfigStore struct{}
+
+func (s *configCASStore) GetCryptoSetting(context.Context, string) (string, error) {
+	return "", errors.New("updates must not use the cached read")
+}
+
+func (s *configCASStore) SetCryptoSetting(context.Context, string, string) error {
+	return errors.New("updates must not use an unconditional write")
+}
+
+// GetCryptoSettingUncached returns the exact stored snapshot or the host's missing-key error.
+func (s *configCASStore) GetCryptoSettingUncached(context.Context, string) (string, error) {
+	if s.value == nil {
+		return "", settings.ErrSettingNotFound
+	}
+	return *s.value, nil
+}
+
+func (s *configCASStore) CompareAndSwapCryptoSetting(_ context.Context, _ string, expected *string, value string) (bool, error) {
+	s.expected = expected
+	if (expected == nil) != (s.value == nil) || (expected != nil && *expected != *s.value) {
+		return false, nil
+	}
+	s.writes++
+	s.value = &value
+	return true, nil
+}
+
+func TestConfigCASMatchesExactStoredJSONInsteadOfNormalizedEncoding(t *testing.T) {
+	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "false")
+	raw := " {\n  \"rpc\": {\"bsc\": \"https://fixture.test\"}, \"enabled\": false\n}\n"
+	store := &configCASStore{value: &raw}
+	cfg, expected, err := LoadConfigForUpdate(t.Context(), store)
+	require.NoError(t, err)
+	require.NotNil(t, expected)
+	require.Equal(t, raw, *expected)
+	cfg.SweepAuto = true
+	require.NoError(t, SaveConfigIfUnchanged(t.Context(), store, cfg, expected))
+	require.Equal(t, raw, *store.expected)
+	require.Equal(t, 1, store.writes)
+}
+
+func TestConfigCASFirstSaveRejectsAnotherReplicaInitialization(t *testing.T) {
+	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "false")
+	store := &configCASStore{}
+	first, firstExpected, err := LoadConfigForUpdate(t.Context(), store)
+	require.NoError(t, err)
+	require.Nil(t, firstExpected)
+	second, secondExpected, err := LoadConfigForUpdate(t.Context(), store)
+	require.NoError(t, err)
+	require.Nil(t, secondExpected)
+	first.RPC[ChainBSC] = "https://first.example.test"
+	require.NoError(t, SaveConfigIfUnchanged(t.Context(), store, first, firstExpected))
+	stored := *store.value
+	second.HotWalletEVM = "0x2222222222222222222222222222222222222222"
+	require.ErrorIs(t, SaveConfigIfUnchanged(t.Context(), store, second, secondExpected), ErrConfigConflict)
+	require.Equal(t, 1, store.writes)
+	require.Equal(t, stored, *store.value)
+}
+
+func (nonAtomicConfigStore) GetCryptoSetting(context.Context, string) (string, error) {
+	panic("must not downgrade to a cached read")
+}
+
+func (nonAtomicConfigStore) SetCryptoSetting(context.Context, string, string) error {
+	panic("must not downgrade to an unconditional write")
+}
+
+// TestConfigCASDoesNotDowngradeUnsupportedOrReadOnlyStores exercises unsupported
+// atomic operations and the review write gate. Each attempt must return its
+// specific error before it can reach storage.
+func TestConfigCASDoesNotDowngradeUnsupportedOrReadOnlyStores(t *testing.T) {
+	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "false")
+	store := nonAtomicConfigStore{}
+	_, _, err := LoadConfigForUpdate(t.Context(), store)
+	require.ErrorIs(t, err, errAtomicSettingUnavailable)
+	require.ErrorIs(t, SaveConfigIfUnchanged(t.Context(), store, DefaultCryptoConfig(), nil), errAtomicSettingUnavailable)
+	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "true")
+	t.Setenv("CRYPTO_ADMIN_TEST_WRITE_ENABLED", "false")
+	require.ErrorIs(t, SaveConfigIfUnchanged(t.Context(), store, DefaultCryptoConfig(), nil), mode.ErrReadOnly)
+	_, err = NewServiceSettingStore(nil, nil).CompareAndSwapCryptoSetting(t.Context(), SettingKeyCryptoConfig, nil, "{}")
+	require.ErrorIs(t, err, mode.ErrReadOnly)
+}
+
+// An operator (or another replica) can turn the channel on after this request
+// read its snapshot. The conditional write must then conflict instead of
+// restoring the stale enabled=false value it was built from.
+func TestConfigCASDoesNotRestoreStaleEnableFlag(t *testing.T) {
+	t.Setenv("CRYPTO_ADMIN_TEST_MODE", "false")
+	stale := `{"enabled":false,"chains":["bsc"]}`
+	fresh := `{"enabled":true,"chains":["bsc"]}`
+	store := &configCASStore{value: &stale}
+	cfg, expected, err := LoadConfigForUpdate(t.Context(), store)
+	require.NoError(t, err)
+	require.False(t, cfg.Enabled)
+	// The admin switch lands after the snapshot this save is based on.
+	store.value = &fresh
+	cfg.ScanRange[ChainBSC] = 1500
+	require.ErrorIs(t, SaveConfigIfUnchanged(t.Context(), store, cfg, expected), ErrConfigConflict)
+	require.Equal(t, 0, store.writes)
+	require.Equal(t, fresh, *store.value, "the newer enabled=true row must survive the stale writer")
+}
+
+func TestScanConcurrencyConfigRoundTrip(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		value int
+		want  int
+	}{
+		{"automatic", 0, 0},
+		{"negative", -5, 1},
+		{"serial", 1, 1},
+		{"paid node", 32, 32},
+		{"maximum", 64, 64},
+		{"too large", 1000, 64},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			base := DefaultCryptoConfig()
+			patchJSON, err := json.Marshal(map[string]any{"scan_concurrency": map[string]int{ChainBSC: tc.value}})
+			require.NoError(t, err)
+			var patch CryptoConfigPatch
+			require.NoError(t, json.Unmarshal(patchJSON, &patch))
+			cfg, err := NormalizeConfig(patch.Apply(base))
+			require.NoError(t, err)
+			require.Equal(t, tc.want, cfg.ScanConcurrency[ChainBSC])
+			require.Empty(t, base.ScanConcurrency, "normalization must not mutate caller maps")
+			require.Equal(t, tc.want, CryptoConfigPatch{}.Apply(cfg).ScanConcurrency[ChainBSC])
+			store := &configCASStore{}
+			require.NoError(t, SaveConfigIfUnchanged(t.Context(), store, cfg, nil))
+			loaded, _, err := LoadConfigForUpdate(t.Context(), store)
+			require.NoError(t, err)
+			require.Equal(t, tc.want, loaded.ScanConcurrency[ChainBSC])
+			s := &Service{config: loaded}
+			snapshot := s.Config()
+			snapshot.ScanConcurrency[ChainBSC] = 16
+			require.Equal(t, tc.want, s.Config().ScanConcurrency[ChainBSC], "config readers cannot change live concurrency")
+		})
+	}
+	cfg, err := NormalizeConfig(CryptoConfig{})
+	require.NoError(t, err)
+	require.NotNil(t, cfg.ScanConcurrency)
+	require.Zero(t, cfg.ScanConcurrency[ChainBSC], "omitted settings keep automatic concurrency")
+}
+
+func TestScanConcurrencyFingerprintAndPatch(t *testing.T) {
+	base := DefaultCryptoConfig()
+	base.ScanConcurrency = map[string]int{ChainBSC: 32, ChainEthereum: 4}
+	same := base
+	same.ScanConcurrency = map[string]int{ChainEthereum: 4, ChainBSC: 32}
+	require.Equal(t, fingerprintForTest(t, base), fingerprintForTest(t, same))
+	changed := map[string]int{ChainBSC: 64}
+	patched := CryptoConfigPatch{ScanConcurrency: &changed}.Apply(base)
+	require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, patched), "concurrency changes must trigger reloads")
+	empty := map[string]int{}
+	cleared, err := NormalizeConfig(CryptoConfigPatch{ScanConcurrency: &empty}.Apply(base))
+	require.NoError(t, err)
+	require.Zero(t, cleared.ScanConcurrency[ChainBSC], "empty patch map restores automatic concurrency")
+}

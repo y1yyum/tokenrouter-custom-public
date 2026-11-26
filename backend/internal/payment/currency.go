@@ -208,11 +208,18 @@ func FenToYuan(fen int64) float64 {
 }
 
 // ProviderConfigCurrency reads the configured currency for the trimmed
-// Stripe, Airwallex or EPUSDT provider key. Other keys use CNY; empty or invalid
+// Stripe, Airwallex, EPUSDT or Crypto provider key. Crypto defaults to USD. Other keys use CNY; empty or invalid
 // configuration also selects CNY, allowing order snapshots and payment
 // formatting to use the compatibility default.
 func ProviderConfigCurrency(providerKey string, cfg map[string]string) string {
 	switch strings.TrimSpace(providerKey) {
+	case TypeCrypto:
+		if raw := strings.TrimSpace(cfg["currency"]); raw != "" {
+			if currency, err := NormalizePaymentCurrency(raw); err == nil {
+				return currency
+			}
+		}
+		return "USD"
 	case TypeStripe, TypeAirwallex, TypeEPUSDT:
 		currency, err := NormalizePaymentCurrency(cfg["currency"])
 		if err == nil {

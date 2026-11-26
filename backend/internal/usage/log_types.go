@@ -65,6 +65,20 @@ type DashboardStats struct {
 
 	Rpm int64 `json:"rpm"` // five minute average request rate
 	Tpm int64 `json:"tpm"` // five minute input output token rate
+
+	UserIDPoolAlert *UserIDPoolAlert `json:"user_id_pool_alert,omitempty"` // optional tier-8 user ID capacity alert
+}
+
+// UserIDPoolAlert carries the eight-digit user ID pool capacity status once
+// allocated count reaches or exceeds fifty percent of tier capacity.
+type UserIDPoolAlert struct {
+	TierDigit    int     `json:"tier_digit"`    // monitored digit tier (8)
+	UsedCount    int64   `json:"used_count"`    // currently tracked IDs in the tier
+	Capacity     int64   `json:"capacity"`      // total allocatable IDs in the tier
+	UsagePercent float64 `json:"usage_percent"` // percentage used relative to capacity
+	Threshold    int     `json:"threshold"`     // highest crossed percentage gate (50, 75, or 90)
+	Severity     string  `json:"severity"`      // alert severity label (warning or critical)
+	Message      string  `json:"message"`       // operator capacity summary message
 }
 
 // TrendDataPoint carries one formatted time bucket's usage and user charge

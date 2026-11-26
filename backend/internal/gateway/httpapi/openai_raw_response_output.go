@@ -83,5 +83,10 @@ func (p *OpenAIResponseOutput) RawOptions(c *gin.Context, resp *http.Response, p
 	if provider != nil {
 		options.ProviderID = provider.Record.ID
 	}
+	if compatibilityCohortFrom(c, responsesCohortKey) != nil {
+		options.ResponsesDelivered = func(body []byte) {
+			recordResponsesCohortDelivery(c, responseJSONOutcome(body))
+		}
+	}
 	return options
 }

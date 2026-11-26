@@ -41,6 +41,20 @@ type OpenAIErrorOutput struct {
 	metadata func(*gin.Context) (string, string)
 }
 
+// ResponsesErrorOutputMode selects a writable JSON or SSE terminal for the
+// original client mode. Only a live, committed event stream can accept another
+// frame. A canceled request, an existing unary response, and an SSE terminal
+// already delivered all leave the writer's existing bytes intact.
+func ResponsesErrorOutputMode(c *gin.Context, clientStream bool) (started, writable bool) {
+	if FailoverClientGone(c) || TerminalSSEDelivered(c) {
+		return false, false
+	}
+	if CommittedSSE(c) {
+		return clientStream, clientStream
+	}
+	return false, !c.Writer.Written()
+}
+
 // WriteAnthropicStreamingError writes Anthropic JSON before stream start or an
 // SSE error event afterward. Model-attribute overrides run first, and an
 // already committed event stream promotes started so early heartbeats never

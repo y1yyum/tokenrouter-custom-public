@@ -253,10 +253,13 @@ func ProviderMerchantIdentityMetadata(prov Provider) map[string]string {
 // invalid currency text selects CNY; normalization checks code syntax
 // and retains accepted unlisted codes.
 func PaymentOrderCurrency(order *Order) string {
-	if snapshot := PsOrderProviderSnapshot(order); snapshot != nil {
+	if snapshot := PsOrderProviderSnapshot(order); snapshot != nil && snapshot.Currency != "" {
 		if currency, err := NormalizePaymentCurrency(snapshot.Currency); err == nil {
 			return currency
 		}
+	}
+	if IsCryptoDepositOrder(order) {
+		return ProviderConfigCurrency(TypeCrypto, nil)
 	}
 	// A historical order can lack a usable recorded currency. Returning
 	// the compatibility default lets refund and reporting consumers retain

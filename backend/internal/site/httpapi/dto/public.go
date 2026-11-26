@@ -100,6 +100,7 @@ type (
 		GoogleOAuthClientID         string                   `json:"google_oauth_client_id"`          // browser Google identifier
 		BackendModeEnabled          bool                     `json:"backend_mode_enabled"`            // backend mode switch
 		PaymentEnabled              bool                     `json:"payment_enabled"`                 // payment entry switch
+		CryptoEnabled               bool                     `json:"crypto_enabled"`                  // customer deposit entry availability
 		TeamEnabled                 bool                     `json:"team_enabled"`                    // team feature availability
 		TeamSelfServiceEnabled      bool                     `json:"team_self_service_enabled"`       // team self-service availability
 		CreativeEnabled             bool                     `json:"creative_enabled"`                // creative studio availability

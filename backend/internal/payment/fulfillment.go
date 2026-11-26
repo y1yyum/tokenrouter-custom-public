@@ -81,6 +81,9 @@ type RedeemAction int
 // conditional transition. Replayed or closed local states follow those
 // downstream rules rather than creating another order.
 func (s *Fulfillment) HandlePaymentNotification(ctx context.Context, n *PaymentNotification, pk string) error {
+	if isCryptoPaymentType(pk) {
+		return ErrCryptoWebhookUnsupported
+	}
 	if n == nil {
 		return nil
 	}
@@ -192,6 +195,9 @@ func ParseLegacyPaymentOrderID(orderID string, notFound bool) (int64, bool) {
 // The initial EasyPay merchant-number echo can be corrected before payment only
 // when adapter-owned confirmation metadata explicitly permits that order.
 func (s *Fulfillment) ValidatePaymentNotificationOrder(ctx context.Context, o *Order, pk, tradeNo string, metadata map[string]string) error {
+	if IsCryptoDepositOrder(o) || isCryptoPaymentType(pk) {
+		return ErrCryptoWebhookUnsupported
+	}
 	if err := validatePaymentTradeNumber(o, pk, tradeNo, metadata); err != nil {
 		return err
 	}
@@ -286,6 +292,9 @@ func (s *Fulfillment) ConfirmPayment(ctx context.Context, o *Order, tradeNo stri
 // processing audit, while success records an ordinary observation. No
 // fulfillment grant or paid timestamp is performed by this progress step.
 func (s *Fulfillment) MarkPaymentProcessing(ctx context.Context, o *Order, tradeNo, pk string, metadata map[string]string) error {
+	if IsCryptoDepositOrder(o) || isCryptoPaymentType(pk) {
+		return ErrCryptoWebhookUnsupported
+	}
 	if o.Status != OrderStatusPending {
 		return nil
 	}
@@ -331,6 +340,9 @@ func (s *Fulfillment) MarkPaymentProcessing(ctx context.Context, o *Order, trade
 // for Stripe failed observations, while direct callers remain responsible for
 // choosing a valid reported failure.
 func (s *Fulfillment) MarkPaymentFailed(ctx context.Context, o *Order, tradeNo, pk string) error {
+	if IsCryptoDepositOrder(o) || isCryptoPaymentType(pk) {
+		return ErrCryptoWebhookUnsupported
+	}
 	// Retry at most three observed status races, rereading only after a zero
 	// affected count. This lets a concurrent terminal change end failure
 	// recording before another pending/processing write is attempted.
@@ -420,6 +432,9 @@ func ExpectedNotificationProviderKey(registry *Registry, orderPaymentType string
 // EasyPay transaction identity is checked again after each order reread, so a
 // concurrent paid transition cannot make a conflicting reference acceptable.
 func (s *Fulfillment) ToPaid(ctx context.Context, o *Order, tradeNo string, paid float64, pk string, metadata map[string]string) error {
+	if IsCryptoDepositOrder(o) || isCryptoPaymentType(pk) {
+		return ErrCryptoWebhookUnsupported
+	}
 	// Keep the supplied observation's pi_ reference when the incoming Stripe
 	// identifier is an invoice, because refund queries need the payment intent.
 	// This preference runs before status retries rather than after each reread.
@@ -499,6 +514,9 @@ func (s *Fulfillment) ExecuteFulfillment(ctx context.Context, oid int64) error {
 	o, err := s.store.Order(ctx, oid)
 	if err != nil {
 		return fmt.Errorf("get order: %w", err)
+	}
+	if IsCryptoDepositOrder(o) {
+		return ErrCryptoRetryRequiresLedger
 	}
 	if o.OrderType == OrderTypeSubscription {
 		return s.ExecuteSubscriptionFulfillment(ctx, oid)
@@ -621,11 +639,23 @@ func ResolveRedeemAction(existing *billing.RedeemCode, lookupErr error) RedeemAc
 // step. These operations do not share one enclosing transaction, so a later
 // error can leave the grant available for the next attempt to recognize.
 func (s *Fulfillment) DoBalance(ctx context.Context, o *Order, lease *FulfillmentLease) error {
+	if IsCryptoDepositOrder(o) && !canFulfillCryptoDeposit(ctx, o) {
+		return ErrCryptoRetryRequiresLedger
+	}
 	// A prior grant step can survive a later rebate/completion failure. Read its
 	// code status before choosing create, redeem or used-code continuation,
 	// retaining creation errors when the lookup itself failed.
 	existing, lookupErr := s.redeemService.GetByCode(ctx, o.RechargeCode)
 	action := ResolveRedeemAction(existing, lookupErr)
+	if IsCryptoDepositOrder(o) && action != RedeemActionCreate {
+		// A legacy deterministic credential may already exist. Only a single
+		// matching grant, owned by the original buyer, can complete this order.
+		if existing.Type != billing.RedeemTypeBalance || existing.Value != o.Amount || existing.MaxUses != 1 ||
+			(existing.UsedCount > 0 && (existing.UsedCount != 1 || existing.UsedBy == nil || *existing.UsedBy != o.UserID)) ||
+			(action == RedeemActionSkipCompleted && existing.UsedCount != 1) {
+			return fmt.Errorf("crypto deposit balance credential does not match order %d", o.ID)
+		}
+	}
 
 	switch action {
 	case RedeemActionSkipCompleted:
@@ -867,6 +897,16 @@ func (s *Fulfillment) loadFulfillableOrder(ctx context.Context, oid int64) (*Ord
 		// lookup error.
 		return nil, infraerrors.NotFound("NOT_FOUND", "order not found")
 	}
+	// Shared balance and subscription entry points require deposit authority
+	// before interpreting status. The authority is scoped to the specific
+	// balance order, and cannot grant a subscription or another order.
+	isDeposit := IsCryptoDepositOrder(o)
+	if isDeposit && !canFulfillCryptoDeposit(ctx, o) {
+		return nil, ErrCryptoRetryRequiresLedger
+	}
+	if _, fromDeposit := ctx.Value(cryptoDepositFulfillmentKey{}).(int64); fromDeposit && !isDeposit {
+		return nil, ErrCryptoRetryRequiresLedger
+	}
 	if o.Status == OrderStatusCompleted {
 		return nil, nil
 	}
@@ -1015,6 +1055,9 @@ func (s *Fulfillment) RetryFulfillment(ctx context.Context, oid int64) error {
 	o, err := s.store.Order(ctx, oid)
 	if err != nil {
 		return infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if IsCryptoDepositOrder(o) {
+		return ErrCryptoRetryRequiresLedger
 	}
 	if o.PaidAt == nil {
 		return infraerrors.BadRequest("INVALID_STATUS", "order is not paid")

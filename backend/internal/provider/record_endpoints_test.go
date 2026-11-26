@@ -284,6 +284,21 @@ func TestProvider_IsInterceptWarmupEnabled(t *testing.T) {
 	}
 }
 
+// TestAllowsResponsesRequestRewrite checks that older passthrough records keep
+// their original wire contract, including records using the legacy selector.
+func TestAllowsResponsesRequestRewrite(t *testing.T) {
+	p := &Record{Platform: capability.PlatformOpenAI, Type: capability.ProviderTypeAPIKey}
+	require.True(t, p.AllowsResponsesRequestRewrite())
+	p.Extra = map[string]any{"openai_oauth_passthrough": true}
+	require.False(t, p.AllowsResponsesRequestRewrite())
+	p.Extra["openai_passthrough_allow_rewrite"] = "true"
+	require.False(t, p.AllowsResponsesRequestRewrite())
+	p.Extra["openai_passthrough_allow_rewrite"] = true
+	require.True(t, p.AllowsResponsesRequestRewrite())
+	p.Type = capability.ProviderTypeOAuth
+	require.False(t, p.AllowsResponsesRequestRewrite())
+}
+
 // TestProvider_IsOpenAIPassthroughEnabled checks the current and legacy OpenAI
 // passthrough keys alongside unrelated platforms and absent Extra. Either
 // supported OpenAI selection enables it, while the unrelated and absent cases

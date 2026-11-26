@@ -128,3 +128,55 @@ func TestGetUserDashboardStatsUsesIndexableOwnedTeamScope(t *testing.T) {
 	require.Equal(t, int64(20), stats.Tpm)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
+
+// TestBuildUserIDPoolAlertThresholds verifies threshold gates, severities, and
+// nil outputs across non-alerting, warning, critical, and zero-capacity inputs.
+func TestBuildUserIDPoolAlertThresholds(t *testing.T) {
+	require.Nil(t, buildUserIDPoolAlert(100, 0))
+	require.Nil(t, buildUserIDPoolAlert(44999999, 90000000))
+
+	alert50 := buildUserIDPoolAlert(45000000, 90000000)
+	require.NotNil(t, alert50)
+	require.Equal(t, 8, alert50.TierDigit)
+	require.Equal(t, 50, alert50.Threshold)
+	require.Equal(t, "warning", alert50.Severity)
+	require.InDelta(t, 50.0, alert50.UsagePercent, 0.001)
+	require.Contains(t, alert50.Message, "50%")
+
+	alert75 := buildUserIDPoolAlert(67500000, 90000000)
+	require.NotNil(t, alert75)
+	require.Equal(t, 75, alert75.Threshold)
+	require.Equal(t, "warning", alert75.Severity)
+	require.Contains(t, alert75.Message, "75%")
+
+	alert90 := buildUserIDPoolAlert(81000000, 90000000)
+	require.NotNil(t, alert90)
+	require.Equal(t, 90, alert90.Threshold)
+	require.Equal(t, "critical", alert90.Severity)
+	require.Contains(t, alert90.Message, "90%")
+}
+
+// TestFillUserIDPoolAlertReadsTier8AndIgnoresErrors checks both a populated
+// tier-8 threshold row and resilient suppression when pool metadata is absent.
+func TestFillUserIDPoolAlertReadsTier8AndIgnoresErrors(t *testing.T) {
+	db, mock := newSQLMock(t)
+	repo := &Store{sql: db}
+
+	mock.ExpectQuery(`SELECT used_count, capacity FROM user_id_pool_tiers WHERE tier_digit = 8`).
+		WillReturnRows(sqlmock.NewRows([]string{"used_count", "capacity"}).AddRow(int64(70000000), int64(90000000)))
+
+	stats := &DashboardStats{}
+	repo.fillUserIDPoolAlert(context.Background(), stats)
+	require.NotNil(t, stats.UserIDPoolAlert)
+	require.Equal(t, 75, stats.UserIDPoolAlert.Threshold)
+	require.Equal(t, "warning", stats.UserIDPoolAlert.Severity)
+	require.NoError(t, mock.ExpectationsWereMet())
+
+	mock.ExpectQuery(`SELECT used_count, capacity FROM user_id_pool_tiers WHERE tier_digit = 8`).
+		WillReturnError(sql.ErrNoRows)
+
+	emptyStats := &DashboardStats{}
+	repo.fillUserIDPoolAlert(context.Background(), emptyStats)
+	require.Nil(t, emptyStats.UserIDPoolAlert)
+	require.NoError(t, mock.ExpectationsWereMet())
+}

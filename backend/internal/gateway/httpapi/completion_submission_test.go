@@ -294,11 +294,10 @@ func TestOpenAIGatewayHandlerSubmitMandatoryUsageRecordTask_DroppedTaskSyncFallb
 	require.True(t, called.Load(), "mandatory usage task must run synchronously when async submit is dropped")
 }
 
-// TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_ImageResultUsesMandatoryFallback
-// supplies a positive image count to a full drop-policy pool. The task
-// execution flag must be set after submission despite occupied capacity,
-// observing the mandatory submission choice for completed image output.
-func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_ImageResultUsesMandatoryFallback(t *testing.T) {
+// TestCompletionSubmission_ResultOverflow checks a full drop-policy pool.
+// Text and media results must reach pricing even when no image was generated.
+// An observation without an upstream result retains the configured policy.
+func TestCompletionSubmission_ResultOverflow(t *testing.T) {
 	pool := completion.NewUsageRecordWorkerPoolWithOptions(completion.UsageRecordWorkerPoolOptions{
 		Observe:               gatewaytelemetry.Completion,
 		WorkerCount:           1,
@@ -323,13 +322,15 @@ func TestOpenAIGatewayHandlerSubmitOpenAIUsageRecordTask_ImageResultUsesMandator
 	<-block
 	pool.Submit(func(ctx context.Context) {})
 
-	var called atomic.Bool
-	h.SubmitImages(t.Context(), 1, func(ctx context.Context) {
-		called.Store(true)
-	})
+	var calls atomic.Int32
+	task := func(context.Context) { calls.Add(1) }
+	h.SubmitResult(t.Context(), false, task)
+	missingResultCalls := calls.Load()
+	h.SubmitResult(t.Context(), true, task)
 	close(release)
 
-	require.True(t, called.Load(), "image usage task must be mandatory when async submit is dropped")
+	require.Zero(t, missingResultCalls)
+	require.EqualValues(t, 1, calls.Load())
 }
 
 // TestOpenAIGatewayHandlerSubmitUsageRecordTask_PreservesRequestIDs installs the

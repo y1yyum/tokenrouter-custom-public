@@ -316,9 +316,15 @@ describe('provider cache and incremental refresh lifecycle', () => {
     expect(wrapper.getComponent(DataTableStub).props('data')[0]).toBe(row)
     await vi.advanceTimersByTimeAsync(6000)
     expect(listWithEtag.mock.calls.map((call) => call[3])).toEqual([
-      { etag: null },
-      { etag: 'providers-v1' },
+      { etag: null, signal: expect.any(AbortSignal) },
+      { etag: 'providers-v1', signal: expect.any(AbortSignal) },
     ])
     expect(wrapper.getComponent(DataTableStub).props('data')[0]).toBe(row)
+    expect(getBatchTodayStats.mock.calls).toEqual([[[1]], [[1]], [[1]]])
+    expect(listWithEtag.mock.calls.map((call) => call[2].include_scheduler_score)).toEqual([
+      '1',
+      '1',
+    ])
+    wrapper.unmount()
   })
 })

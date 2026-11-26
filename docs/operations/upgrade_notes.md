@@ -18,6 +18,25 @@
 
 ## 未发布与近期升级
 
+### 迁移 337：校正用户 ID 池计数
+
+- 升级时锁住 `users` 的写入，并用现有行重算 4～8 位池计数。已有用户 ID 和历史 Ops 事件保留原值。
+- 计数和容量事件随实际插入的用户一起提交或回滚。`ON CONFLICT DO NOTHING` 跳过的行不占容量。跨过容量阈值时仍发出 PostgreSQL 警告。事务回滚会撤销 Ops 事件，已发出的警告无法撤回。
+- 随机选号沿用原有阶梯和事务锁，只有省略 ID 的插入才取得这把锁。多行插入在语句结束时更新计数，下一条插入语句按更新后的计数判断是否扩池。
+- 升级后按各段的 `min_id` 和 `max_id` 与 `users` 实际行数核对 `user_id_pool_tiers.used_count`。手工维护需要重算时，暂停用户表写入后执行 `SELECT recalibrate_user_id_pool_tiers();`。
+
+### 迁移 336：用户 ID 随机阶梯分配与容量告警
+
+- 变更要点：`336_random_user_id_allocation.sql` 创建 `user_id_pool_tiers`（覆盖 4~8 位 ID 区间并按现有 `users` 行回填计数），执行 `ALTER TABLE users ALTER COLUMN id DROP DEFAULT`，并安装 `BEFORE INSERT`（`allocate_random_user_id`）与 `AFTER DELETE`（`handle_user_id_pool_on_delete`）触发器及校准函数 `recalibrate_user_id_pool_tiers()`。
+- 行为变化：未显式传入 `id` 的新建用户按 `pg_advisory_xact_lock` 串行化抽取随机未使用 ID（4 位过半解锁 5 位，依此类推至 8 位）；传入显式 `id`（4~8 位）保留原值并累加对应分段计数；tier 8 达 50%/75%/90% 时记录 `ops_alert_events` 并在管理员仪表盘展示 `user_id_pool_alert`。`GetFirstAdmin` 改为 `created_at ASC, id ASC`，管理员用户列表默认或未知排序字段改为 `created_at`（`id` 同向决胜）。
+- 验证与回退：升级后验证新注册用户获配 4~8 位随机 ID、用户列表默认按注册时间排序及管理后台可正常加载仪表盘；批量清理后如需重算分段计数可执行 `SELECT recalibrate_user_id_pool_tiers();`。回退需停止新版本并从升级前数据库备份恢复（或恢复 `users.id` 序列默认值并删除触发器/分段表）。
+
+### 提供商与使用明细的列偏好
+
+首次进入九列表格时，浏览器分别迁移显隐配置与列序。使用旧默认配置会看到全部九列；自定义配置只有在一组旧字段全部隐藏时才隐藏对应复合列。用户端的身份列要求成员、Key 和分组原先均已隐藏。旧列序按复合列首次出现的位置合并，未指定的列按默认顺序追加。
+
+迁移保留旧键，新显隐键以 `-dense-layout-v1` 结尾，新列序键以 `-v2` 结尾。升级后再次隐藏或拖动某列，刷新时优先读取新设置。错误请求的列配置独立保存。
+
 ### 站点管理 Key 管理客户端
 
 用站点 `x-api-key` 读取自身状态、轮换或删除的客户端，升级后会收到 403。请将这些操作切换到管理员 JWT 会话。轮换成功响应包含新凭据，客户端应按响应的 `Cache-Control: no-store` 处理。现有 MCP 委派遵循各操作的授权与确认设置。[管理接口](../interfaces/http_api.md#认证与安全机制)

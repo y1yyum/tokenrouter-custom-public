@@ -11,6 +11,7 @@
 //   - checkout*.go and billing_info.go validate checkout, buyer details, and order snapshots.
 //   - order*.go, query_ports.go, query_types.go, document.go, and statistics.go handle order state and queries.
 //   - fulfillment*.go and expiry.go confirm payments, grant rights, and process expired orders.
+//   - crypto_deposit.go identifies direct deposits and gates their fulfillment on chain verification.
 //   - refund_*.go validate refunds, call providers, and deduct or restore rights.
 //   - provider_*.go, registry.go, load_balancer.go, and instance.go register, bind, and select providers.
 //   - amount_rules.go, currency.go, and fee.go calculate recharge amounts, currency precision, and fees.

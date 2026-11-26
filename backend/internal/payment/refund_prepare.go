@@ -72,6 +72,9 @@ func (s *RefundWorkflow) ValidateRefundRequest(ctx context.Context, oid, uid int
 	if o.UserID != uid {
 		return nil, infraerrors.Forbidden("FORBIDDEN", "no permission")
 	}
+	if IsCryptoDepositOrder(o) {
+		return nil, ErrCryptoRefundUnsupported
+	}
 	if o.OrderType != OrderTypeBalance {
 		return nil, infraerrors.BadRequest("INVALID_ORDER_TYPE", "only balance orders can request refund")
 	}
@@ -104,6 +107,9 @@ func (s *RefundWorkflow) PrepareRefund(ctx context.Context, oid int64, amt float
 	o, err := s.store.Order(ctx, oid)
 	if err != nil {
 		return nil, nil, infraerrors.NotFound("NOT_FOUND", "order not found")
+	}
+	if IsCryptoDepositOrder(o) {
+		return nil, nil, ErrCryptoRefundUnsupported
 	}
 	if o.Status == OrderStatusRefundPending || o.Status == OrderStatusRefunding {
 		return nil, nil, RefundRecoveryRequired("a refund already awaits confirmation")

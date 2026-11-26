@@ -43,6 +43,10 @@ export default {
     availabilityNoData: '暂无数据',
     availabilityHint: '近 {days} 天主动探测可用率 {rate}（成功 {success} / 总计 {total}）',
     availabilityHintNoData: '近 {days} 天暂无主动探测数据',
+    availabilityImportedCalls: '历史调用',
+    availabilityImportedHint:
+      '按导入的历史调用记录统计，近 {days} 天成功率为 {rate}（共 {total} 次，成功 {success} 次）',
+    availabilityImportedHintNoData: '导入的历史调用记录中，近 {days} 天暂无数据',
     rateMultiplier: '分组倍率',
     rateMultiplierValue: '分组倍率{multiplier}',
     maxDiscountHint: '指相比官方 API 定价，通过本站调用该分组模型可获得的最高优惠',
@@ -551,6 +555,7 @@ export default {
       creationUnconfirmed: '订单创建结果正在核实，请勿重复下单。可稍后在订单记录中查看进度。',
     },
     methods: {
+      crypto: '链上充值',
       epusdt: '加密货币',
       easypay: '易支付',
       alipay: '支付宝',

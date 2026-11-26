@@ -41,6 +41,8 @@ type RedeemCode struct {
 	UsedAt *time.Time `json:"used_at,omitempty"`
 	// Notes holds the value of the "notes" field.
 	Notes *string `json:"notes,omitempty"`
+	// Synthetic ledger row source reference, e.g. crypto_deposit:<deposit_id>:<chain>:<tx_hash>:<log_index>
+	SourceRef string `json:"source_ref,omitempty"`
 	// CreatedAt holds the value of the "created_at" field.
 	CreatedAt time.Time `json:"created_at,omitempty"`
 	// PlanID holds the value of the "plan_id" field.
@@ -108,7 +110,7 @@ func (*RedeemCode) scanValues(columns []string) ([]any, error) {
 			values[i] = new(sql.NullFloat64)
 		case redeemcode.FieldID, redeemcode.FieldMaxUses, redeemcode.FieldUsedCount, redeemcode.FieldUsedBy, redeemcode.FieldPlanID, redeemcode.FieldValidityDays:
 			values[i] = new(sql.NullInt64)
-		case redeemcode.FieldCode, redeemcode.FieldType, redeemcode.FieldStatus, redeemcode.FieldNotes:
+		case redeemcode.FieldCode, redeemcode.FieldType, redeemcode.FieldStatus, redeemcode.FieldNotes, redeemcode.FieldSourceRef:
 			values[i] = new(sql.NullString)
 		case redeemcode.FieldExpiresAt, redeemcode.FieldUsedAt, redeemcode.FieldCreatedAt:
 			values[i] = new(sql.NullTime)
@@ -202,6 +204,12 @@ func (_m *RedeemCode) assignValues(columns []string, values []any) error {
 			} else if value.Valid {
 				_m.Notes = new(string)
 				*_m.Notes = value.String
+			}
+		case redeemcode.FieldSourceRef:
+			if value, ok := values[i].(*sql.NullString); !ok {
+				return fmt.Errorf("unexpected type %T for field source_ref", values[i])
+			} else if value.Valid {
+				_m.SourceRef = value.String
 			}
 		case redeemcode.FieldCreatedAt:
 			if value, ok := values[i].(*sql.NullTime); !ok {
@@ -314,6 +322,9 @@ func (_m *RedeemCode) String() string {
 		builder.WriteString("notes=")
 		builder.WriteString(*v)
 	}
+	builder.WriteString(", ")
+	builder.WriteString("source_ref=")
+	builder.WriteString(_m.SourceRef)
 	builder.WriteString(", ")
 	builder.WriteString("created_at=")
 	builder.WriteString(_m.CreatedAt.Format(time.ANSIC))

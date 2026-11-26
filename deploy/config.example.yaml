@@ -239,6 +239,10 @@ security:
   # Stable 32-byte hexadecimal encryption key for stored credentials and TOTP.
   # Generate with openssl rand -hex 32; unset input creates an ephemeral, unconfigured key.
   secret_encryption_key: ""
+  # 充值账户按本站的 RFC3339 截止时间检查 API Key 轮换状态，空值关闭这项检查。
+  key_rotation_cutoff: ""
+  key_rotation_risk_ack_enabled: false
+  key_rotation_risk_ack_hours: 24
   # =============================================================================
   # CORS Configuration
   # =============================================================================

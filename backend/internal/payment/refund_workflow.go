@@ -42,6 +42,9 @@ const refundLocalRecoveryTimeout = 5 * time.Second
 // committed preparation and externally attempted refund for recovery; this
 // method does not resubmit the gateway after that local failure.
 func (s *RefundWorkflow) ExecuteRefund(ctx context.Context, p *RefundPlan) (*RefundResult, error) {
+	if p != nil && IsCryptoDepositOrder(p.Order) {
+		return nil, ErrCryptoRefundUnsupported
+	}
 	// Commit local preparation before external submission so failed preparation
 	// cannot initiate a provider refund and later local recovery has a persisted
 	// operation receipt.
@@ -188,6 +191,9 @@ func (s *RefundWorkflow) QueryAndFinalizeRefundWithReference(ctx context.Context
 	order, err := s.store.Order(ctx, id)
 	if err != nil {
 		return nil, apperror.NotFound("NOT_FOUND", "order not found")
+	}
+	if IsCryptoDepositOrder(order) {
+		return nil, ErrCryptoRefundUnsupported
 	}
 	if order.Status != OrderStatusRefundPending && order.Status != OrderStatusRefunding {
 		return nil, apperror.BadRequest("INVALID_STATUS", "only refund pending or recoverable refunding orders can be finalized")

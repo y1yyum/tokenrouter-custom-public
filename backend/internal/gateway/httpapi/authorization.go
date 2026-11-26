@@ -221,6 +221,7 @@ func NewAPIKeyAuthorization(apiKeyService *apikey.APIKeyService, subscriptionSer
 			Concurrency: apiKey.User.Concurrency,
 		})
 		c.Set("user_role", apiKey.User.Role)
+		bindParameterEntryGroup(c, apiKey)
 		options.bind(c, apiKey)
 		// Last-used persistence is diagnostic bookkeeping. A failed touch leaves
 		// this already authenticated request eligible to reserve capacity and continue processing.

@@ -1,5 +1,10 @@
 version: "2"
 
+# decorder v0.4.2 在并发分析多个包时会同时写入共享 map。
+# 串行运行分析器，保留所有声明顺序检查。
+run:
+  concurrency: 1
+
 # 架构依赖由 make test-architecture 单独检查。
 
 linters:

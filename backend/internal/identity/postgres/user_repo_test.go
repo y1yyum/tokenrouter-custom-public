@@ -15,6 +15,7 @@ import (
 
 	dbent "github.com/TokenFlux/TokenRouter/ent"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
+	"github.com/TokenFlux/TokenRouter/internal/pkg/pagination"
 	"github.com/TokenFlux/TokenRouter/migrations"
 )
 
@@ -410,6 +411,93 @@ func TestApplyRedeemAdjustment_MissingUser(t *testing.T) {
 	err := repo.ApplyRedeemBalanceAdjustment(context.Background(), 404, -1)
 	require.ErrorIs(t, err, identity.ErrUserNotFound)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUserStoreGetFirstAdminOrdersByCreatedAtBeforeID verifies that when random
+// user IDs give a newer administrator a smaller numeric ID, GetFirstAdmin still
+// returns the earliest created active admin, using ID only as a tiebreaker.
+func TestUserStoreGetFirstAdminOrdersByCreatedAtBeforeID(t *testing.T) {
+	repo, _ := newUserEntRepo(t)
+	ctx := context.Background()
+
+	earliest := time.Date(2026, 1, 1, 10, 0, 0, 0, time.UTC)
+	later := earliest.Add(2 * time.Hour)
+
+	_, err := repo.sql.ExecContext(
+		ctx,
+		`INSERT INTO users (id, email, password_hash, role, status, concurrency, created_at, updated_at)
+		 VALUES
+		   (90000, 'first-created@example.com', 'hash', 'admin', 'active', 5, ?, ?),
+		   (1001, 'later-smaller-id@example.com', 'hash', 'admin', 'active', 5, ?, ?)`,
+		earliest, earliest, later, later,
+	)
+	require.NoError(t, err)
+
+	got, err := repo.GetFirstAdmin(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(90000), got.ID)
+
+	// Insert another admin with the exact same earliest timestamp and a smaller ID;
+	// ascending ID tie-breaking must now prefer 80000 over 90000.
+	_, err = repo.sql.ExecContext(
+		ctx,
+		`INSERT INTO users (id, email, password_hash, role, status, concurrency, created_at, updated_at)
+		 VALUES (80000, 'tie-smaller-id@example.com', 'hash', 'admin', 'active', 5, ?, ?)`,
+		earliest, earliest,
+	)
+	require.NoError(t, err)
+
+	gotTie, err := repo.GetFirstAdmin(ctx)
+	require.NoError(t, err)
+	require.Equal(t, int64(80000), gotTie.ID)
+}
+
+// TestUserStoreListDefaultSortUsesCreatedAtBeforeID checks empty and unknown
+// sort keys beside explicit id sorting so random numeric IDs never scramble
+// signup order in default administrator listings.
+func TestUserStoreListDefaultSortUsesCreatedAtBeforeID(t *testing.T) {
+	repo, _ := newUserEntRepo(t)
+	ctx := context.Background()
+
+	t1 := time.Date(2026, 2, 1, 9, 0, 0, 0, time.UTC)
+	t2 := t1.Add(time.Hour)
+	t3 := t2.Add(time.Hour)
+
+	_, err := repo.sql.ExecContext(
+		ctx,
+		`INSERT INTO users (id, email, password_hash, role, status, concurrency, created_at, updated_at)
+		 VALUES
+		   (9500, 'oldest-high-id@example.com', 'hash', 'user', 'active', 5, ?, ?),
+		   (4200, 'middle@example.com', 'hash', 'user', 'active', 5, ?, ?),
+		   (1500, 'newest-low-id@example.com', 'hash', 'user', 'active', 5, ?, ?)`,
+		t1, t1, t2, t2, t3, t3,
+	)
+	require.NoError(t, err)
+
+	defaultUsers, _, err := repo.List(ctx, pagination.PaginationParams{Page: 1, PageSize: 10})
+	require.NoError(t, err)
+	require.Len(t, defaultUsers, 3)
+	require.Equal(t, []int64{1500, 4200, 9500}, []int64{defaultUsers[0].ID, defaultUsers[1].ID, defaultUsers[2].ID})
+
+	unknownAsc, _, err := repo.ListWithFilters(ctx, pagination.PaginationParams{
+		Page:      1,
+		PageSize:  10,
+		SortBy:    "unsupported_column",
+		SortOrder: pagination.SortOrderAsc,
+	}, identity.UserListFilters{})
+	require.NoError(t, err)
+	require.Len(t, unknownAsc, 3)
+	require.Equal(t, []int64{9500, 4200, 1500}, []int64{unknownAsc[0].ID, unknownAsc[1].ID, unknownAsc[2].ID})
+
+	explicitIDDesc, _, err := repo.ListWithFilters(ctx, pagination.PaginationParams{
+		Page:      1,
+		PageSize:  10,
+		SortBy:    "id",
+		SortOrder: pagination.SortOrderDesc,
+	}, identity.UserListFilters{})
+	require.NoError(t, err)
+	require.Len(t, explicitIDDesc, 3)
+	require.Equal(t, []int64{9500, 4200, 1500}, []int64{explicitIDDesc[0].ID, explicitIDDesc[1].ID, explicitIDDesc[2].ID})
 }
 
 // seedAliasUser creates an active account with the supplied email for alias

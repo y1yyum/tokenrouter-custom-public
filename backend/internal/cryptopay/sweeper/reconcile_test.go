@@ -1,0 +1,256 @@
+package sweeper
+
+import (
+	"errors"
+	"testing"
+
+	"github.com/DATA-DOG/go-sqlmock"
+)
+
+// An absent receipt is not proof that a signed transaction can never land.
+// Keep the reservation and exact signed bytes for the normal resume path.
+func TestReconcileRetainsFailedSignedGasWhenReceiptIsAbsent(t *testing.T) {
+	e, mock, chain, entry := setupExecutor(t)
+	chain.mined = false // receipt is null -> the broadcast never landed
+
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, chain, from_address`).
+		WithArgs(int64(1)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "chain", "from_address", "to_address", "token", "raw_amount",
+			"token_decimals", "derivation_index", "status", "error", "job_version", "revision",
+			"confirmations_required", "gas_payer", "gas_amount", "gas_nonce", "gas_raw_tx",
+			"gas_tx_hash", "gas_confirmed", "sweep_nonce", "sweep_raw_tx", "sweep_tx_hash",
+		}).AddRow(1, "bsc", entry.Address, entry.Address, entry.Token, "1000000",
+			18, 0, "failed", "Payment operation failed; reconcile transaction status before retrying", 1, 0,
+			"2", chain.payer, "97500", "0", "0xraw", "0xhash", false, "", "", ""))
+	expectWrite(mock, "gas_pending", nil, nil)
+	mock.ExpectQuery(`SELECT pg_advisory_unlock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"unlock"}).AddRow(true))
+
+	out, err := e.Reconcile(t.Context(), 1)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+	if out.Action != ReconcileObserved || out.Status != "gas_pending" {
+		t.Fatalf("absent receipt must retain the signed transaction, got %+v", out)
+	}
+	if out.Message == "" {
+		t.Fatal("missing explanation that the existing reservation is retained")
+	}
+	chain.mu.Lock()
+	defer chain.mu.Unlock()
+	if len(chain.signs) != 0 || len(chain.raws) != 0 {
+		t.Fatalf("reconcile must not sign or broadcast: signs=%d raws=%d", len(chain.signs), len(chain.raws))
+	}
+}
+
+func TestReconcileFailedSignedSweepWithConfirmedReceipt(t *testing.T) {
+	e, mock, chain, entry := setupExecutor(t)
+	chain.mined = true
+	chain.txs["0xhash"] = true
+
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, chain, from_address`).
+		WithArgs(int64(3)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "chain", "from_address", "to_address", "token", "raw_amount",
+			"token_decimals", "derivation_index", "status", "error", "job_version", "revision",
+			"confirmations_required", "gas_payer", "gas_amount", "gas_nonce", "gas_raw_tx",
+			"gas_tx_hash", "gas_confirmed", "sweep_nonce", "sweep_raw_tx", "sweep_tx_hash",
+		}).AddRow(3, "bsc", entry.Address, testDestination, entry.Token, "1000000",
+			6, 1, "failed", "Payment operation failed; reconcile transaction status before retrying", 1, 0,
+			"2", chain.payer, "0", "", "", "", false, "0", "0xraw", "0xhash"))
+	expectWriteID(mock, 3, "swept", nil, nil)
+	mock.ExpectQuery(`SELECT pg_advisory_unlock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"unlock"}).AddRow(true))
+
+	out, err := e.Reconcile(t.Context(), 3)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+	if out.Action != ReconcileConfirmed || out.Status != "swept" {
+		t.Fatalf("confirmed failed job must be marked swept, got %+v", out)
+	}
+	chain.mu.Lock()
+	defer chain.mu.Unlock()
+	if len(chain.signs) != 0 || len(chain.raws) != 0 {
+		t.Fatalf("reconcile must not sign or broadcast: signs=%d broadcasts=%d", len(chain.signs), len(chain.raws))
+	}
+}
+
+func TestListBlockedReturnsFailedSignedTransactionsForReconciliation(t *testing.T) {
+	e, mock, _, entry := setupExecutor(t)
+	mock.ExpectQuery(`(?s)SELECT id, chain, from_address, status, error,.*status <> 'swept'.*status <> 'failed'.*gas_tx_hash`).
+		WithArgs(50).
+		WillReturnRows(sqlmock.NewRows([]string{"id", "chain", "from_address", "status", "error", "age_minutes", "job_version"}).
+			AddRow(49, "bsc", entry.Address, "failed", "Payment operation failed; reconcile transaction status before retrying", int64(12), 1).
+			AddRow(97, "bsc", entry.Address, "failed", "Payment operation failed; reconcile transaction status before retrying", int64(2175), 2))
+
+	blocked, err := e.ListBlocked(t.Context(), 50)
+	if err != nil {
+		t.Fatalf("list blocked sweep jobs: %v", err)
+	}
+	if len(blocked) != 2 || blocked[0].JobID != 49 || !blocked[0].CanResolve || blocked[0].Status != "failed" {
+		t.Fatalf("failed signed job was not surfaced for reconciliation: %+v", blocked)
+	}
+	// A record in an older format is listed (it still holds hashes) but cannot be reconciled.
+	if blocked[1].JobID != 97 || blocked[1].CanResolve {
+		t.Fatalf("an old-format record must not offer reconcile: %+v", blocked[1])
+	}
+}
+
+// Reconcile reads the chain and then has to save what it found. A row that
+// saveJob cannot update would fail only after the chain work, as a bare 500.
+func TestReconcileRefusesOldFormatRecordsBeforeTouchingTheChain(t *testing.T) {
+	for _, version := range []int{0, 2} {
+		e, mock, chain, entry := setupExecutor(t)
+		mock.ExpectQuery(`SELECT pg_try_advisory_lock`).
+			WithArgs(sweepLockKey).
+			WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+		mock.ExpectQuery(`SELECT id, chain, from_address`).
+			WithArgs(int64(97)).
+			WillReturnRows(sqlmock.NewRows([]string{
+				"id", "chain", "from_address", "to_address", "token", "raw_amount",
+				"token_decimals", "derivation_index", "status", "error", "job_version", "revision",
+				"confirmations_required", "gas_payer", "gas_amount", "gas_nonce", "gas_raw_tx",
+				"gas_tx_hash", "gas_confirmed", "sweep_nonce", "sweep_raw_tx", "sweep_tx_hash",
+			}).AddRow(97, "bsc", entry.Address, entry.Address, entry.Token, "1000000",
+				18, 0, "failed", "x", version, 3,
+				"2", chain.payer, "", "", "", "", false, "3", "0xraw", "0xhash"))
+		mock.ExpectQuery(`SELECT pg_advisory_unlock`).
+			WithArgs(sweepLockKey).
+			WillReturnRows(sqlmock.NewRows([]string{"unlock"}).AddRow(true))
+
+		out, err := e.Reconcile(t.Context(), 97)
+		if !errors.Is(err, ErrLegacySweepRecord) || out != nil {
+			t.Fatalf("version %d: out=%+v err=%v", version, out, err)
+		}
+		chain.mu.Lock()
+		reads := chain.receiptReads
+		chain.mu.Unlock()
+		if reads != 0 {
+			t.Fatalf("version %d: the chain was queried %d times for a record that cannot be saved", version, reads)
+		}
+	}
+}
+
+// A finished old record keeps the harmless answer it always had.
+func TestReconcileOfFinishedOldRecordStillSaysNothingToDo(t *testing.T) {
+	e, mock, chain, entry := setupExecutor(t)
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, chain, from_address`).
+		WithArgs(int64(5)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "chain", "from_address", "to_address", "token", "raw_amount",
+			"token_decimals", "derivation_index", "status", "error", "job_version", "revision",
+			"confirmations_required", "gas_payer", "gas_amount", "gas_nonce", "gas_raw_tx",
+			"gas_tx_hash", "gas_confirmed", "sweep_nonce", "sweep_raw_tx", "sweep_tx_hash",
+		}).AddRow(5, "bsc", entry.Address, entry.Address, entry.Token, "1000000",
+			18, 0, "swept", "", 2, 3,
+			"2", chain.payer, "", "", "", "", false, "", "", ""))
+	mock.ExpectQuery(`SELECT pg_advisory_unlock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"unlock"}).AddRow(true))
+
+	out, err := e.Reconcile(t.Context(), 5)
+	if err != nil || out.Action != ReconcileObserved {
+		t.Fatalf("out=%+v err=%v", out, err)
+	}
+}
+
+// A job whose reserved transaction already confirmed is advanced, not resent.
+func TestReconcileAdvancesConfirmedGas(t *testing.T) {
+	e, mock, chain, entry := setupExecutor(t)
+	chain.mined = true
+	chain.native = 1_000_000_000
+	chain.txs["0xhash"] = true // the reserved gas tx is already on chain
+
+	mock.ExpectQuery(`SELECT pg_try_advisory_lock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+	mock.ExpectQuery(`SELECT id, chain, from_address`).
+		WithArgs(int64(2)).
+		WillReturnRows(sqlmock.NewRows([]string{
+			"id", "chain", "from_address", "to_address", "token", "raw_amount",
+			"token_decimals", "derivation_index", "status", "error", "job_version", "revision",
+			"confirmations_required", "gas_payer", "gas_amount", "gas_nonce", "gas_raw_tx",
+			"gas_tx_hash", "gas_confirmed", "sweep_nonce", "sweep_raw_tx", "sweep_tx_hash",
+		}).AddRow(2, "bsc", entry.Address, entry.Address, entry.Token, "1000000",
+			18, 0, "gas_pending", "", 1, 0,
+			"2", chain.payer, "97500", "0", "0xraw", "0xhash", false, "", "", ""))
+	expectWriteID(mock, 2, "gas_confirmed", nil, nil)
+	mock.ExpectQuery(`SELECT pg_advisory_unlock`).
+		WithArgs(sweepLockKey).
+		WillReturnRows(sqlmock.NewRows([]string{"unlock"}).AddRow(true))
+
+	out, err := e.Reconcile(t.Context(), 2)
+	if err != nil {
+		t.Fatalf("reconcile failed: %v", err)
+	}
+	if out.Action != ReconcileConfirmed || out.Status != "gas_confirmed" {
+		t.Fatalf("confirmed gas must advance the job, got %+v", out)
+	}
+	chain.mu.Lock()
+	defer chain.mu.Unlock()
+	if len(chain.signs) != 0 || len(chain.raws) != 0 {
+		t.Fatalf("reconcile must not sign or broadcast: signs=%d raws=%d", len(chain.signs), len(chain.raws))
+	}
+}
+
+// TestReconcileNeverResurrectsAReleasedStaleJob: a stale record whose
+// reservation was deliberately released must not be turned back into a live
+// reservation by reconcile — a newer job may already own the address. A late
+// confirmation is still a real state correction and must be recorded.
+func TestReconcileNeverResurrectsAReleasedStaleJob(t *testing.T) {
+	cases := []struct {
+		name       string
+		mined      bool
+		wantStatus string
+		wantAction string
+	}{
+		{name: "absent stays released", mined: false, wantStatus: "failed", wantAction: ReconcileObserved},
+		{name: "late confirmation is swept", mined: true, wantStatus: "swept", wantAction: ReconcileConfirmed},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			e, mock, chain, entry := setupExecutor(t)
+			chain.mined, chain.txs["0xhash"] = tc.mined, tc.mined
+			released := &sweepJob{
+				PlanEntry: entry, ID: 1, Version: 1, Destination: testDestination,
+				Status: "failed", Confirmations: 2,
+				Error: staleReleasePrefix + "tx absent after 3 replays; nonce 3 is taken in the pending pool; released",
+			}
+			released.SweepNonce, released.SweepRaw, released.SweepHash = "3", "0xraw", "0xhash"
+
+			mock.ExpectQuery(`SELECT pg_try_advisory_lock`).WithArgs(sweepLockKey).
+				WillReturnRows(sqlmock.NewRows([]string{"locked"}).AddRow(true))
+			mock.ExpectQuery(`SELECT id, chain, from_address`).WithArgs(int64(1)).
+				WillReturnRows(jobRows(released))
+			if tc.mined {
+				expectWriteID(mock, 1, "swept", nil, nil)
+			}
+			mock.ExpectQuery(`SELECT pg_advisory_unlock`).WithArgs(sweepLockKey).
+				WillReturnRows(sqlmock.NewRows([]string{"unlocked"}).AddRow(true))
+
+			out, err := e.Reconcile(t.Context(), 1)
+			if err != nil {
+				t.Fatalf("reconcile failed: %v", err)
+			}
+			if out.Status != tc.wantStatus || out.Action != tc.wantAction || out.Message == "" {
+				t.Fatalf("released record was rewritten: %+v", out)
+			}
+			if len(chain.signs) != 0 || len(chain.raws) != 0 {
+				t.Fatalf("reconcile signed or broadcast: signs=%d sends=%d", len(chain.signs), len(chain.raws))
+			}
+		})
+	}
+}

@@ -316,7 +316,8 @@
         <UsageTable
           v-else
           flat
-          column-order-storage-key="user-usage-column-order"
+          :column-order-storage-key="columnOrderStorageKey"
+          :initial-column-order="initialColumnOrder"
           :data="usageLogs"
           :loading="loading"
           :columns="visibleColumns"
@@ -325,10 +326,10 @@
           :show-standard-cost="false"
           :show-upstream-endpoint="false"
           :user-clickable="false"
-          :compact-user-column="isTeamOwner"
+          :compact-role="isTeamOwner ? 'teamOwner' : 'personal'"
           :show-ip-geo-toolbar="false"
-          default-sort-key="created_at"
-          default-sort-order="desc"
+          :default-sort-key="sortState.sort_by"
+          :default-sort-order="sortState.sort_order"
           @sort="handleSort"
         />
 
@@ -408,6 +409,9 @@ import ModelIcon from '@/components/common/ModelIcon.vue'
 import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'
+import { getUsageTableColumns } from '@/components/admin/usage/usageTableColumns'
+import { useDenseTablePreferences } from '@/composables/useDenseTablePreferences'
+import { getColumnSortOptions, type Column } from '@/components/common/table/types'
 import IpGeoBatchToolbar from '@/components/common/IpGeoBatchToolbar.vue'
 import ModelDistributionChart from '@/components/charts/ModelDistributionChart.vue'
 import GroupDistributionChart from '@/components/charts/GroupDistributionChart.vue'
@@ -431,7 +435,6 @@ import type {
   UsageStatsResponse,
   UserErrorRequest,
 } from '@/api/usage.types'
-import type { Column } from '@/components/common/table/types'
 import type { UsageExportFilterLabel } from '@/types/ui'
 import { COMMON_ERROR_STATUS_CODES } from '@/utils/errorBadges'
 
@@ -1059,6 +1062,8 @@ const handlePageSizeChange = (pageSize: number) => {
 // handleSort stores the requested server ordering and reloads page one. Returning to the
 // first page gives the selected ordering a consistent starting point for the usage table.
 const handleSort = (key: string, order: 'asc' | 'desc') => {
+  if (!visibleSortKeys.value.includes(key)) return
+  if (sortState.sort_by === key && sortState.sort_order === order) return
   sortState.sort_by = key
   sortState.sort_order = order
   pagination.page = 1
@@ -1156,70 +1161,31 @@ const exportFilterLabels = computed<UsageExportFilterLabel[]>(() => {
   return chips
 })
 
-// Usage column constants define mandatory fields, default hidden choices, and the browser
-// storage namespace for saved preferences.
-const ALWAYS_VISIBLE = ['created_at']
-const DEFAULT_HIDDEN_COLUMNS = ['user_agent']
-const HIDDEN_COLUMNS_KEY = 'user-usage-hidden-columns'
-
-// allColumns supplies the canonical translated usage column order before mandatory and
-// saved visibility choices are applied.
-const allColumns = computed<Column[]>(() => [
-  ...(isTeamOwner.value
-    ? [{ key: 'user', label: t('team.member'), sortable: false, class: 'w-36 min-w-36 max-w-36' }]
-    : []),
-  { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
-  { key: 'model', label: t('usage.model'), sortable: true },
-  { key: 'reasoning_effort', label: t('usage.reasoningEffort'), sortable: false },
-  { key: 'endpoint', label: t('usage.endpoint'), sortable: false },
-  { key: 'ip_address', label: 'IP', sortable: false },
-  { key: 'group', label: t('admin.usage.group'), sortable: false },
-  { key: 'stream', label: t('usage.type'), sortable: false },
-  { key: 'billing_mode', label: t('admin.usage.billingMode'), sortable: false },
-  { key: 'tokens', label: t('usage.tokens'), sortable: false },
-  { key: 'cost', label: t('usage.cost'), sortable: false },
-  { key: 'latency', label: t('usage.latency'), sortable: false },
-  { key: 'tps', label: t('usage.tps'), sortable: false },
-  { key: 'created_at', label: t('usage.time'), sortable: true },
-  { key: 'request_id', label: t('requests.id'), sortable: false },
-  { key: 'user_agent', label: t('usage.userAgent'), sortable: false },
-])
-
-// Usage visibility state keeps a mutable hidden-key set and derives the optional controls
-// and displayed column definitions.
-const hiddenColumns = reactive<Set<string>>(new Set())
+// Mandatory usage columns stay accessible while the remaining columns use restored
+// visibility. Error records keep their own preference namespace.
+const ALWAYS_VISIBLE = ['time']
+const { isColumnVisible, toggleColumn, columnOrderStorageKey, initialColumnOrder } =
+  useDenseTablePreferences('userUsage')
+const allColumns = computed(() =>
+  getUsageTableColumns(isTeamOwner.value ? 'teamOwner' : 'personal', t),
+)
 const toggleableColumns = computed(() =>
-  allColumns.value.filter((col) => !ALWAYS_VISIBLE.includes(col.key)),
+  allColumns.value.filter((column) => !ALWAYS_VISIBLE.includes(column.key)),
 )
 const visibleColumns = computed(() =>
-  allColumns.value.filter((col) => ALWAYS_VISIBLE.includes(col.key) || !hiddenColumns.has(col.key)),
+  allColumns.value.filter((column) => isColumnVisible(column.key)),
 )
-// isColumnVisible reports whether a column key is absent from saved hidden choices.
-const isColumnVisible = (key: string) => !hiddenColumns.has(key)
-// toggleColumn flips a usage column in memory before persisting the hidden set. Storage
-// failures propagate from this action, while the current reactive selection has already
-// been updated.
-const toggleColumn = (key: string) => {
-  if (hiddenColumns.has(key)) hiddenColumns.delete(key)
-  else hiddenColumns.add(key)
-  // Update reactive visibility before writing the browser preference so the current table
-  // reflects the choice even if persistence throws.
-  localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
-}
-// loadSavedColumns restores user usage hidden columns from browser storage. Missing
-// preferences or parsing failures use the default hidden set so the table can render
-// despite unavailable saved preferences.
-const loadSavedColumns = () => {
-  try {
-    const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
-    const values = saved ? (JSON.parse(saved) as string[]) : DEFAULT_HIDDEN_COLUMNS
-    values.forEach((key) => hiddenColumns.add(key))
-  } catch {
-    // Use the default usage hidden set if browser preferences are inaccessible or
-    // malformed so the table can initialize its column controls.
-    DEFAULT_HIDDEN_COLUMNS.forEach((key) => hiddenColumns.add(key))
-  }
-}
+const visibleSortKeys = computed(() =>
+  visibleColumns.value.flatMap((column) =>
+    getColumnSortOptions(column).map((option) => option.key),
+  ),
+)
+
+// Losing the active sort column returns to page one with the default order. Other
+// visibility changes leave the server query and page intact.
+watch(visibleSortKeys, (keys) => {
+  if (!keys.includes(sortState.sort_by)) handleSort('created_at', 'desc')
+})
 
 // Error column constants define mandatory detail fields and a separate browser preference
 // namespace from the usage table.
@@ -1486,7 +1452,6 @@ const switchToErrors = () => {
 }
 
 onMounted(() => {
-  loadSavedColumns()
   loadSavedErrColumns()
   // Register one document listener for this mounted page so clicks outside the column menu
   // can close its floating controls.

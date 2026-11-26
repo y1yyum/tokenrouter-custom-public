@@ -99,6 +99,9 @@ type ExchangeOptions struct {
 	FilterThinking, FilterTools func([]byte) []byte
 	IsBudgetError               func(string) bool           // budget constraint message matcher
 	RectifyBudget               func([]byte) ([]byte, bool) // thinking budget repair callback
+	// AllowRepair checks a proposed fully prepared 400 recovery request before
+	// send. A denied candidate keeps the previous captured upstream rejection.
+	AllowRepair func(context.Context, []byte, []byte) bool
 	// ReplaceBody publishes selected successful recovery wire bytes to the
 	// caller's request state. Passthrough can also invoke it before dispatch
 	// when SynchronizeBody is enabled; its error aborts that path.
@@ -214,7 +217,7 @@ func Exchange(ctx context.Context, body []byte, options ExchangeOptions) (*http.
 					retryCtx, releaseRetryCtx := options.Context(ctx, options.Stream)
 					retryReq, retryWireBody, buildErr := options.Build(retryCtx, filteredBody)
 					releaseRetryCtx()
-					if buildErr == nil {
+					if buildErr == nil && allowExchangeRepair(ctx, options, retryReq, wireBody, retryWireBody) {
 						retryResp, retryErr := options.Do(retryReq)
 						if retryErr == nil {
 							if retryResp.StatusCode < 400 {
@@ -263,7 +266,7 @@ func Exchange(ctx context.Context, body []byte, options ExchangeOptions) (*http.
 									retryCtx2, releaseRetryCtx2 := options.Context(ctx, options.Stream)
 									retryReq2, retryWireBody2, buildErr2 := options.Build(retryCtx2, filteredBody2)
 									releaseRetryCtx2()
-									if buildErr2 == nil {
+									if buildErr2 == nil && allowExchangeRepair(ctx, options, retryReq2, wireBody, retryWireBody2) {
 										retryResp2, retryErr2 := options.Do(retryReq2)
 										if retryErr2 == nil {
 											if retryResp2.StatusCode < 400 {
@@ -298,7 +301,7 @@ func Exchange(ctx context.Context, body []byte, options ExchangeOptions) (*http.
 											Message:            options.Sanitize(retryErr2.Error()),
 										})
 										logger.LegacyPrintf("service.gateway", "Provider %d: tool-downgrade signature retry failed: %v", options.ProviderID, retryErr2)
-									} else {
+									} else if buildErr2 != nil {
 										logger.LegacyPrintf("service.gateway", "Provider %d: tool-downgrade signature retry build failed: %v", options.ProviderID, buildErr2)
 									}
 								}
@@ -323,7 +326,7 @@ func Exchange(ctx context.Context, body []byte, options ExchangeOptions) (*http.
 							_ = retryResp.Body.Close()
 						}
 						logger.LegacyPrintf("service.gateway", "Provider %d: signature error retry failed: %v", options.ProviderID, retryErr)
-					} else {
+					} else if buildErr != nil {
 						logger.LegacyPrintf("service.gateway", "Provider %d: signature error retry build request failed: %v", options.ProviderID, buildErr)
 					}
 
@@ -358,11 +361,11 @@ func Exchange(ctx context.Context, body []byte, options ExchangeOptions) (*http.
 					// letting an unchanged or expired case keep the captured
 					// rejection.
 					if applied && time.Since(retryStart) < options.MaxElapsed {
-						logger.LegacyPrintf("service.gateway", "Provider %d: detected budget_tokens constraint error, retrying with rectified budget (budget_tokens=%d, max_tokens=%d)", options.ProviderID, options.BudgetTokens, options.BudgetMaxTokens)
 						budgetRetryCtx, releaseBudgetRetryCtx := options.Context(ctx, options.Stream)
 						budgetRetryReq, budgetWireBody, buildErr := options.Build(budgetRetryCtx, rectifiedBody)
 						releaseBudgetRetryCtx()
-						if buildErr == nil {
+						if buildErr == nil && allowExchangeRepair(ctx, options, budgetRetryReq, wireBody, budgetWireBody) {
+							logger.LegacyPrintf("service.gateway", "Provider %d: detected budget_tokens constraint error, retrying with rectified budget (budget_tokens=%d, max_tokens=%d)", options.ProviderID, options.BudgetTokens, options.BudgetMaxTokens)
 							budgetRetryResp, retryErr := options.Do(budgetRetryReq)
 							if retryErr == nil {
 								if budgetRetryResp.StatusCode < 400 {
@@ -388,7 +391,7 @@ func Exchange(ctx context.Context, body []byte, options ExchangeOptions) (*http.
 								_ = budgetRetryResp.Body.Close()
 							}
 							logger.LegacyPrintf("service.gateway", "Provider %d: budget rectifier retry failed: %v", options.ProviderID, retryErr)
-						} else {
+						} else if buildErr != nil {
 							logger.LegacyPrintf("service.gateway", "Provider %d: budget rectifier retry build failed: %v", options.ProviderID, buildErr)
 						}
 					}
@@ -464,4 +467,16 @@ func Exchange(ctx context.Context, body []byte, options ExchangeOptions) (*http.
 	}
 
 	return resp, lastWireBody, nil
+}
+
+// allowExchangeRepair closes an unsent request when the gateway rejects its
+// prepared body. The caller retains the preceding HTTP rejection for output.
+func allowExchangeRepair(ctx context.Context, options ExchangeOptions, request *http.Request, initial, proposed []byte) bool {
+	if options.AllowRepair == nil || options.AllowRepair(ctx, initial, proposed) {
+		return true
+	}
+	if request.Body != nil {
+		_ = request.Body.Close()
+	}
+	return false
 }

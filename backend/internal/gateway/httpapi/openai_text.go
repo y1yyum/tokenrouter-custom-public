@@ -12,7 +12,9 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/billing"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/execution"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
 	"github.com/TokenFlux/TokenRouter/internal/moderation"
 	"github.com/TokenFlux/TokenRouter/internal/protocol"
@@ -62,7 +64,9 @@ type OpenAITextOptions struct {
 	CompactKeepaliveInterval time.Duration
 	// ForceCodexCLI records startup forced-client policy in Compact diagnostics;
 	// the upstream request builders receive their execution policy separately.
-	ForceCodexCLI bool
+	ForceCodexCLI        bool
+	ParameterPolicy      *requestpolicy.Service        // versioned entry policy
+	CompatibilityCohorts responsecompat.CohortRecorder // request cohort storage
 }
 
 // OpenAISessionInput identifies the distinct session derivation requested by
@@ -321,8 +325,9 @@ func NewOpenAITextHandler(options OpenAITextOptions, backend OpenAITextBackend, 
 
 // executeText translates admitted call data and current context hints into one
 // execution request. It borrows key, subscription and byte slices while
-// Execute runs with synchronous MessagesOutput; both returned execution result
-// and error are discarded by this HTTP adapter.
+// Execute runs with synchronous MessagesOutput and owns normal client delivery.
+// An unexpected Responses error before any delivery still needs a terminal
+// response. Other text entry kinds handle their errors inside their executors.
 func (h *OpenAITextHandler) executeText(c *gin.Context, call OpenAITextCall, kind execution.TextKind) {
 	request := execution.Request{
 		Hints:       requeststate.ExecutionHintsFromContext(c.Request.Context()),
@@ -343,7 +348,9 @@ func (h *OpenAITextHandler) executeText(c *gin.Context, call OpenAITextCall, kin
 		Text: execution.TextState{Kind: kind, Platform: call.Platform, SelectionContext: call.SelectionContext, Mapping: call.Mapping, SessionHashBody: call.SessionHashBody, ForwardModel: call.ForwardModel, PreviousResponseID: call.PreviousResponseID, ProviderLayerModel: call.ProviderLayerModel, PromptCacheKey: call.PromptCacheKey, NativeCompactionV2: call.NativeCompactionV2, LegacyCompact: call.LegacyCompact, RequireCompact: call.RequireCompact, RequiredCapability: call.RequiredCapability, RoutingStart: call.RoutingStart},
 	}
 	output := &MessagesOutput{ResponseSink: NewResponseSink(c), HTTP: c, Log: call.Log, StreamStarted: call.StreamStarted}
-	// Execution owns client output through this sink. The adapter discards its
-	// result and error, so the executor supplies any terminal rejection before returning.
-	_, _ = h.executor.Execute(c.Request.Context(), request, output)
+	result, err := h.executor.Execute(c.Request.Context(), request, output)
+	recordParameterExecution(c, result, err)
+	if kind == execution.TextOpenAIResponses && err != nil && !c.Writer.Written() && !FailoverClientGone(c) {
+		h.errorOutput().EnsureResponse(c, false, err)
+	}
 }

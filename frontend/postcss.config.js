@@ -1,5 +1,5 @@
 import autoprefixer from 'autoprefixer'
-import tailwindcss from 'tailwindcss'
+import tailwindcss from 'tailwindcss-v3'
 
 // postcss.config.js adjusts the bundled CJK font faces before generating and
 // prefixing application styles. The configured Noto font uses a limited weight
@@ -97,6 +97,32 @@ const adjustNotoSansScFontFace = () => ({
 })
 adjustNotoSansScFontFace.postcss = true
 
+// Nuxt UI utilities use overlapping class names. Scope their top-level selectors
+// after Tailwind 4 expands the feature stylesheet, including its portal content.
+const scopeCryptoUtilities = {
+  postcssPlugin: 'scope-crypto-utilities',
+  Once(root) {
+    if (!root.source?.input.file?.endsWith('crypto-ui.css')) return
+    root.walkAtRules('layer', (layer) => {
+      const scopedLayers = ['base', 'properties', 'utilities']
+      if (scopedLayers.includes(layer.params))
+        layer.walkRules((rule) => {
+          let ancestor = rule.parent
+          while (ancestor && ancestor !== layer) {
+            if (ancestor.type === 'rule') return
+            ancestor = ancestor.parent
+          }
+          rule.selectors = rule.selectors.map((selector) => `:where([data-crypto-ui]) ${selector}`)
+        })
+      // Distinct layer names keep Tailwind 3 from treating this sheet as host input.
+      layer.params = layer.params
+        .split(',')
+        .map((name) => 'crypto-' + name.trim())
+        .join(', ')
+    })
+  },
+}
+
 export default {
-  plugins: [adjustNotoSansScFontFace(), tailwindcss(), autoprefixer()],
+  plugins: [adjustNotoSansScFontFace(), scopeCryptoUtilities, tailwindcss(), autoprefixer()],
 }

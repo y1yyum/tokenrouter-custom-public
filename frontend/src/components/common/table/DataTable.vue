@@ -150,7 +150,19 @@
     @dragenter="handleTableDragOver"
     @dragleave="handleTableDragLeave"
   >
-    <table class="w-full min-w-max divide-y divide-gray-200 dark:divide-dark-700">
+    <table
+      class="divide-y divide-gray-200 dark:divide-dark-700"
+      :class="[isCompact && 'compact-table', compactSizing ? 'table-fixed' : 'w-full min-w-max']"
+      :style="compactSizing ? { width: `${compactSizing.width}px` } : undefined"
+    >
+      <colgroup v-if="compactSizing">
+        <col v-if="selectable" :style="{ width: `${SELECTION_COLUMN_WIDTH}px` }" />
+        <col
+          v-for="(column, index) in orderedColumns"
+          :key="column.key"
+          :style="{ width: `${compactSizing.columnWidths[index]}px` }"
+        />
+      </colgroup>
       <thead class="table-header bg-gray-50 dark:bg-dark-900">
         <tr>
           <th v-if="selectable" scope="col" class="sticky-header-cell table-selection-cell py-2">
@@ -171,12 +183,15 @@
             :key="column.key"
             :data-column-key="column.key"
             scope="col"
-            :style="{ width: column.width }"
-            :aria-sort="column.sortable ? getColumnAriaSort(column.key) : undefined"
+            :style="compactSizing ? undefined : { width: column.width }"
+            :aria-sort="getColumnAriaSort(column)"
             :class="[
               'sticky-header-cell py-2 text-left text-xs font-medium tracking-wider text-gray-500 dark:text-dark-300',
               getColumnLayoutClass(column),
-              { 'cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-700': column.sortable },
+              {
+                'cursor-pointer hover:bg-gray-100 dark:hover:bg-dark-700':
+                  usesLegacySortHeader(column),
+              },
               {
                 'opacity-50': draggingColumn === column.key,
                 'column-drop-before':
@@ -186,7 +201,7 @@
               getStickyColumnClass(column, index),
               column.class,
             ]"
-            @click="column.sortable && handleSort(column.key)"
+            @click="usesLegacySortHeader(column) && handleSort(column.key)"
             @dragover="handleColumnDragOver($event, column.key)"
             @dragenter="handleColumnDragOver($event, column.key)"
             @drop="handleColumnDrop($event, column.key)"
@@ -208,34 +223,73 @@
               >
                 <Icon name="grip" size="sm" class="pointer-events-none" :animate-on-hover="false" />
               </button>
-              <slot
-                :name="`header-${column.key}`"
-                :column="column"
-                :sort-key="sortKey"
-                :sort-order="sortOrder"
-              >
-                <span>{{ column.label }}</span>
-              </slot>
-              <span
-                v-if="column.sortable"
-                class="inline-flex h-5 w-4 flex-col items-center justify-center"
-                aria-hidden="true"
-              >
-                <Icon
-                  name="chevronUp"
-                  size="md"
-                  :animate-on-hover="false"
-                  class="h-2.5 w-2.5"
-                  :class="getSortIndicatorClass(column.key, 'asc')"
-                />
-                <Icon
-                  name="chevronDown"
-                  size="md"
-                  :animate-on-hover="false"
-                  class="-mt-0.5 h-2.5 w-2.5"
-                  :class="getSortIndicatorClass(column.key, 'desc')"
-                />
-              </span>
+              <div v-if="usesSortButtons(column)" class="min-w-0">
+                <slot
+                  v-if="column.subtitleSortLayout === 'subline' || $slots[`header-${column.key}`]"
+                  :name="`header-${column.key}`"
+                  :column="column"
+                  :sort-key="sortKey"
+                  :sort-order="sortOrder"
+                >
+                  <span>{{ column.label }}</span>
+                </slot>
+                <div
+                  class="flex flex-wrap items-center gap-x-2"
+                  :class="[
+                    getHeaderContentAlignmentClass(column),
+                    column.subtitleSortLayout === 'subline' && 'text-gray-500 dark:text-dark-400',
+                  ]"
+                >
+                  <button
+                    v-for="option in getColumnSortOptions(column)"
+                    :key="option.key"
+                    type="button"
+                    class="compact-sort-button"
+                    :aria-label="getSortButtonLabel(option.key, option.label)"
+                    @click.stop="handleSort(option.key)"
+                  >
+                    {{ option.label }}
+                    <Icon
+                      v-if="sortKey === option.key"
+                      :name="sortOrder === 'asc' ? 'chevronUp' : 'chevronDown'"
+                      size="sm"
+                      :animate-on-hover="false"
+                      class="shrink-0 text-primary-600 dark:text-primary-400"
+                      aria-hidden="true"
+                    />
+                  </button>
+                </div>
+              </div>
+              <template v-else>
+                <slot
+                  :name="`header-${column.key}`"
+                  :column="column"
+                  :sort-key="sortKey"
+                  :sort-order="sortOrder"
+                >
+                  <span>{{ column.label }}</span>
+                </slot>
+                <span
+                  v-if="usesLegacySortHeader(column)"
+                  class="inline-flex h-5 w-4 flex-col items-center justify-center"
+                  aria-hidden="true"
+                >
+                  <Icon
+                    name="chevronUp"
+                    size="md"
+                    :animate-on-hover="false"
+                    class="h-2.5 w-2.5"
+                    :class="getSortIndicatorClass(column.key, 'asc')"
+                  />
+                  <Icon
+                    name="chevronDown"
+                    size="md"
+                    :animate-on-hover="false"
+                    class="-mt-0.5 h-2.5 w-2.5"
+                    :class="getSortIndicatorClass(column.key, 'desc')"
+                  />
+                </span>
+              </template>
             </div>
           </th>
         </tr>
@@ -245,14 +299,18 @@
       >
         <!-- Loading cells retain the same column order, sticky positions, and padding as data cells. -->
         <tr v-if="loading" v-for="i in 5" :key="i" aria-hidden="true" data-loading-skeleton>
-          <td v-if="selectable" class="table-selection-cell py-3">
+          <td
+            v-if="selectable"
+            class="table-selection-cell"
+            :class="isCompact ? 'compact-body-cell' : 'py-3'"
+          >
             <Skeleton :width="16" :height="16" class="mx-auto" />
           </td>
           <td
             v-for="(column, colIndex) in orderedColumns"
             :key="column.key"
             :class="[
-              'whitespace-nowrap py-3',
+              bodyCellLayoutClass,
               getColumnLayoutClass(column),
               getStickyColumnClass(column, colIndex),
               column.class,
@@ -325,7 +383,11 @@
             }"
             @click="clickableRows && emit('rowClick', item.row)"
           >
-            <td v-if="selectable" class="table-selection-cell py-3">
+            <td
+              v-if="selectable"
+              class="table-selection-cell"
+              :class="isCompact ? 'compact-body-cell' : 'py-3'"
+            >
               <input
                 type="checkbox"
                 class="h-4 w-4"
@@ -347,7 +409,8 @@
               :key="column.key"
               :data-column-key="column.key"
               :class="[
-                'whitespace-nowrap py-3 text-sm text-gray-900 dark:text-dark-100',
+                'text-sm text-gray-900 dark:text-dark-100',
+                bodyCellLayoutClass,
                 getColumnLayoutClass(column),
                 getStickyColumnClass(column, colIndex),
                 column.class,
@@ -386,20 +449,21 @@ import {
   observeElementRect as observeElementRectDefault,
 } from '@tanstack/vue-virtual'
 import { useI18n } from 'vue-i18n'
-import type { Column } from './types'
+import { getColumnSortOptions, type Column } from './types'
 import Icon from '@/components/icons/Icon.vue'
 import Skeleton from '../Skeleton.vue'
-import { TABLE_DESKTOP_MEDIA_QUERY } from '@/constants/layout'
+import { useDesktopTableViewport } from '@/composables/useDesktopTableViewport'
 import { useTableColumnOrder } from '@/components/common/table/useTableColumnOrder'
 
 // DataTable.vue renders responsive data rows with sorting, controlled selection,
 // movable columns, and optional desktop virtualization. Desktop and mobile
 // presentations share row ordering and column definitions. Callers can provide a
 // decorative loading slot for a column whose layout includes more than one shape.
-// Selection retains
-// keys outside the visible page, and structural selection and action columns
-// keep their positions when data columns move. Browser preferences provide
-// independent sort and column order state for each caller-supplied storage key.
+// Selection retains keys outside the visible page, and structural selection and
+// action columns keep their positions when data columns move. Compact tables
+// allocate width from the scroll container and can associate several sort keys
+// with one movable column. Browser preferences keep sort and column order
+// independent for each caller-supplied storage key.
 //
 // Virtual rows use resolved row keys for measurement lookup, including array
 // indexes when explicit keys are absent. A separate identity comparison retains
@@ -409,15 +473,13 @@ import { useTableColumnOrder } from '@/components/common/table/useTableColumnOrd
 // range until the wrapper has a positive measured height. Desktop listeners and
 // drag animation frames are released as their owning view or component ends.
 
-// Translation and collation use the active application locale for selection
-// labels and human-readable text ordering.
+// Translation and collation use the active application locale for control
+// labels and human-readable text ordering within the table.
 const { t, locale } = useI18n()
 
-// isDesktopViewport chooses table or card rendering and controls whether
-// viewport-dependent tracking and virtualization are active.
-const isDesktopViewport = ref(
-  typeof window === 'undefined' ? true : window.matchMedia(TABLE_DESKTOP_MEDIA_QUERY).matches,
-)
+// isDesktopViewport shares the breakpoint with responsive cell components so
+// the table and its slots switch layouts in the same Vue update.
+const isDesktopViewport = useDesktopTableViewport()
 
 // emit publishes sort choices, row activation, and controlled selection changes
 // for the parent to apply to its data source.
@@ -428,9 +490,10 @@ const emit = defineEmits<{
   selectionChange: [keys: Array<string | number>] // Selected row change notification.
 }>()
 
-// Wrapper state tracks horizontal overflow and whether action contents require
-// their expanded presentation.
+// Wrapper state tracks usable desktop width, horizontal overflow, and whether
+// action contents require their expanded presentation.
 const tableWrapperRef = ref<HTMLElement | null>(null)
+const wrapperClientWidth = ref(0)
 const isScrollable = ref(false)
 const actionsColumnNeedsExpanding = ref(false)
 
@@ -459,11 +522,14 @@ const observeElementRectNonZero = (
     if (rect.height > 0) cb(rect)
   })
 
-// checkScrollable updates horizontal overflow state from the mounted table wrapper.
+// checkScrollable measures the scrollport of the mounted desktop table. The
+// client width excludes the vertical scrollbar and its reserved gutter, so
+// compact columns can fill the usable width without introducing horizontal scroll.
 const checkScrollable = () => {
-  if (tableWrapperRef.value) {
-    isScrollable.value = tableWrapperRef.value.scrollWidth > tableWrapperRef.value.clientWidth
-  }
+  const wrapper = tableWrapperRef.value
+  if (!wrapper) return
+  wrapperClientWidth.value = wrapper.clientWidth
+  isScrollable.value = wrapper.scrollWidth > wrapperClientWidth.value
 }
 
 // checkActionsColumnWidth measures the first row action controls to decide
@@ -514,8 +580,9 @@ const checkActionsColumnWidth = () => {
       }
     })
 
-    // Exclude both horizontal padding edges from the available cell width.
-    const cellWidth = (firstActionCell as HTMLElement).clientWidth - 32 // Remove both sixteen-pixel cell padding edges.
+    // Remove both horizontal padding edges from the width available to action controls.
+    const paddingWidth = isCompact.value ? 16 : 32
+    const cellWidth = (firstActionCell as HTMLElement).clientWidth - paddingWidth
 
     // Collapsed presentation is needed when actions exceed the cell.
     actionsColumnNeedsExpanding.value = totalWidth > cellWidth
@@ -525,12 +592,10 @@ const checkActionsColumnWidth = () => {
   })
 }
 
-// Desktop measurement and media listeners are retained here so viewport changes
-// and unmount can release the active subscriptions.
+// Desktop measurement subscriptions live here so viewport changes and unmount
+// can release the wrapper observer and any fallback window resize listener.
 let resizeObserver: ResizeObserver | null = null
 let resizeHandler: (() => void) | null = null
-let desktopViewportMediaQuery: MediaQueryList | null = null
-let desktopViewportListener: ((event: MediaQueryListEvent) => void) | null = null
 
 // detachDesktopTableTracking disconnects element observation and the optional
 // window resize listener. Viewport switches and component unmount call it before
@@ -572,39 +637,15 @@ const attachDesktopTableTracking = () => {
   }
 }
 
-onMounted(() => {
-  if (typeof window !== 'undefined') {
-    desktopViewportMediaQuery = window.matchMedia(TABLE_DESKTOP_MEDIA_QUERY)
-    isDesktopViewport.value = desktopViewportMediaQuery.matches
-    desktopViewportListener = (event: MediaQueryListEvent) => {
-      isDesktopViewport.value = event.matches
-    }
-    if (typeof desktopViewportMediaQuery.addEventListener === 'function') {
-      desktopViewportMediaQuery.addEventListener('change', desktopViewportListener)
-    } else {
-      desktopViewportMediaQuery.addListener(desktopViewportListener)
-    }
-  }
-})
-
-onUnmounted(() => {
-  detachDesktopTableTracking()
-  if (desktopViewportMediaQuery && desktopViewportListener) {
-    if (typeof desktopViewportMediaQuery.removeEventListener === 'function') {
-      desktopViewportMediaQuery.removeEventListener('change', desktopViewportListener)
-    } else {
-      desktopViewportMediaQuery.removeListener(desktopViewportListener)
-    }
-    desktopViewportListener = null
-  }
-  desktopViewportMediaQuery = null
-})
+onUnmounted(detachDesktopTableTracking)
 
 // Props configures table data, interaction, persistence, and responsive row
 // presentation for its parent.
 interface Props {
   columns: Column[] // Ordered caller column definitions.
   data: any[] // Current page row records.
+  /** Compact density tightens desktop spacing and sizes columns with explicit pixel widths. */
+  density?: 'default' | 'compact'
   /** Loading replaces row values and selection controls until the requested data arrives. */
   loading?: boolean
   stickyFirstColumn?: boolean // Pin first data column.
@@ -627,8 +668,11 @@ interface Props {
   sortStorageKey?: string
   /** A stable caller-specific key enables column movement and stores column order for this table in the current browser. */
   columnOrderStorageKey?: string
+  /** Used at mount when migrated column keys could not be saved in browser storage. */
+  initialColumnOrder?: readonly string[]
   /**
-   * serverSideSort publishes header choices to the parent and renders supplied row order directly; the parent applies sorting when requesting its data.
+   * serverSideSort publishes header choices and compact visibility fallbacks to the parent.
+   * The parent owns request parameters, including validating restored keys before its first request.
    */
   serverSideSort?: boolean
   /** Rows emit rowClick when enabled; interactive slot contents stop propagation when their action should not activate the containing row. */
@@ -652,6 +696,7 @@ interface Props {
 // props applies shared table interaction defaults while callers supply columns,
 // data, and optional stable persistence keys.
 const props = withDefaults(defineProps<Props>(), {
+  density: 'default',
   loading: false,
   stickyFirstColumn: true,
   stickyActionsColumn: true,
@@ -672,12 +717,64 @@ const sortKey = ref<string>('')
 const sortOrder = ref<'asc' | 'desc'>('asc')
 const actionsExpanded = ref(false)
 
+// Compact presentation opts into narrower spacing and native sort buttons.
+// Standard tables continue using the existing sortable header and body layout.
+const isCompact = computed(() => props.density === 'compact')
+const bodyCellLayoutClass = computed(() =>
+  isCompact.value ? 'compact-body-cell whitespace-normal py-2' : 'whitespace-nowrap py-3',
+)
+
+// Keep the built-in checkbox track at the same width as its w-11 cell.
+const SELECTION_COLUMN_WIDTH = 44
+
 // Column-order state separates persisted data-column ordering from transient
 // drag markers and animation-frame ownership for the active pointer operation.
 const { orderedColumns, movableColumns, canReorder, moveColumn } = useTableColumnOrder(
   () => props.columns,
   computed(() => props.columnOrderStorageKey),
+  () => props.initialColumnOrder ?? [],
 )
+
+// compactSizing keeps the baseline width of each visible column. Any surplus in
+// the scrollport is distributed to visible data columns in proportion to their
+// baselines, while the checkbox and action columns keep their assigned widths.
+// A narrow scrollport keeps the full baseline so the table can scroll.
+//
+// The colgroup follows display order. Cumulative rounding assigns every pixel
+// of surplus and keeps the last column within the table width.
+// If callers omit a usable pixel width, the table uses automatic column sizing.
+const compactSizing = computed(() => {
+  if (!isCompact.value || !orderedColumns.value.length) return null
+
+  const columns = []
+  let baseWidth = props.selectable ? SELECTION_COLUMN_WIDTH : 0
+  let dataWidth = 0
+  for (const column of orderedColumns.value) {
+    const pixels = column.width?.match(/^(\d+(?:\.\d+)?)px$/)?.[1]
+    const width = Number(pixels)
+    if (!Number.isFinite(width) || width <= 0) return null
+    const fixed = column.key === 'select' || column.key === 'actions'
+    columns.push({ width, fixed })
+    baseWidth += width
+    if (!fixed) dataWidth += width
+  }
+
+  const surplus = dataWidth > 0 ? Math.max(0, Math.floor(wrapperClientWidth.value - baseWidth)) : 0
+  let distributedSurplus = 0
+  let usedDataWidth = 0
+  const columnWidths = columns.map(({ width, fixed }) => {
+    if (fixed) return width
+    usedDataWidth += width
+    const nextSurplus = Math.round((surplus * usedDataWidth) / dataWidth)
+    const columnWidth = width + nextSurplus - distributedSurplus
+    distributedSurplus = nextSurplus
+    return columnWidth
+  })
+  return { width: baseWidth + surplus, columnWidths }
+})
+
+watch(compactSizing, checkScrollable, { flush: 'post' })
+
 const draggingColumn = ref<string | null>(null)
 const dropTarget = ref<{
   key: string // Target movable column identifier.
@@ -809,28 +906,23 @@ const collator = computed(
     }),
 )
 
-// getSortableKeys collects the keys currently declared sortable by the caller.
-const getSortableKeys = () => {
-  const keys = new Set<string>()
-  for (const col of props.columns) {
-    if (col.sortable) keys.add(col.key)
-  }
-  return keys
-}
+// Sort validation uses visible data keys, independently of the displayed column order.
+const sortableKeys = computed(
+  () =>
+    new Set(props.columns.flatMap((column) => getColumnSortOptions(column).map(({ key }) => key))),
+)
 
 // normalizeSortKey accepts a current sortable column key or returns an empty
 // key. Removed columns and keys whose sorting was disabled cannot restore an
 // obsolete browser sort preference.
 const normalizeSortKey = (candidate: string) => {
-  if (!candidate) return ''
-  const sortableKeys = getSortableKeys()
-  return sortableKeys.has(candidate) ? candidate : ''
+  return candidate && sortableKeys.value.has(candidate) ? candidate : ''
 }
 
 // normalizeSortOrder accepts descending order and normalizes every other value
 // to ascending. Browser preferences and optional defaults use this function
 // before their direction is applied or persisted.
-const normalizeSortOrder = (candidate: any): 'asc' | 'desc' => {
+const normalizeSortOrder = (candidate: unknown): 'asc' | 'desc' => {
   return candidate === 'desc' ? 'desc' : 'asc'
 }
 
@@ -842,10 +934,10 @@ const readPersistedSortState = (): PersistedSortState | null => {
   try {
     const raw = localStorage.getItem(props.sortStorageKey)
     if (!raw) return null
-    const parsed = JSON.parse(raw) as Partial<PersistedSortState>
-    const key = normalizeSortKey(typeof parsed.key === 'string' ? parsed.key : '')
+    const parsed = JSON.parse(raw) as Partial<PersistedSortState> | null
+    const key = normalizeSortKey(typeof parsed?.key === 'string' ? parsed.key : '')
     if (!key) return null
-    return { key, order: normalizeSortOrder(parsed.order) }
+    return { key, order: normalizeSortOrder(parsed?.order) }
   } catch (e) {
     // Ignore unusable browser preferences so a valid configured default can
     // still establish sorting for the current columns.
@@ -854,13 +946,17 @@ const readPersistedSortState = (): PersistedSortState | null => {
   }
 }
 
-// writePersistedSortState saves the supplied sort choice when a storage key
-// exists. Storage errors are logged and leave the current reactive sort state
-// available to the table.
-const writePersistedSortState = (state: PersistedSortState) => {
+// writePersistedSortState saves the active choice or removes a stale compact
+// preference when no fallback exists. Storage errors leave the active in-memory
+// choice available to the table.
+const writePersistedSortState = (state: PersistedSortState | null) => {
   if (!props.sortStorageKey) return
   try {
-    localStorage.setItem(props.sortStorageKey, JSON.stringify(state))
+    if (state) {
+      localStorage.setItem(props.sortStorageKey, JSON.stringify(state))
+    } else {
+      localStorage.removeItem(props.sortStorageKey)
+    }
   } catch (e) {
     // Keep the selected order active in this page when persistence fails, while
     // logging why another visit may not restore it.
@@ -868,25 +964,25 @@ const writePersistedSortState = (state: PersistedSortState) => {
   }
 }
 
-// resolveInitialSortState prefers a valid stored sort choice over the configured
-// default. If neither names a currently sortable column it returns null, leaving
-// the existing empty sort state untouched.
-const resolveInitialSortState = (): PersistedSortState | null => {
-  const persisted = readPersistedSortState()
-  if (persisted) return persisted
-
+// resolveDefaultSortState accepts the configured fallback only while its data
+// key is offered by a visible column. Without a usable key, the table has no
+// default ordering to apply.
+const resolveDefaultSortState = (): PersistedSortState | null => {
   const key = normalizeSortKey(props.defaultSortKey || '')
   if (!key) return null
   return { key, order: normalizeSortOrder(props.defaultSortOrder) }
 }
 
-// applySortState copies a resolved key and direction into the reactive table
-// state. A null choice leaves the current values unchanged for callers that have
-// no valid sort configuration.
+// resolveInitialSortState prefers a visible stored sort key to the configured default choice.
+const resolveInitialSortState = () => readPersistedSortState() ?? resolveDefaultSortState()
+
+// applySortState updates header and local row state before saving the resulting
+// preference. For compact tables, clearing the active choice also clears an
+// unusable saved key so a future column change cannot silently restore it.
 const applySortState = (state: PersistedSortState | null) => {
-  if (!state) return
-  sortKey.value = state.key
-  sortOrder.value = state.order
+  sortKey.value = state?.key ?? ''
+  sortOrder.value = state?.order ?? 'asc'
+  if (state || isCompact.value) writePersistedSortState(state)
 }
 
 // getSortIndicatorClass highlights the currently active column and direction arrow.
@@ -896,10 +992,31 @@ const getSortIndicatorClass = (key: string, order: 'asc' | 'desc') => {
     : 'text-gray-300 transition-colors dark:text-dark-500'
 }
 
-// getColumnAriaSort describes the active direction for accessible sortable headers.
-const getColumnAriaSort = (key: string) => {
-  if (sortKey.value !== key) return 'none'
+// usesSortButtons selects native buttons for compound headers and compact sorts.
+const usesSortButtons = (column: Column) =>
+  Boolean(column.sortOptions?.length || (isCompact.value && column.sortable))
+
+// usesLegacySortHeader keeps whole-cell clicks for existing standard sortable columns.
+const usesLegacySortHeader = (column: Column) => column.sortable && !usesSortButtons(column)
+
+// getColumnAriaSort assigns the direction to the header that owns the active
+// data key. Only legacy sortable headers advertise an inactive direction.
+const getColumnAriaSort = (column: Column) => {
+  if (!getColumnSortOptions(column).some(({ key }) => key === sortKey.value)) {
+    return usesLegacySortHeader(column) ? 'none' : undefined
+  }
   return sortOrder.value === 'asc' ? 'ascending' : 'descending'
+}
+
+// getSortButtonLabel names the data field and includes its current direction
+// only when that button owns the active sort.
+const getSortButtonLabel = (key: string, label: string) => {
+  if (sortKey.value !== key) return label
+  const direction =
+    sortOrder.value === 'asc'
+      ? t('common.sortAscending', 'Ascending')
+      : t('common.sortDescending', 'Descending')
+  return `${label} (${direction})`
 }
 
 // getHeaderContentAlignmentClass aligns header content with the configured cell
@@ -998,13 +1115,19 @@ const resolveStableRowKey = (row: any): string | number | undefined => {
 // reordered or replaced between renders.
 const resolveRowKey = (row: any, index: number) => resolveStableRowKey(row) ?? index
 
-// Column computations omit actions from mobile fields and track sortable key
-// changes for measurement and stored-sort reconciliation.
+// Mobile fields use the displayed column order and render actions separately.
+// Width tracking also follows declared widths and the keys offered in headers.
 const dataColumns = computed(() =>
   orderedColumns.value.filter((column) => column.key !== 'actions'),
 )
 const columnsSignature = computed(() =>
-  orderedColumns.value.map((column) => `${column.key}:${column.sortable ? '1' : '0'}`).join('|'),
+  JSON.stringify(
+    orderedColumns.value.map((column) => [
+      column.key,
+      column.width,
+      getColumnSortOptions(column).map(({ key }) => key),
+    ]),
+  ),
 )
 
 watch(
@@ -1038,25 +1161,14 @@ watch(actionsExpanded, async () => {
   checkScrollable()
 })
 
-// handleSort toggles the current column direction or starts a different column
-// ascending. Server sorting publishes the choice to the parent, while client
-// sorting relies on the reactive sorted-data computation.
+// handleSort reverses the active key or starts a different visible key in
+// ascending order. It applies the choice before notifying a server-backed
+// parent, while client-backed tables reorder their rows locally.
 const handleSort = (key: string) => {
-  let newOrder: 'asc' | 'desc' = 'asc'
-  if (sortKey.value === key) {
-    newOrder = sortOrder.value === 'asc' ? 'desc' : 'asc'
-  }
-
-  if (props.serverSideSort) {
-    // Server-side sort mode: emit event and update internal state for UI feedback
-    sortKey.value = key
-    sortOrder.value = newOrder
-    emit('sort', key, newOrder)
-  } else {
-    // Client-side sort mode: just update internal state
-    sortKey.value = key
-    sortOrder.value = newOrder
-  }
+  if (!normalizeSortKey(key)) return
+  const order = sortKey.value === key && sortOrder.value === 'asc' ? 'desc' : 'asc'
+  applySortState({ key, order })
+  if (props.serverSideSort) emit('sort', key, order)
 }
 
 // sortedData returns server-ordered rows directly or creates a stable client-
@@ -1299,12 +1411,13 @@ const getStickyColumnClass = (column: Column, index: number) => {
   return classes.join(' ')
 }
 
-// getColumnLayoutClass gives selection cells their dedicated layout and reduces
-// data-cell padding for wider column sets.
-// The same class applies to header and body cells so their widths stay aligned.
+// getColumnLayoutClass preserves selection width and gives compact columns a
+// uniform horizontal inset. Standard data cells vary their padding with the
+// column count. Headers and body cells share the same horizontal spacing.
 const getColumnLayoutClass = (column?: Column) => {
   // Custom selection slots use the same width as built-in row selection.
   if (column?.key === 'select') return 'table-selection-cell'
+  if (isCompact.value) return 'px-2'
   const columnCount = props.columns.length
 
   // Reduce padding at wider column counts to leave more horizontal space for cell contents.
@@ -1319,48 +1432,30 @@ const getColumnLayoutClass = (column?: Column) => {
   }
 }
 
-// didInitSort blocks sort persistence until mounted initialization resolves and
-// applies the saved or default sort for the current table columns.
-const didInitSort = ref(false)
-
+// Restore the header without requesting rows. The server-backed caller already
+// owns the initial fetch and must validate its restored key against visible columns.
 onMounted(() => {
-  const initial = resolveInitialSortState()
-  applySortState(initial)
-  didInitSort.value = true
+  if (props.columns.length) applySortState(resolveInitialSortState())
 })
 
 watch(
-  columnsSignature,
-  () => {
-    // If current sort key is no longer sortable/visible, fall back to default/persisted.
-    const normalized = normalizeSortKey(sortKey.value)
+  sortableKeys,
+  (keys) => {
+    if (keys.has(sortKey.value)) return
     if (!sortKey.value) {
       const initial = resolveInitialSortState()
-      applySortState(initial)
+      if (initial) applySortState(initial)
       return
     }
 
-    if (!normalized) {
-      const fallback = resolveInitialSortState()
-      if (fallback) {
-        applySortState(fallback)
-      } else {
-        sortKey.value = ''
-        sortOrder.value = 'asc'
-      }
+    // A compact table replaces a hidden active key with its declared fallback.
+    // Save that choice before emitting so the parent can reload page one once,
+    // using the final visible columns in its request.
+    const fallback = isCompact.value ? resolveDefaultSortState() : resolveInitialSortState()
+    applySortState(fallback)
+    if (fallback && isCompact.value && props.serverSideSort) {
+      emit('sort', fallback.key, fallback.order)
     }
-  },
-  { flush: 'post' },
-)
-
-watch(
-  [sortKey, sortOrder],
-  ([nextKey, nextOrder]) => {
-    if (!didInitSort.value) return
-    if (!props.sortStorageKey) return
-    const key = normalizeSortKey(nextKey)
-    if (!key) return
-    writePersistedSortState({ key, order: normalizeSortOrder(nextOrder) })
   },
   { flush: 'post' },
 )
@@ -1390,6 +1485,21 @@ defineExpose({
   --sticky-boundary-line-color: theme('borderColor.dark.600');
 }
 
+/* Fixed compact widths override the page layout's shared max-content minimum. */
+.table-wrapper .compact-table.table-fixed {
+  min-width: 0;
+}
+
+/* Keep compact insets when TablePageLayout supplies padding to all table cells. */
+.table-wrapper .compact-table :is(th, td):not(.table-selection-cell) {
+  @apply px-2;
+}
+
+.table-wrapper .compact-table .compact-body-cell {
+  @apply whitespace-normal py-2;
+  overflow-wrap: anywhere;
+}
+
 /* Selection cells share the table selection layout. */
 .table-wrapper .table-selection-cell {
   @apply w-11 min-w-11 px-3 text-center;
@@ -1398,6 +1508,11 @@ defineExpose({
 /* Drag handles match the sort indicator height. */
 .column-drag-handle {
   @apply inline-flex h-5 w-4 shrink-0 cursor-grab items-center justify-center rounded-compact text-gray-400 hover:text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 active:cursor-grabbing dark:text-dark-400 dark:hover:text-primary-400;
+}
+
+/* A sort option keeps its label and active direction within one keyboard target. */
+.compact-sort-button {
+  @apply inline-flex max-w-full cursor-pointer items-center gap-0.5 rounded-compact text-left text-xs hover:text-primary-600 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 dark:hover:text-primary-400;
 }
 
 .column-drop-before {

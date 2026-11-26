@@ -34,6 +34,9 @@ declare module 'vue-router' {
     // payment availability has loaded as false.
     requiresPayment?: boolean // Internal payment availability check.
 
+    requiresCrypto?: boolean // Requires explicitly enabled standalone chain deposits.
+    section?: 'overview' | 'addresses' | 'sweep' | 'deposits' | 'chains' | 'config' // Crypto console panel.
+
     // requiresRiskControl rejects a loaded false risk-control flag; administrator
     // redirects target settings while ordinary users return to their dashboard.
     requiresRiskControl?: boolean // Risk-control availability check flag.

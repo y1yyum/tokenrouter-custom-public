@@ -18,6 +18,7 @@
           <!-- The TOTP card decides visibility from the feature status returned by its own endpoint. -->
           <ProfileTotpCard />
           <ProfilePasskeyCard v-if="passkeyEnabled" :enabled="passkeyEnabled" />
+          <ProfileBarkCard v-if="user && appStore.cachedPublicSettings?.crypto_enabled === true" />
 
           <ProfileBalanceNotifyCard
             v-if="user && balanceLowNotifyEnabled"
@@ -36,6 +37,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref } from 'vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
+import ProfileBarkCard from '@/components/user/profile/ProfileBarkCard.vue'
 import ProfileBalanceNotifyCard from '@/components/user/profile/ProfileBalanceNotifyCard.vue'
 import ProfileInfoCard from '@/components/user/profile/ProfileInfoCard.vue'
 import ProfilePasswordForm from '@/components/user/profile/ProfilePasswordForm.vue'

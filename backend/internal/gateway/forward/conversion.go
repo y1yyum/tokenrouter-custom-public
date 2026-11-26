@@ -10,6 +10,7 @@ import (
 
 	"github.com/tidwall/gjson"
 
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	protocolcore "github.com/TokenFlux/TokenRouter/internal/protocol"
 	"github.com/TokenFlux/TokenRouter/internal/protocol/bridge"
 	protocolopenai "github.com/TokenFlux/TokenRouter/internal/protocol/openai"
@@ -63,7 +64,8 @@ func AsResponses(ctx context.Context, p ConversionPorts, in ConversionInput, bod
 	originalModel := responsesReq.Model
 	clientStream := responsesReq.Stream
 
-	anthropicReq, err := bridge.ResponsesToAnthropicRequest(&responsesReq)
+	keepCache := requestpolicy.HasClientCache(ctx)
+	anthropicReq, err := bridge.ResponsesToAnthropicRequest(&responsesReq, keepCache)
 	if err != nil {
 		return nil, fmt.Errorf("convert responses to anthropic: %w", err)
 	}
@@ -110,7 +112,9 @@ func AsResponses(ctx context.Context, p ConversionPorts, in ConversionInput, bod
 		anthropicBody = p.Mimic(ctx, anthropicBody, anthropicReq.System, mappedModel)
 	}
 
-	anthropicBody = p.CacheLimit(anthropicBody)
+	if !keepCache {
+		anthropicBody = p.CacheLimit(anthropicBody)
+	}
 
 	if err := p.Credential(ctx); err != nil {
 		return nil, fmt.Errorf("get access token: %w", err)

@@ -7,12 +7,14 @@ import { useClipboard } from '@/composables/useClipboard'
 import { COPY_FEEDBACK_MS } from '@/constants/ui'
 import Icon from '@/components/icons/Icon.vue'
 import IdBadge from '@/components/common/IdBadge.vue'
+import { truncateMiddle } from '@/utils/format'
 
 /**
  * RequestIdLink.vue displays a copyable request identifier and an optional
- * administrator diagnostic link. Role changes update link availability, while
- * clipboard feedback belongs to the value that was copied so reused table cells do not
- * display a checkmark for a different request.
+ * administrator diagnostic link. Compact cells shorten the visible text, while the
+ * tooltip, query, and clipboard use the complete identifier for the original request.
+ * Role changes update link availability, and clipboard feedback belongs to the value
+ * that was copied so reused cells do not display a checkmark for a different request.
  *
  * The copy operation captures the identifier before awaiting the clipboard helper.
  * Successful completion records that captured value and replaces the feedback timeout;
@@ -22,8 +24,8 @@ import IdBadge from '@/components/common/IdBadge.vue'
  */
 
 /**
- * props supplies the request identifier, diagnostic link permission, and choice
- * between truncated inline text and full wrapping display.
+ * props supplies the request identifier, diagnostic link permission, and display
+ * settings for regular cells, compact cells, and full wrapping detail views.
  */
 const props = withDefaults(
   defineProps<{
@@ -38,6 +40,11 @@ const props = withDefaults(
      * inline display and truncates the text.
      */
     full?: boolean
+    /**
+     * compact shows a middle ellipsis and omits the badge unless full display takes
+     * precedence. Link, clipboard, and tooltip values come from the original identifier.
+     */
+    compact?: boolean
   }>(),
   {
     link: true,
@@ -86,6 +93,20 @@ const destination = computed(() => ({
 }))
 
 /**
+ * useCompactDisplay enables the compact presentation unless the caller requests the
+ * full identifier to wrap in a detail view.
+ */
+const useCompactDisplay = computed(() => props.compact && !props.full)
+
+/**
+ * identifierLabel provides the visible request identifier, using the shared middle
+ * ellipsis in compact cells. Navigation and clipboard continue using the original prop.
+ */
+const identifierLabel = computed(() =>
+  useCompactDisplay.value ? truncateMiddle(props.value) : props.value,
+)
+
+/**
  * showCopied requires successful feedback to belong to the identifier currently
  * rendered, hiding stale feedback when a cell is reused.
  */
@@ -124,24 +145,25 @@ onBeforeUnmount(() => clearTimeout(copiedTimer))
   <span
     v-if="value"
     class="inline-flex min-w-0 items-center gap-1.5 align-middle"
-    :class="full ? 'max-w-full' : 'max-w-56'"
+    :class="full || useCompactDisplay ? 'max-w-full' : 'max-w-56'"
   >
-    <IdBadge />
+    <IdBadge v-if="!useCompactDisplay" />
     <RouterLink
       v-if="canOpenDetails"
       :to="destination"
       :title="value"
+      :aria-label="useCompactDisplay ? value : undefined"
       :class="full ? 'break-all' : 'truncate'"
       class="min-w-0 font-mono text-xs text-link"
       @click.stop
-      >{{ value }}</RouterLink
+      >{{ identifierLabel }}</RouterLink
     >
     <span
       v-else
       class="min-w-0 font-mono text-xs text-gray-600 dark:text-dark-200"
       :class="full ? 'break-all' : 'truncate'"
       :title="value"
-      >{{ value }}</span
+      >{{ identifierLabel }}</span
     >
     <button
       type="button"

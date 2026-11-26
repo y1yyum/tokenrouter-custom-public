@@ -1,0 +1,27 @@
+/* crypto-ui.css loads the Nuxt UI utilities alongside the host theme. */
+/* Nuxt UI needs Tailwind 4 utilities. The host keeps its Tailwind 3 preflight,
+   theme, and layout styles. PostCSS scopes the extra utilities to the crypto UI. */
+@layer theme, base, components, utilities;
+@import 'tailwindcss/theme.css' layer(theme);
+@import 'tailwindcss/utilities.css' layer(utilities) source(none);
+@import '@nuxt/ui';
+
+@source '../../node_modules/.nuxt-ui/ui';
+@source '../components/crypto';
+@source '../components/deposit';
+@source '../components/common/LoadingSpinner.vue';
+@source '../components/common/TransactionList.vue';
+@source '../components/common/TransactionListCard.vue';
+@source '../components/user/KeyRotationGateNotice.vue';
+@source '../components/user/KeyRotationRiskAckBanner.vue';
+@source '../views/admin/CryptoView.vue';
+@source '../views/user/DepositView.vue';
+
+[data-crypto-ui] {
+  --ui-primary: var(--tr-color-accent);
+  --ui-radius: var(--radius-control);
+}
+
+[data-crypto-ui] [data-reka-popper-content-wrapper] {
+  z-index: var(--z-teleport-dropdown) !important;
+}

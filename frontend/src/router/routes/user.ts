@@ -156,6 +156,17 @@ export const userRoutes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/deposit',
+    name: 'CryptoDeposit',
+    component: () => import('@/views/user/DepositView.vue'),
+    meta: {
+      requiresAuth: true,
+      titleKey: 'deposit.title',
+      descriptionKey: 'deposit.description',
+      requiresCrypto: true,
+    },
+  },
+  {
     path: '/orders',
     name: 'OrderList',
     component: () => import('@/views/user/UserOrdersView.vue'),

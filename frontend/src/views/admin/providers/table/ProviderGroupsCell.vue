@@ -1,5 +1,23 @@
 <template>
-  <div v-if="groups && groups.length > 0" class="relative max-w-56">
+  <div v-if="compact && groups?.length" class="flex min-w-0 items-center gap-1 whitespace-nowrap">
+    <GroupBadge
+      :name="groups[0].name"
+      :display-brand="groups[0].display_brand"
+      :rate-multiplier="groups[0].rate_multiplier"
+      :show-rate="false"
+      class="min-w-0 max-w-full"
+    />
+    <ProviderCellDetails :label="t('admin.providers.groupCountTotal', { count: groups.length })">
+      <template #trigger>
+        <span v-if="groups.length > 1">+{{ groups.length - 1 }}</span>
+        <Icon v-else name="more" size="xs" />
+      </template>
+      <ul class="space-y-1 break-words">
+        <li v-for="group in groups" :key="group.id">{{ group.name }}</li>
+      </ul>
+    </ProviderCellDetails>
+  </div>
+  <div v-else-if="groups && groups.length > 0" class="relative max-w-56">
     <!-- Group badges wrap within the bounded two-row display area. -->
     <div class="flex flex-wrap gap-1 max-h-14 overflow-hidden">
       <GroupBadge
@@ -58,7 +76,7 @@
     <!-- The backdrop closes the group popover. -->
     <div v-if="showPopover" class="fixed inset-0 z-40" @click="showPopover = false" />
   </div>
-  <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
+  <span v-else class="text-xs text-gray-400 dark:text-dark-500">{{ compact ? '—' : '-' }}</span>
 </template>
 
 <script setup lang="ts">
@@ -68,6 +86,7 @@ import Icon from '@/components/icons/Icon.vue'
 import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import GroupBadge from '@/components/common/GroupBadge.vue'
+import ProviderCellDetails from './ProviderCellDetails.vue'
 import type { Group } from '@/api/groups.types'
 import { getFloatingPanelPosition, type FloatingPanelPosition } from '@/utils/floatingPanel'
 
@@ -83,6 +102,7 @@ import { getFloatingPanelPosition, type FloatingPanelPosition } from '@/utils/fl
  */
 interface Props {
   groups: Group[] | null | undefined // assigned groups or no data
+  compact?: boolean // Summarize groups on one line with a complete detail list.
   /**
    * Visible slot budget defaults to four; an overflowing list reserves one slot for the more
    * button.

@@ -57,6 +57,7 @@ func ProjectOpenAIFailoverError(err *forwardcore.UpstreamFailoverError) *OpenAIF
 		TooLarge:                gatewayprovider.IsOpenAIRequestBodyTooLarge(err),
 		TooLargeMessage:         forwardcore.OpenAIRequestBodyTooLargeClientMessage,
 		ContinuationUnsupported: err.Reason == forwardcore.OpenAIHTTPContinuationUnsupportedReason,
+		ResponsesCompatibility:  err.Reason == forwardcore.OpenAIResponsesCompatibilityReason,
 		Credential:              err.IsCredentialFailure(),
 		CapacityShed:            gatewayprovider.IsOpenAICapacityShed(err),
 		SilentRefusal:           forwardcore.IsOpenAISilentRefusalErrorBody(err.ResponseBody),

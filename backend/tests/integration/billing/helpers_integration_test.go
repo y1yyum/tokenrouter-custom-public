@@ -6,6 +6,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"sync"
 	"testing"
 	"time"
 
@@ -23,6 +24,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
+	"github.com/TokenFlux/TokenRouter/internal/scheduler"
 	schedulerpostgres "github.com/TokenFlux/TokenRouter/internal/scheduler/postgres"
 )
 
@@ -514,4 +516,155 @@ func mustCreateSubscription(t *testing.T, client *dbent.Client, s *billing.UserS
 // floating-point fixture value.
 func float64Ptr(v float64) *float64 {
 	return &v
+}
+
+// settleConcurrently releases callers together once every worker has reached
+// the start gate. The commands slice transfers exclusive access to each
+// worker until the batch joins, making the normalized fingerprints available
+// to the caller for ledger assertions.
+//
+// Each worker writes to its own result slot. The join provides synchronization
+// for reading both commands and results and completes before any fixture
+// cleanup can run. A shared deadline bounds database lock waits.
+func settleConcurrently(t *testing.T, funds *billing.Funds, commands []billing.UsageBillingCommand) []usageBillingApplyOutcome {
+	t.Helper()
+	// Bound lock waits for the batch while allowing all workers to report errors.
+	ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
+	defer cancel()
+
+	outcomes := make([]usageBillingApplyOutcome, len(commands))
+	start := make(chan struct{})
+	var ready, workers sync.WaitGroup
+	ready.Add(len(commands))
+	for i := range commands {
+		// Wait until every caller is ready to contend. Each worker owns a
+		// separate command because settlement normalizes the command in place.
+		workers.Go(func() {
+			ready.Done()
+			<-start
+			outcomes[i].result, outcomes[i].err = funds.Settle(ctx, &commands[i])
+		})
+	}
+	ready.Wait()
+	close(start)
+	workers.Wait()
+	return outcomes
+}
+
+// newContentionPayer persists a payer with five dollars in the billing fixture.
+func newContentionPayer(t *testing.T) int64 {
+	t.Helper()
+	return mustCreateUser(t, testEntClient(t), &identity.User{
+		Email:   "contention-" + uuid.NewString() + "@example.com",
+		Balance: 5,
+	}).ID
+}
+
+// assertContentionBalance checks the persisted wallet to all eight decimal places.
+func assertContentionBalance(t *testing.T, ctx context.Context, payerID int64, want string) {
+	t.Helper()
+	var balance string
+	require.NoError(t, integrationDB.QueryRowContext(ctx,
+		"SELECT balance::text FROM users WHERE id = $1", payerID).Scan(&balance))
+	require.Equal(t, want, balance)
+}
+
+// assertContentionKey checks exact Key counter values and the persisted status.
+func assertContentionKey(t *testing.T, ctx context.Context, keyID int64, wantAmount, wantStatus string) {
+	t.Helper()
+	var amounts [4]string
+	var status string
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT quota_used::text, usage_5h::text, usage_1d::text, usage_7d::text, status
+		FROM api_keys WHERE id = $1
+	`, keyID).Scan(&amounts[0], &amounts[1], &amounts[2], &amounts[3], &status))
+	require.Equal(t, [4]string{wantAmount, wantAmount, wantAmount, wantAmount}, amounts, "key %d", keyID)
+	require.Equal(t, wantStatus, status, "key %d", keyID)
+}
+
+// assertContentionClaim checks each table for a selected financial identity.
+// An empty expected fingerprint represents an absent row; the fixtures only
+// persist generated SHA-256 fingerprints.
+func assertContentionClaim(t *testing.T, ctx context.Context, keyID int64, requestID, wantLive, wantArchived string) {
+	t.Helper()
+	var live, archived sql.NullString
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT
+			(SELECT request_fingerprint FROM usage_billing_dedup WHERE request_id = $1 AND api_key_id = $2),
+			(SELECT request_fingerprint FROM usage_billing_dedup_archive WHERE request_id = $1 AND api_key_id = $2)
+	`, requestID, keyID).Scan(&live, &archived))
+	require.Equal(t, sql.NullString{String: wantLive, Valid: wantLive != ""}, live, "live claim for %s/%d", requestID, keyID)
+	require.Equal(t, sql.NullString{String: wantArchived, Valid: wantArchived != ""}, archived, "archive claim for %s/%d", requestID, keyID)
+}
+
+// assertContentionProvider checks provider counters and quota crossing events in storage.
+func assertContentionProvider(t *testing.T, ctx context.Context, providerID int64, wantAmount string, wantEvents int) {
+	t.Helper()
+	var amounts [4]string
+	var events int
+	require.NoError(t, integrationDB.QueryRowContext(ctx, `
+		SELECT COALESCE(extra->>'quota_used', '0')::numeric(20,8)::text,
+		       COALESCE(extra->>'quota_daily_used', '0')::numeric(20,8)::text,
+		       COALESCE(extra->>'quota_weekly_used', '0')::numeric(20,8)::text,
+		       COALESCE(extra->>'quota_monthly_used', '0')::numeric(20,8)::text,
+		       (SELECT COUNT(*) FROM scheduler_outbox WHERE provider_id = $1 AND event_type = $2)
+		FROM providers WHERE id = $1
+	`, providerID, scheduler.SchedulerOutboxEventProviderChanged).Scan(&amounts[0], &amounts[1], &amounts[2], &amounts[3], &events))
+	require.Equal(t, [4]string{wantAmount, wantAmount, wantAmount, wantAmount}, amounts)
+	require.Equal(t, wantEvents, events)
+}
+
+// ageContentionClaim moves a committed claim past the cutoff it returns.
+// The test owns the supplied identity and uses the cutoff with the real
+// retention job while the other recently created claims remain live.
+func ageContentionClaim(t *testing.T, cmd billing.UsageBillingCommand) time.Time {
+	t.Helper()
+	cutoff := time.Now().UTC().AddDate(0, 0, -365)
+	// Set the fixture timestamp before running retention so the archive receives
+	// the fingerprint originally saved by settlement for this identity.
+	_, err := integrationDB.ExecContext(t.Context(), `
+		UPDATE usage_billing_dedup SET created_at = $1 WHERE request_id = $2 AND api_key_id = $3
+	`, cutoff.Add(-time.Hour), cmd.RequestID, cmd.APIKeyID)
+	require.NoError(t, err)
+	return cutoff
+}
+
+// installContentionCommitFault defers a payer-scoped constraint to transaction
+// commit. The trigger either raises a named check violation or waits for the
+// test's advisory lock, which permits interrupting a specific database session.
+func installContentionCommitFault(t *testing.T, payerID int64) {
+	t.Helper()
+	// Register teardown before DDL so a partial setup or failed assertion cannot
+	// leave the fault installed for the next case in the package database.
+	t.Cleanup(func() { removeContentionCommitFault(t) })
+	_, err := integrationDB.ExecContext(t.Context(), fmt.Sprintf(`
+		CREATE FUNCTION billing_contention_commit_fault() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN
+			PERFORM pg_advisory_xact_lock(-NEW.id);
+			RAISE EXCEPTION USING ERRCODE = '23514', CONSTRAINT = 'billing_contention_commit_fault',
+				MESSAGE = 'injected billing commit failure';
+		END;
+		$$;
+		CREATE CONSTRAINT TRIGGER billing_contention_commit_fault
+		AFTER UPDATE ON users DEFERRABLE INITIALLY DEFERRED FOR EACH ROW
+		WHEN (OLD.id = %d AND OLD.balance IS DISTINCT FROM NEW.balance)
+		EXECUTE FUNCTION billing_contention_commit_fault();
+	`, payerID))
+	require.NoError(t, err)
+}
+
+// removeContentionCommitFault clears test DDL and can run again during cleanup.
+// It uses an independent deadline because the test context is canceled before
+// cleanup functions run.
+func removeContentionCommitFault(t *testing.T) {
+	t.Helper()
+	// Give DDL removal a fresh context so canceled settlement calls cannot leave
+	// the payer-specific trigger active for other tests.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	_, err := integrationDB.ExecContext(ctx, `
+		DROP TRIGGER IF EXISTS billing_contention_commit_fault ON users;
+		DROP FUNCTION IF EXISTS billing_contention_commit_fault();
+	`)
+	require.NoError(t, err)
 }

@@ -86,14 +86,18 @@ type failingRevocationRepository struct {
 }
 
 // newOAuthFixture mounts OAuth beside the existing production MCP handler.
-// Each test owns an isolated migrated database. OAuth and manual grants both
-// begin at numeric identifier one so cross-source ownership checks are exercised.
+// Each test owns an isolated migrated database and uses its allocated user IDs
+// for browser and token admission. OAuth and manual grant IDs can still coincide
+// because the two credential stores allocate those identifiers independently.
 func newOAuthFixture(t *testing.T) *oauthFixture {
 	t.Helper()
-	base := newMCPFixture(t)
 	db := postgrescontainer.NewOrExternal(t, os.Getenv("TOKENROUTER_MCP_TEST_DSN"), "tokenrouter_f06_contract")
-	var id int64
-	require.NoError(t, db.QueryRow(`INSERT INTO users(email,password_hash,role,status) VALUES('oauth@example.invalid','unused','admin','active') RETURNING id`).Scan(&id))
+	const ownerEmail = "oauth@example.invalid"
+	const createAdmin = `INSERT INTO users(email,password_hash,role,status) VALUES($1,'unused','admin','active') RETURNING id`
+	var ownerID, otherUserID int64
+	require.NoError(t, db.QueryRowContext(t.Context(), createAdmin, ownerEmail).Scan(&ownerID))
+	require.NoError(t, db.QueryRowContext(t.Context(), createAdmin, "oauth-other@example.invalid").Scan(&otherUserID))
+	base := newMCPFixtureForUsers(t, ownerID, otherUserID)
 	router, ok := base.handler.router.(*gin.Engine)
 	require.True(t, ok)
 	server := httptest.NewUnstartedServer(router)
@@ -111,14 +115,14 @@ func newOAuthFixture(t *testing.T) *oauthFixture {
 			c.AbortWithStatus(401)
 			return
 		}
-		authctx.SetPrincipal(c, identity.Principal{UserID: id, Role: identity.RoleAdmin, CredentialKind: "jwt", SessionID: "fixture-session"}, 1, "oauth@example.invalid")
+		authctx.SetPrincipal(c, identity.Principal{UserID: ownerID, Role: identity.RoleAdmin, CredentialKind: "jwt", SessionID: "fixture-session"}, 1, ownerEmail)
 		c.Next()
 	}))
 	server.Start()
 	t.Cleanup(server.Close)
 	current, err := oauth.Current(t.Context())
 	require.NoError(t, err)
-	return &oauthFixture{config: config, mcpFixture: base, repo: repo, db: db, oauth: current, http: server, userID: id}
+	return &oauthFixture{config: config, mcpFixture: base, repo: repo, db: db, oauth: current, http: server, userID: ownerID}
 }
 
 // register creates a public OAuth client through the actual dynamic registration endpoint.

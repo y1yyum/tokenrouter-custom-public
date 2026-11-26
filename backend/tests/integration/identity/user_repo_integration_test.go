@@ -957,3 +957,42 @@ func (s *UserRepoSuite) TestDeductBalance_NotFound() {
 	s.Require().Error(err, "expected error for non-existent user")
 	s.Require().ErrorIs(err, identitycore.ErrUserNotFound)
 }
+
+// TestGetFirstAdmin_RandomOutOfOrderIDsPrefersEarliestCreatedAt verifies that
+// GetFirstAdmin chooses the earliest created active administrator even when a
+// later admin receives a smaller numeric ID, and tie-breaks equal timestamps by
+// ascending ID. It also asserts auto-allocated IDs land inside the 4-digit pool.
+func (s *UserRepoSuite) TestGetFirstAdmin_RandomOutOfOrderIDsPrefersEarliestCreatedAt() {
+	randUser := s.mustCreateUser(&identitycore.User{Email: "rand-range@example.com"})
+	s.Require().GreaterOrEqual(randUser.ID, int64(1000))
+	s.Require().LessOrEqual(randUser.ID, int64(9999))
+
+	earliest := time.Date(2026, 3, 1, 8, 0, 0, 0, time.UTC)
+	later := earliest.Add(time.Hour)
+
+	_, err := s.db.ExecContext(
+		s.ctx,
+		`INSERT INTO users (id, email, password_hash, role, status, concurrency, created_at, updated_at)
+		 VALUES
+		   (95000, 'earliest-high-id@example.com', 'hash', 'admin', 'active', 5, $1, $1),
+		   (1002, 'later-low-id@example.com', 'hash', 'admin', 'active', 5, $2, $2)`,
+		earliest, later,
+	)
+	s.Require().NoError(err)
+
+	got, err := s.repo.GetFirstAdmin(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(95000), got.ID)
+
+	_, err = s.db.ExecContext(
+		s.ctx,
+		`INSERT INTO users (id, email, password_hash, role, status, concurrency, created_at, updated_at)
+		 VALUES (85000, 'tie-earliest@example.com', 'hash', 'admin', 'active', 5, $1, $1)`,
+		earliest,
+	)
+	s.Require().NoError(err)
+
+	gotTie, err := s.repo.GetFirstAdmin(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Equal(int64(85000), gotTie.ID)
+}

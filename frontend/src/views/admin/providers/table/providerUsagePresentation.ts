@@ -3,6 +3,9 @@ import type {
   GeminiCredentials,
   Provider,
   ProviderUsageInfo,
+  UpstreamUsageInfo,
+  UpstreamUsageLimit,
+  UpstreamUsageQueryResult,
   WindowStats,
 } from '@/api/admin/providers.types'
 import { formatCompactNumber } from '@/utils/format'
@@ -706,4 +709,69 @@ export function buildLocalQuotaBar(
     }
   }
   return { utilization, resetsAt }
+}
+
+// resolveUpstreamUsageResult prefers a manual observation, then accepts a validated
+// saved CN usage monitor snapshot for the platforms that publish it.
+export function resolveUpstreamUsageResult(
+  provider: Provider,
+  result: UpstreamUsageQueryResult | null | undefined,
+): UpstreamUsageQueryResult | null {
+  if (result) return result
+  if (!['kimi', 'zhipu', 'deepseek'].includes(provider.platform)) return null
+  const raw = provider.extra?.cn_usage_monitor_snapshot
+  if (!raw || typeof raw !== 'object') return null
+
+  const snapshot = raw as Record<string, unknown>
+  if (
+    snapshot.version !== 1 ||
+    typeof snapshot.adapter !== 'string' ||
+    typeof snapshot.observed_at !== 'string' ||
+    !Number.isFinite(Date.parse(snapshot.observed_at))
+  )
+    return null
+
+  return {
+    provider_id: provider.id,
+    adapter: snapshot.adapter,
+    observed_at: snapshot.observed_at,
+    provider: typeof snapshot.provider === 'string' ? snapshot.provider : provider.platform,
+    mode: typeof snapshot.mode === 'string' ? snapshot.mode : '',
+    unit: typeof snapshot.unit === 'string' ? snapshot.unit : undefined,
+    balance: snapshot.balance as UpstreamUsageQueryResult['balance'],
+    balances: snapshot.balances as UpstreamUsageQueryResult['balances'],
+    available: typeof snapshot.available === 'boolean' ? snapshot.available : undefined,
+    limits: snapshot.limits as UpstreamUsageQueryResult['limits'],
+    subscription: snapshot.subscription as UpstreamUsageQueryResult['subscription'],
+    expires_at: typeof snapshot.expires_at === 'string' ? snapshot.expires_at : undefined,
+  }
+}
+
+// normalizeUpstreamUsageResult adapts older flat observations to the nested response shape.
+export function normalizeUpstreamUsageResult(result: UpstreamUsageQueryResult | null) {
+  if (!result) return null
+  return (
+    result.usage ?? {
+      provider: result.provider || '',
+      mode: result.mode || '',
+      unit: result.unit,
+      balance: result.balance,
+      balances: result.balances,
+      available: result.available,
+      limits: result.limits,
+      subscription: result.subscription,
+      expires_at: result.expires_at,
+    }
+  )
+}
+
+// upstreamUsageLimits shows provider-wide windows before any separate subscription windows.
+export function upstreamUsageLimits(usage: UpstreamUsageInfo | null) {
+  return [...(usage?.limits ?? []), ...(usage?.subscription?.limits ?? [])]
+}
+
+// upstreamUsageUtilization preserves measured zero and distinguishes missing limits.
+export function upstreamUsageUtilization(limit: UpstreamUsageLimit): number | null {
+  if (!limit.limit || limit.limit <= 0 || limit.used == null) return null
+  return Math.max(0, (limit.used / limit.limit) * 100)
 }

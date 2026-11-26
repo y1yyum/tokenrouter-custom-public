@@ -36,9 +36,12 @@ const (
 
 	// Client messages and stable reasons identify gateway and credential failures
 	// for protocol output, request diagnostics, and provider-recovery decisions.
-	OpenAIRequestBodyTooLargeClientMessage     = "Request payload is too large"
-	OpenAIUpstreamAccessStateReason            = GatewayFailureReason("openai_upstream_access_state")
-	OpenAIHTTPContinuationUnsupportedReason    = GatewayFailureReason("openai_http_continuation_unsupported")
+	OpenAIRequestBodyTooLargeClientMessage  = "Request payload is too large"
+	OpenAIUpstreamAccessStateReason         = GatewayFailureReason("openai_upstream_access_state")
+	OpenAIHTTPContinuationUnsupportedReason = GatewayFailureReason("openai_http_continuation_unsupported")
+	// OpenAIResponsesCompatibilityReason preserves the final status established
+	// by a converted synchronous attempt when provider recovery is exhausted.
+	OpenAIResponsesCompatibilityReason         = GatewayFailureReason("openai_responses_compatibility")
 	AntigravityCredentialRejectedClientMessage = "Antigravity rejected the OAuth credential after refresh; reauthorize the provider and verify project_id"
 	AntigravityCredentialRejectedReason        = GatewayFailureReason("antigravity_oauth_credential_rejected")
 

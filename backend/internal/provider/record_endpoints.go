@@ -146,6 +146,20 @@ func (r *Record) IsOpenAIPassthroughEnabled() bool {
 	return false
 }
 
+// AllowsResponsesRequestRewrite reports whether native API-key Responses may
+// adapt a foreground request. Enabling passthrough alone retains its original
+// wire contract; an operator must separately opt that provider into rewriting.
+func (r *Record) AllowsResponsesRequestRewrite() bool {
+	if !IsOpenAIAPIKeyProvider(r) {
+		return false
+	}
+	if !r.IsOpenAIPassthroughEnabled() {
+		return true
+	}
+	allow, _ := r.Extra["openai_passthrough_allow_rewrite"].(bool)
+	return allow
+}
+
 // IsOpenAIResponsesFlattenNamespacesEnabled reads the namespace-flattening
 // opt-in for OpenAI OAuth. Nil records, other types, missing configuration, and
 // nonboolean values return false, leaving namespace encoding with the standard

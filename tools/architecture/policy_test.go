@@ -21,6 +21,9 @@ func TestDependencyBoundaries(t *testing.T) {
 		imported string // candidate dependency import path
 		allowed  bool   // expected dependency admission result
 	}{
+		{"internal/billing/postgres/wallet_batch.go", "github.com/shopspring/decimal", true},
+		{"internal/billing/postgres/settlement.go", "github.com/shopspring/decimal", false},
+		{"internal/billing/postgres/wallet_batch.go", "github.com/shopspring/decimal/other", false},
 		{"migrations/platform_independent_pricing_integration_test.go", modulePath + "/internal/billing/pricing", false},
 		{"migrations/helpers_test.go", modulePath + "/internal/billing/pricing", false},
 		{"migrations/pricing_merge_test.go", modulePath + "/internal/billing/pricing", false},
@@ -117,6 +120,26 @@ func TestDependencyBoundaries(t *testing.T) {
 		{"internal/ops/service_test.go", "log", true},
 		{"internal/infra/telemetry/logging/logger.go", "log", true},
 		{"cmd/server/main.go", "log", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "database/sql", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "entgo.io/ent/dialect/sql", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/payment/testkit", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/payment/postgres", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/payment/testkit/extra", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/app/legacybridge", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "net/rpc", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "github.com/lib/pq", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration.go", "database/sql", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration.go", modulePath + "/internal/payment/testkit", false},
+		{"internal/cryptopay/new_test.go", modulePath + "/internal/settings", false},
+		{"internal/cryptopay/config_test.go", modulePath + "/internal/settings", true},
+		{"internal/cryptopay/config_test.go", modulePath + "/internal/service", false},
+		{"internal/cryptopay/config.go", modulePath + "/internal/settings", true},
+		{"internal/cryptopay/sweeper/jobs_integration_test.go", modulePath + "/migrations", true},
+		{"internal/cryptopay/sweeper/new_test.go", modulePath + "/migrations", false},
+		{"internal/cryptopay/wallet/shards/shards.go", "database/sql", false},
+		{"internal/cryptopay/wallet/shards/shards.go", modulePath + "/internal/payment/postgres", false},
+		{"internal/cryptopay/scanner/worker.go", modulePath + "/internal/cryptopay/wallet", false},
+		{"internal/cryptopay/unregistered/client.go", "net/http", false},
 		{"internal/newmodule/new.go", modulePath + "/internal/provider", false},
 		{"internal/provider/new.go", modulePath + "-other/internal/billing", false},
 	}
@@ -191,7 +214,9 @@ func TestScanFailsClosed(t *testing.T) {
 	}
 }
 
-// 保留例外需要真实消费者；删除或迁移文件后，陈旧许可应及时退出。
+// TestFilePermissionsHaveConsumers verifies that every file permission still
+// has a source importing its target. Removed or relocated fixtures leave stale
+// entries that fail this check and must be removed with the source change.
 func TestFilePermissionsHaveConsumers(t *testing.T) {
 	sources, err := scan(filepath.Join("..", "..", "backend"))
 	if err != nil {
@@ -218,6 +243,32 @@ func TestFilePermissionsHaveConsumers(t *testing.T) {
 			for _, target := range strings.Fields(targets) {
 				if !imports[file][target] {
 					t.Errorf("标准库例外缺少实际消费者：%s -> %s", file, target)
+				}
+			}
+		}
+	}
+	for dir, boundary := range chainPaymentPackages {
+		for _, test := range []bool{false, true} {
+			used := make(map[string]bool)
+			for _, src := range sources {
+				if filepath.ToSlash(filepath.Dir(src.Path)) != dir || strings.HasSuffix(src.Path, "_test.go") != test {
+					continue
+				}
+				for _, imp := range src.Imports {
+					used[imp.Path] = true
+				}
+			}
+			list := boundary.Production
+			if test {
+				list = boundary.Tests
+			}
+			for _, name := range strings.Fields(list) {
+				target := importName(name)
+				if name == "migrations" {
+					target = modulePath + "/migrations"
+				}
+				if !used[target] {
+					t.Errorf("unused chain payment dependency: %s -> %s", dir, target)
 				}
 			}
 		}

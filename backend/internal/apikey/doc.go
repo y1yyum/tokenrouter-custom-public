@@ -17,6 +17,8 @@
 // identity for later connection turns. admin.go, credential_rotation.go and
 // managed_key.go handle administrative writes, secret replacement and hidden
 // execution Keys.
+// rotation_gate.go evaluates active console credentials and expiring risk
+// confirmations for chain deposits.
 //
 // options.go and clock.go supply startup dependencies and service time; ip.go
 // and invalid_auth_abuse_limiter.go check address rules and bound invalid-client

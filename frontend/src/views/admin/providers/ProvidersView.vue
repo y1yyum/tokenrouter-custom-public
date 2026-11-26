@@ -1,5 +1,6 @@
 <template>
-  <AppLayout>
+  <AppLayout fit-viewport>
+    <!-- The desktop viewport bounds the scroll container used by the virtualized provider rows. -->
     <TablePageLayout>
       <template #filters>
         <div class="flex flex-col-reverse gap-2 lg:flex-row lg:items-start lg:justify-between">
@@ -241,6 +242,8 @@
                           <button
                             v-for="col in toggleableColumns"
                             :key="col.key"
+                            :data-toggle-column="col.key"
+                            :aria-pressed="isColumnVisible(col.key)"
                             @click="toggleColumn(col.key)"
                             class="dropdown-item-sm justify-between rounded-control"
                           >
@@ -294,7 +297,9 @@
       <template #table>
         <div ref="providerTableRef" class="flex min-h-0 flex-1 flex-col overflow-hidden">
           <DataTable
-            column-order-storage-key="admin-providers-column-order"
+            density="compact"
+            :column-order-storage-key="columnOrderStorageKey"
+            :initial-column-order="initialColumnOrder"
             ref="dataTableRef"
             :columns="cols"
             :data="providers"
@@ -305,7 +310,7 @@
             default-sort-key="name"
             default-sort-order="asc"
             :sort-storage-key="PROVIDER_SORT_STORAGE_KEY"
-            :estimate-row-height="156"
+            :estimate-row-height="96"
             :overscan="5"
             :virtualize-threshold="50"
           >
@@ -314,6 +319,7 @@
                 type="checkbox"
                 class="h-4 w-4 cursor-pointer rounded-compact border-gray-300 text-primary-600 focus:ring-primary-500"
                 :checked="allVisibleSelected"
+                :aria-label="t('admin.providers.compact.selectPage')"
                 @click.stop
                 @change="toggleSelectAllVisible($event)"
               />
@@ -322,105 +328,211 @@
               <input
                 type="checkbox"
                 :checked="isSelected(row.id)"
+                :aria-label="t('admin.providers.compact.selectProvider', { name: row.name })"
                 @change="toggleSel(row.id)"
                 class="h-4 w-4 cursor-pointer rounded-compact border-gray-300 text-primary-600 focus:ring-primary-500"
               />
             </template>
-            <template #cell-id="{ value }">
-              <span class="font-mono text-xs text-gray-500 dark:text-gray-400">#{{ value }}</span>
-            </template>
-            <template #cell-name="{ row, value }">
-              <div class="flex flex-col">
+            <template #cell-identity="{ row }">
+              <div class="min-w-0 text-xs leading-4">
                 <HelpTooltip
                   v-if="providerHomepageUrl(row)"
                   :content="providerHomepageUrl(row)"
                   width-class="w-max max-w-sm break-all"
-                  class="-ml-1 self-start"
+                  class="-ml-1 max-w-full self-start"
                 >
                   <template #trigger>
                     <a
                       :href="providerHomepageUrl(row)"
                       target="_blank"
                       rel="noopener noreferrer"
-                      class="font-medium text-link"
+                      class="block min-w-0 truncate font-medium text-link"
+                      :title="row.name"
+                      >{{ row.name }}</a
                     >
-                      {{ value }}
-                    </a>
                   </template>
                 </HelpTooltip>
-                <span v-else class="font-medium text-gray-900 dark:text-white">{{ value }}</span>
-                <span
-                  v-if="providerDisplayEmail(row)"
-                  class="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]"
-                  :title="
-                    providerDisplayEmail(row) +
-                    (row.parent_chatgpt_account_id ? ' · ' + row.parent_chatgpt_account_id : '')
-                  "
-                >
-                  {{ providerDisplayEmail(row) }}
-                </span>
-              </div>
-            </template>
-            <template #cell-notes="{ value }">
-              <span
-                v-if="value"
-                :title="value"
-                class="block max-w-xs truncate text-sm text-gray-600 dark:text-gray-300"
-                >{{ value }}</span
-              >
-              <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
-            </template>
-            <template #cell-platform_type="{ row }">
-              <div class="flex min-w-0 flex-col gap-1">
-                <div class="flex flex-wrap items-center gap-1">
-                  <PlatformTypeBadge
-                    :platform="row.platform"
-                    :type="row.type"
-                    :auth-mode="getOpenAIAuthMode(row)"
-                    :plan-type="getProviderPlanType(row)"
-                    :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
-                    :subscription-expires-at="
-                      row.credentials?.subscription_expires_at || row.parent_subscription_expires_at
-                    "
-                  />
+                <ProviderCellDetails v-else :label="row.name">
+                  <template #trigger
+                    ><span class="truncate font-medium">{{ row.name }}</span></template
+                  >
+                  <p class="whitespace-pre-wrap break-words">{{ row.name }}</p>
+                </ProviderCellDetails>
+                <div class="flex min-w-0 items-center gap-1 text-gray-500 dark:text-gray-400">
+                  <span class="truncate font-mono">#{{ row.id }}</span>
+                  <button
+                    type="button"
+                    class="shrink-0 rounded-compact px-0.5 hover:text-primary-600 focus-visible:outline focus-visible:outline-primary-600"
+                    :aria-label="t('admin.providers.compact.copyId', { id: row.id })"
+                    :title="t('admin.providers.compact.copyId', { id: row.id })"
+                    @click="copyToClipboard(String(row.id))"
+                    ><Icon name="copy" size="xs"
+                  /></button>
+                </div>
+                <div v-if="providerDisplayEmail(row)" class="min-w-0">
+                  <ProviderCellDetails :label="providerDisplayEmail(row)">
+                    <template #trigger
+                      ><span class="truncate text-gray-500 dark:text-gray-400">{{
+                        providerDisplayEmail(row)
+                      }}</span></template
+                    >
+                    <p class="break-all">{{ providerDisplayEmail(row) }}</p>
+                    <p v-if="row.parent_chatgpt_account_id" class="break-all">{{
+                      row.parent_chatgpt_account_id
+                    }}</p>
+                  </ProviderCellDetails>
+                </div>
+                <div v-if="row.notes" class="min-w-0">
+                  <ProviderCellDetails :label="t('admin.providers.columns.notes')">
+                    <template #trigger>
+                      <span
+                        class="break-all text-left text-gray-600 dark:text-gray-300"
+                        :class="providerDisplayEmail(row) ? 'line-clamp-1' : 'line-clamp-2'"
+                        >{{ row.notes }}</span
+                      >
+                    </template>
+                    <p class="whitespace-pre-wrap break-words">{{ row.notes }}</p>
+                  </ProviderCellDetails>
                 </div>
               </div>
             </template>
-            <template #cell-capacity="{ row }">
-              <ProviderCapacityCell :provider="row" />
+            <template #cell-platform_type="{ row }">
+              <div class="min-w-0 text-xs leading-4">
+                <PlatformTypeBadge
+                  class="provider-platform-summary max-w-full align-top"
+                  :platform="row.platform"
+                  :type="row.type"
+                  :auth-mode="getOpenAIAuthMode(row)"
+                  :plan-type="getProviderPlanType(row)"
+                  :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
+                  :subscription-expires-at="
+                    row.credentials?.subscription_expires_at || row.parent_subscription_expires_at
+                  "
+                />
+                <div class="flex min-w-0 items-center gap-1">
+                  <span class="min-w-0 truncate" :title="row.proxy?.name">{{
+                    row.proxy?.name || t('admin.providers.compact.direct')
+                  }}</span>
+                  <span v-if="row.proxy?.country_code" class="shrink-0 text-gray-500">{{
+                    row.proxy.country_code
+                  }}</span>
+                  <span
+                    v-if="row.proxy?.expires_at"
+                    class="min-w-0 truncate rounded-compact px-1"
+                    :class="proxyExpiryBadge(row.proxy)"
+                    :title="proxyExpiryText(row.proxy)"
+                    >{{ proxyExpiryText(row.proxy) }}</span
+                  >
+                  <ProviderCellDetails :label="t('admin.providers.compact.connectionDetails')">
+                    <template #trigger><Icon name="more" size="xs" /></template>
+                    <div class="space-y-2">
+                      <PlatformTypeBadge
+                        :platform="row.platform"
+                        :type="row.type"
+                        :auth-mode="getOpenAIAuthMode(row)"
+                        :plan-type="getProviderPlanType(row)"
+                        :privacy-mode="row.extra?.privacy_mode || row.parent_privacy_mode"
+                        :subscription-expires-at="
+                          row.credentials?.subscription_expires_at ||
+                          row.parent_subscription_expires_at
+                        "
+                      />
+                      <div v-if="row.proxy" class="break-words">
+                        {{ row.proxy.name }}
+                        <span v-if="row.proxy.country_code"> · {{ row.proxy.country_code }}</span>
+                        <p v-if="row.proxy.expires_at"
+                          >{{ proxyExpiryText(row.proxy) }} ·
+                          {{ formatDateTime(row.proxy.expires_at) }}</p
+                        >
+                      </div>
+                      <p v-else>{{ t('admin.providers.compact.direct') }}</p>
+                      <p v-if="row.proxy_fallback_origin_id" class="break-words">{{
+                        fallbackOriginText(row)
+                      }}</p>
+                    </div>
+                  </ProviderCellDetails>
+                </div>
+                <div v-if="row.proxy_fallback_origin_id" class="flex min-w-0 items-center gap-1">
+                  <span
+                    class="truncate rounded-compact bg-amber-100 px-1 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300"
+                    :title="fallbackOriginText(row)"
+                    >{{ t('admin.providers.fallbackActive') }}</span
+                  >
+                  <button
+                    type="button"
+                    class="shrink-0 whitespace-nowrap rounded-compact px-1 text-link"
+                    @click="onRevertFallback(row)"
+                    >{{ t('admin.providers.revertProxy') }}</button
+                  >
+                </div>
+              </div>
             </template>
-            <template #cell-status="{ row }">
-              <div class="flex items-center gap-1.5">
-                <ProviderStatusIndicator
-                  :provider="row"
-                  @show-temp-unsched="handleShowTempUnsched"
+            <template #header-status_schedule="{ column }">
+              <div class="flex items-center">
+                <span>{{ column.label }}</span>
+                <HelpTooltip
+                  :content="t('admin.providers.schedulerScore.hint')"
+                  width-class="w-80"
                 />
               </div>
             </template>
-            <template #cell-schedulable="{ row }">
-              <!-- Scheduling changes are saved asynchronously; handleToggleSchedulable applies the returned value to the displayed row after completion. -->
-              <Toggle
-                :model-value="row.schedulable"
-                size="sm"
-                :disabled="togglingSchedulable === row.id"
-                off-tone="soft"
-                :title="
-                  row.schedulable
-                    ? t('admin.providers.schedulableEnabled')
-                    : t('admin.providers.schedulableDisabled')
-                "
-                @update:model-value="handleToggleSchedulable(row)"
-              />
+            <template #cell-status_schedule="{ row }">
+              <ProviderStatusIndicator
+                compact
+                :provider="row"
+                @show-temp-unsched="handleShowTempUnsched"
+              >
+                <template #controls>
+                  <div
+                    class="flex min-w-0 items-center gap-1 text-xs"
+                    :data-test="'scheduler-score-' + row.id"
+                  >
+                    <Toggle
+                      :model-value="row.schedulable"
+                      size="sm"
+                      :disabled="togglingSchedulable === row.id"
+                      off-tone="soft"
+                      :aria-label="t('admin.providers.columns.schedulable')"
+                      :title="
+                        row.schedulable
+                          ? t('admin.providers.schedulableEnabled')
+                          : t('admin.providers.schedulableDisabled')
+                      "
+                      @update:model-value="handleToggleSchedulable(row)"
+                    />
+                    <template v-if="getSchedulerScoreRows(row).length">
+                      <span
+                        class="min-w-0 truncate font-mono"
+                        :title="formatSchedulerScoreRow(getSchedulerScoreRows(row)[0])"
+                        >{{ formatSchedulerScoreRow(getSchedulerScoreRows(row)[0]) }}</span
+                      >
+                      <ProviderCellDetails :label="t('admin.providers.columns.schedulerScore')">
+                        <template #trigger>
+                          <span v-if="getSchedulerScoreRows(row).length > 1"
+                            >+{{ getSchedulerScoreRows(row).length - 1 }}</span
+                          >
+                          <Icon v-else name="more" size="xs" />
+                        </template>
+                        <div class="mb-1 text-gray-500 dark:text-gray-400"
+                          >{{ t('admin.providers.schedulerScore.baseShort') }} /
+                          {{ t('admin.providers.schedulerScore.stickyShort') }}</div
+                        >
+                        <ul class="space-y-1 break-words font-mono">
+                          <li
+                            v-for="score in getSchedulerScoreRows(row)"
+                            :key="String(score.group_id)"
+                            >{{ formatSchedulerScoreRow(score) }}</li
+                          >
+                        </ul>
+                      </ProviderCellDetails>
+                    </template>
+                    <span v-else class="text-gray-500">—</span>
+                  </div>
+                </template>
+              </ProviderStatusIndicator>
             </template>
-            <template #cell-today_stats="{ row }">
-              <ProviderTodayStatsCell
-                :stats="todayStatsByProviderId[String(row.id)] ?? null"
-                :loading="todayStatsLoading"
-                :error="todayStatsError"
-              />
-            </template>
-            <template #cell-groups="{ row }">
-              <ProviderGroupsCell :groups="row.groups" :max-display="4" />
+            <template #cell-capacity="{ row }">
+              <ProviderCapacityCell compact :provider="row" />
             </template>
             <template #header-usage="{ column }">
               <div class="flex items-center">
@@ -430,7 +542,9 @@
             </template>
             <template #cell-usage="{ row }">
               <ProviderUsageCell
+                compact
                 :provider="row"
+                :today-stats-error="todayStatsError"
                 :today-stats="todayStatsByProviderId[String(row.id)] ?? null"
                 :today-stats-loading="todayStatsLoading"
                 :manual-refresh-token="usageManualRefreshToken"
@@ -446,119 +560,68 @@
                 @usage-loaded="handleProviderUsageLoaded(row.id, $event)"
               />
             </template>
-            <template #cell-proxy="{ row }">
-              <div class="flex flex-col gap-1">
-                <div v-if="row.proxy" class="flex items-center gap-2">
-                  <span class="text-sm text-gray-700 dark:text-gray-300">{{ row.proxy.name }}</span>
+            <template #cell-groups="{ row }">
+              <div class="min-w-0 space-y-0.5 text-xs leading-4">
+                <ProviderGroupsCell compact :groups="row.groups" />
+                <div class="flex min-w-0 items-center gap-2 tabular-nums">
                   <span
-                    v-if="row.proxy.country_code"
-                    class="text-xs text-gray-500 dark:text-gray-400"
+                    class="truncate"
+                    :title="t('admin.providers.columns.priority') + ' ' + row.priority"
+                    >{{ t('admin.providers.compact.priority', { value: row.priority }) }}</span
                   >
-                    ({{ row.proxy.country_code }})
-                  </span>
-                </div>
-                <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
-                <div
-                  v-if="row.proxy && row.proxy.expires_at"
-                  class="flex items-center gap-2 text-xs"
-                >
-                  <span class="text-gray-600 dark:text-gray-300">{{
-                    formatDateTime(row.proxy.expires_at)
-                  }}</span>
-                  <span :class="proxyExpiryBadge(row.proxy)">{{ proxyExpiryText(row.proxy) }}</span>
-                </div>
-                <div v-if="row.proxy_fallback_origin_id" class="flex items-center gap-1">
                   <span
-                    class="inline-flex items-center px-1.5 py-0.5 rounded-compact text-xs font-medium bg-yellow-100 text-yellow-800 dark:bg-yellow-900 dark:text-yellow-200"
-                    :title="
-                      t('admin.providers.fallbackActiveTip', {
-                        origin: row.proxy_fallback_origin_name,
+                    class="truncate"
+                    :title="t('admin.providers.columns.billingRateMultiplier')"
+                    >{{
+                      t('admin.providers.compact.rate', {
+                        value: (row.rate_multiplier ?? 1).toFixed(2),
                       })
-                    "
+                    }}</span
                   >
-                    {{ t('admin.providers.fallbackActive') }}
-                  </span>
-                  <button
-                    class="text-xs px-1.5 py-0.5 rounded-compact border border-gray-300 dark:border-dark-500 text-gray-600 dark:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700"
-                    @click="onRevertFallback(row)"
-                  >
-                    {{ t('admin.providers.revertProxy') }}
-                  </button>
                 </div>
               </div>
             </template>
-            <template #cell-rate_multiplier="{ row }">
-              <span class="text-sm font-mono text-gray-700 dark:text-gray-300">
-                {{ (row.rate_multiplier ?? 1).toFixed(2) }}x
-              </span>
-            </template>
-            <template #cell-priority="{ value }">
-              <span class="text-sm text-gray-700 dark:text-gray-300">{{ value }}</span>
-            </template>
-            <template #header-scheduler_score="{ column }">
-              <div class="flex items-center">
-                <span>{{ column.label }}</span>
-                <HelpTooltip
-                  :content="t('admin.providers.schedulerScore.hint')"
-                  width-class="w-80"
-                />
-              </div>
-            </template>
-            <template #cell-scheduler_score="{ row }">
-              <div
-                v-if="getSchedulerScoreRows(row).length"
-                class="flex min-w-[7rem] flex-col gap-0.5 font-mono text-xs leading-4"
-              >
+            <template #cell-timestamps="{ row }">
+              <div class="min-w-0 text-xs leading-4">
                 <div
-                  v-for="score in getSchedulerScoreRows(row)"
-                  :key="String(score.group_id)"
-                  class="flex items-center gap-1 whitespace-nowrap text-gray-700 dark:text-gray-300"
-                  :title="`${formatSchedulerScoreGroup(score)} / ${formatSchedulerScore(score.base_score)} / ${formatStickySchedulerScore(score)}`"
+                  v-for="entry in providerTimestamps(row)"
+                  :key="entry.key"
+                  class="flex min-w-0 items-center gap-1"
                 >
-                  <span class="max-w-[4.75rem] truncate text-gray-500 dark:text-dark-400">{{
-                    formatSchedulerScoreGroup(score)
+                  <span class="min-w-0 shrink truncate text-gray-500 dark:text-gray-400">{{
+                    entry.label
                   }}</span>
-                  <span class="text-gray-300 dark:text-gray-600">/</span>
-                  <span>{{ formatSchedulerScore(score.base_score) }}</span>
-                  <span class="text-gray-300 dark:text-gray-600">/</span>
-                  <span class="text-primary-700 dark:text-primary-300">{{
-                    formatStickySchedulerScore(score)
+                  <span class="min-w-0 truncate tabular-nums" :title="entry.full">{{
+                    entry.summary || '—'
                   }}</span>
                 </div>
-              </div>
-              <span v-else class="text-sm text-gray-400 dark:text-dark-500">-</span>
-            </template>
-            <template #cell-last_used_at="{ value }">
-              <span class="text-sm text-gray-500 dark:text-dark-400">{{
-                formatRelativeTime(value)
-              }}</span>
-            </template>
-            <template #cell-created_at="{ value }">
-              <span class="text-sm text-gray-500 dark:text-dark-400">{{
-                formatDateTime(value)
-              }}</span>
-            </template>
-            <template #cell-expires_at="{ row, value }">
-              <div class="flex flex-col items-start gap-1">
-                <span class="text-sm text-gray-500 dark:text-dark-400">{{
-                  formatExpiresAt(value)
-                }}</span>
                 <div
-                  v-if="isExpired(value) || (row.auto_pause_on_expired && value)"
-                  class="flex items-center gap-1"
+                  v-if="row.last_used_at || row.created_at || row.expires_at"
+                  class="flex min-w-0 items-center gap-1"
                 >
                   <span
-                    v-if="isExpired(value)"
-                    class="inline-flex items-center rounded-compact bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-300"
+                    v-if="isExpired(row.expires_at)"
+                    class="truncate text-amber-700 dark:text-amber-300"
+                    >{{ t('admin.providers.expired') }}</span
                   >
-                    {{ t('admin.providers.expired') }}
-                  </span>
                   <span
-                    v-if="row.auto_pause_on_expired && value"
-                    class="inline-flex items-center rounded-compact bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300"
+                    v-if="row.auto_pause_on_expired && row.expires_at"
+                    class="truncate text-emerald-700 dark:text-emerald-300"
+                    :title="t('admin.providers.autoPauseOnExpired')"
+                    >{{ t('admin.providers.compact.autoPause') }}</span
                   >
-                    {{ t('admin.providers.autoPauseOnExpired') }}
-                  </span>
+                  <ProviderCellDetails :label="t('admin.providers.compact.timestamps')">
+                    <template #trigger><Icon name="more" size="xs" /></template>
+                    <dl class="space-y-1">
+                      <div v-for="entry in providerTimestamps(row)" :key="entry.key">
+                        <dt class="text-gray-500 dark:text-gray-400">{{ entry.label }}</dt>
+                        <dd class="tabular-nums">{{ entry.full || '—' }}</dd>
+                      </div>
+                    </dl>
+                    <p v-if="row.auto_pause_on_expired && row.expires_at">{{
+                      t('admin.providers.autoPauseOnExpired')
+                    }}</p>
+                  </ProviderCellDetails>
                 </div>
               </div>
             </template>
@@ -766,7 +829,8 @@ import { useAppStore } from '@/stores/app'
 import { adminAPI } from '@/api/admin'
 import { supportsUpstreamUsageQuery } from '@/utils/upstreamUsage'
 import { downloadJsonBlob, formatExportTimestamp } from '@/utils/download'
-import { usePersistedTableColumns } from '@/composables/usePersistedTableColumns'
+import { useDenseTablePreferences } from '@/composables/useDenseTablePreferences'
+import { useClipboard } from '@/composables/useClipboard'
 import { useSwipeSelect, type SwipeSelectVirtualContext } from '@/composables/useSwipeSelect'
 import {
   useStepUp,
@@ -778,6 +842,7 @@ import TotpStepUpDialog from '@/components/auth/TotpStepUpDialog.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import TablePageLayout from '@/components/layout/TablePageLayout.vue'
 import DataTable from '@/components/common/table/DataTable.vue'
+import { getColumnSortOptions, type Column } from '@/components/common/table/types'
 import Toggle from '@/components/common/Toggle.vue'
 import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import Pagination from '@/components/common/Pagination.vue'
@@ -802,7 +867,7 @@ import type { SelectOption } from '@/components/common/Select.vue'
 import ProviderStatusIndicator from '@/views/admin/providers/table/ProviderStatusIndicator.vue'
 import ProviderUsageCell from '@/views/admin/providers/table/ProviderUsageCell.vue'
 import { resolveAntigravityPlanType } from '@/views/admin/providers/table/providerUsagePresentation'
-import ProviderTodayStatsCell from '@/views/admin/providers/table/ProviderTodayStatsCell.vue'
+import ProviderCellDetails from './table/ProviderCellDetails.vue'
 import ProviderGroupsCell from '@/views/admin/providers/table/ProviderGroupsCell.vue'
 import ProviderCapacityCell from '@/views/admin/providers/table/ProviderCapacityCell.vue'
 import PlatformTypeBadge from '@/components/common/PlatformTypeBadge.vue'
@@ -810,7 +875,7 @@ import Icon from '@/components/icons/Icon.vue'
 import ErrorPassthroughRulesModal from '@/views/admin/providers/operations/ErrorPassthroughRulesModal.vue'
 import TLSFingerprintProfilesModal from '@/views/admin/providers/operations/TLSFingerprintProfilesModal.vue'
 import TLSFingerprintRoutersModal from '@/views/admin/providers/operations/TLSFingerprintRoutersModal.vue'
-import { formatDateTime, formatRelativeTime } from '@/utils/format'
+import { formatCompactDateTimeParts, formatDateTime, formatRelativeTime } from '@/utils/format'
 import { proxyExpiryBadgeClass, proxyExpiryLabelKey } from '@/utils/proxyExpiry'
 import { sanitizeUrl } from '@/utils/url'
 import { getFloatingPanelPosition } from '@/utils/floatingPanel'
@@ -928,33 +993,73 @@ const providerToolsDropdownStyle = computed(() => ({
   left: `${providerToolsDropdownPosition.left}px`,
   width: `${providerToolsDropdownPosition.width}px`,
 }))
-// DEFAULT_HIDDEN_COLUMNS and storage keys configure per-administrator provider
-// column visibility and its scheduler-score default-hidden migration.
-const DEFAULT_HIDDEN_COLUMNS = [
-  'today_stats',
-  'proxy',
-  'notes',
-  'scheduler_score',
-  'rate_multiplier',
-]
-const HIDDEN_COLUMNS_KEY = 'provider-hidden-columns'
-const HIDDEN_COLUMNS_VERSION_KEY = 'provider-hidden-columns-version'
-const HIDDEN_COLUMNS_CURRENT_VERSION = 'scheduler-score-hidden-by-default'
-
+// Migrated visibility is ready before list sorting or column order is restored.
 const {
-  hiddenColumns,
-  loadSavedColumns,
   toggleColumn: togglePersistedColumn,
   isColumnVisible,
-} = usePersistedTableColumns({
-  storageKey: HIDDEN_COLUMNS_KEY,
-  defaultHiddenColumns: DEFAULT_HIDDEN_COLUMNS,
-  migration: {
-    versionKey: HIDDEN_COLUMNS_VERSION_KEY,
-    currentVersion: HIDDEN_COLUMNS_CURRENT_VERSION,
-    newHiddenColumns: ['scheduler_score'],
+  columnOrderStorageKey,
+  initialColumnOrder,
+} = useDenseTablePreferences('providers')
+const { copyToClipboard } = useClipboard()
+
+// allColumns carries the desktop width budget and the server keys available in each header.
+const allColumns = computed<Column[]>(() => [
+  { key: 'select', label: '', width: '44px' },
+  {
+    key: 'identity',
+    label: t('admin.providers.compact.identity'),
+    width: '215px',
+    subtitleSortLayout: 'inline',
+    sortOptions: [
+      { key: 'name', label: t('admin.providers.columns.name') },
+      { key: 'id', label: 'ID' },
+    ],
   },
-})
+  { key: 'platform_type', label: t('admin.providers.columns.platformType'), width: '155px' },
+  {
+    key: 'status_schedule',
+    label: t('admin.providers.compact.statusSchedule'),
+    width: '155px',
+    subtitleSortLayout: 'subline',
+    sortOptions: [
+      { key: 'status', label: t('admin.providers.columns.status') },
+      { key: 'schedulable', label: t('admin.providers.compact.schedule') },
+    ],
+  },
+  { key: 'capacity', label: t('admin.providers.columns.capacity'), width: '195px' },
+  { key: 'usage', label: t('admin.providers.columns.usageWindows'), width: '280px' },
+  {
+    key: 'groups',
+    label: t('admin.providers.compact.groups'),
+    width: '195px',
+    subtitleSortLayout: 'subline',
+    sortOptions: [
+      { key: 'priority', label: t('admin.providers.columns.priority') },
+      { key: 'rate_multiplier', label: t('admin.providers.compact.rateLabel') },
+    ],
+  },
+  {
+    key: 'timestamps',
+    label: t('admin.providers.compact.timestamps'),
+    width: '165px',
+    subtitleSortLayout: 'subline',
+    sortOptions: [
+      { key: 'last_used_at', label: t('admin.providers.compact.lastUsed') },
+      { key: 'created_at', label: t('admin.providers.compact.created') },
+      { key: 'expires_at', label: t('admin.providers.compact.expires') },
+    ],
+  },
+  { key: 'actions', label: t('admin.providers.columns.actions'), width: '106px' },
+])
+
+// Structural cells and identity remain available even with custom preferences.
+const toggleableColumns = computed(() =>
+  allColumns.value.filter((column) => !['select', 'identity', 'actions'].includes(column.key)),
+)
+const cols = computed(() => allColumns.value.filter((column) => isColumnVisible(column.key)))
+const visibleSortKeys = computed(
+  () => new Set(cols.value.flatMap((column) => getColumnSortOptions(column).map(({ key }) => key))),
+)
 
 // Auto refresh settings
 // The refresh dropdown stores its trigger, containment root, and computed
@@ -981,12 +1086,11 @@ const autoRefreshIntervalLabel = (sec: number) => {
   return `${sec}s`
 }
 
-// formatSchedulerScore displays finite scores with at most six decimal places.
-// It applies Number coercion, removes trailing zeroes, and returns a dash when
-// the converted value is non-finite. Null and blank strings therefore display zero.
+// formatSchedulerScore preserves zero and shows a dash for absent or invalid scores.
 const formatSchedulerScore = (value: unknown): string => {
+  if (value == null || value === '') return '—'
   const num = Number(value)
-  if (!Number.isFinite(num)) return '-'
+  if (!Number.isFinite(num)) return '—'
   return num.toFixed(6).replace(/\.?0+$/, '')
 }
 
@@ -1003,10 +1107,11 @@ const formatStickySchedulerScore = (score: ProviderSchedulerGroupScore): string 
 // available. Otherwise it wraps the base score as an ungrouped entry, or
 // returns an empty list when the provider has no score.
 const getSchedulerScoreRows = (provider: Provider): ProviderSchedulerGroupScore[] => {
-  const groupRows = Array.isArray(provider.scheduler_scores)
-    ? provider.scheduler_scores.filter((score) => score.group_id != null)
-    : []
+  const scores = Array.isArray(provider.scheduler_scores) ? provider.scheduler_scores : []
+  const groupRows = scores.filter((score) => score.group_id != null)
   if (groupRows.length) return groupRows
+  const ungrouped = scores.find((score) => score.group_id == null)
+  if (ungrouped) return [ungrouped]
   // Ungrouped providers can expose a base score without group rows, so wrap that result for the same table display.
   if (provider.scheduler_score) {
     return [{ group_id: null, ...provider.scheduler_score }]
@@ -1021,6 +1126,15 @@ const formatSchedulerScoreGroup = (score: ProviderSchedulerGroupScore): string =
   if ('group_name' in score && score.group_name) return score.group_name
   if ('group_id' in score && score.group_id != null) return `#${score.group_id}`
   return t('admin.providers.schedulerScore.ungrouped')
+}
+
+// formatSchedulerScoreRow includes the real group and both scheduling scores.
+function formatSchedulerScoreRow(score: ProviderSchedulerGroupScore): string {
+  return [
+    formatSchedulerScoreGroup(score),
+    formatSchedulerScore(score.base_score),
+    formatStickySchedulerScore(score),
+  ].join(' / ')
 }
 
 // clampDropdownLeft keeps a dropdown inside the viewport with a sixteen-pixel
@@ -1091,29 +1205,16 @@ const toggleAutoRefreshDropdown = () => {
   updateTopDropdownPositions()
 }
 
-if (typeof window !== 'undefined') {
-  loadSavedColumns()
-}
-
-// toggleColumn updates hidden columns and persists their new state before any
-// dependent request. Revealing statistics or usage requests daily metrics;
-// changing scheduler-score visibility reloads rows with the corresponding
-// server field selection.
+// Visibility controls both list projection and the daily statistics lifecycle.
 const toggleColumn = (key: string) => {
   const wasHidden = togglePersistedColumn(key)
   if (wasHidden === null) return
-  if ((key === 'today_stats' || key === 'usage') && wasHidden) {
-    refreshTodayStatsBatch().catch((error) => {
-      console.error('Failed to load provider today stats after showing column:', error)
-    })
-  }
-  if (key === 'scheduler_score') {
-    // Scheduler-score visibility changes the server fields requested, so reload the current page after updating the derived request parameter.
-    syncProviderListDerivedParams()
-    load().catch((error) => {
-      console.error('Failed to reload providers after toggling scheduler score column:', error)
-    })
-  }
+
+  if (key === 'usage') setTodayStatsVisible(wasHidden)
+
+  void reconcileColumnVisibility(key)?.catch((error) => {
+    console.error('Failed to reload providers after toggling a column:', error)
+  })
 }
 
 // The list controller loads rows and invokes these callbacks at reconciliation
@@ -1131,7 +1232,8 @@ const {
   autoRefreshEnabled,
   autoRefreshIntervalSeconds,
   autoRefreshCountdown,
-  syncProviderListDerivedParams,
+  reconcileColumnVisibility,
+  setTodayStatsVisible,
   setAutoRefreshEnabled,
   setAutoRefreshInterval,
   load,
@@ -1144,12 +1246,11 @@ const {
   pauseAutoRefresh,
   resumeAutoRefresh,
 } = useProviderList({
-  includeSchedulerScore: () => isColumnVisible('scheduler_score'),
+  includeSchedulerScore: () => isColumnVisible('status_schedule'),
+  isSortKeyVisible: (key) => visibleSortKeys.value.has(key),
+  invalidateTodayStats: () => invalidateTodayStats(),
   clearSelection: () => clearSelection(),
-  onLoaded: async () => {
-    hydrateUpstreamUsageCache()
-    await refreshTodayStatsBatch()
-  },
+  onLoaded: () => hydrateUpstreamUsageCache(),
   refreshTodayStats: () => refreshTodayStatsBatch(),
   onRowMissing: (provider) => invalidateUpstreamUsageCache(provider.id),
   onRowReplaced: (current, next) => {
@@ -1220,9 +1321,10 @@ const {
   handleProviderUsageLoaded,
   queueBatchedUsage,
   refreshTodayStatsBatch,
+  invalidateTodayStats,
   bulkUsageLoading,
   handleBulkQueryUsage,
-} = useProviderUsage(providers, selIds, hiddenColumns)
+} = useProviderUsage(providers, selIds, () => isColumnVisible('usage'))
 
 // swipeVirtualContext reads the virtualizer and sorted row order at gesture
 // time, so checked IDs follow the displayed rows rather than the unsorted API
@@ -1517,60 +1619,6 @@ function providerHomepageUrl(row: Provider): string {
   const baseUrl = sanitizeUrl(row.credentials.base_url)
   return baseUrl ? new URL(baseUrl).origin : ''
 }
-
-// allColumns defines available table fields and server-sortable columns using
-// current translations; mandatory and hidden-column selections are applied by
-// the computed lists below.
-const allColumns = computed(() => {
-  const c = [
-    { key: 'select', label: '', sortable: false },
-    { key: 'name', label: t('admin.providers.columns.name'), sortable: true },
-    { key: 'id', label: t('admin.providers.columns.id'), sortable: true },
-    { key: 'platform_type', label: t('admin.providers.columns.platformType'), sortable: false },
-    { key: 'capacity', label: t('admin.providers.columns.capacity'), sortable: false },
-    { key: 'status', label: t('admin.providers.columns.status'), sortable: true },
-    { key: 'schedulable', label: t('admin.providers.columns.schedulable'), sortable: true },
-    { key: 'today_stats', label: t('admin.providers.columns.todayStats'), sortable: false },
-  ]
-  c.push({ key: 'groups', label: t('admin.providers.columns.groups'), sortable: false })
-  c.push({ key: 'usage', label: t('admin.providers.columns.usageWindows'), sortable: false })
-  c.push(
-    { key: 'proxy', label: t('admin.providers.columns.proxy'), sortable: false },
-    { key: 'priority', label: t('admin.providers.columns.priority'), sortable: true },
-    { key: 'scheduler_score', label: t('admin.providers.columns.schedulerScore'), sortable: false },
-    {
-      key: 'rate_multiplier',
-      label: t('admin.providers.columns.billingRateMultiplier'),
-      sortable: true,
-    },
-    { key: 'last_used_at', label: t('admin.providers.columns.lastUsed'), sortable: true },
-    { key: 'created_at', label: t('admin.providers.columns.createdAt'), sortable: true },
-    { key: 'expires_at', label: t('admin.providers.columns.expiresAt'), sortable: true },
-    { key: 'notes', label: t('admin.providers.columns.notes'), sortable: false },
-    { key: 'actions', label: t('admin.providers.columns.actions'), sortable: false },
-  )
-  return c
-})
-
-// toggleableColumns excludes the selection, provider name, and actions fields
-// because those columns remain available in every table configuration.
-const toggleableColumns = computed(() =>
-  allColumns.value.filter(
-    (col) => col.key !== 'select' && col.key !== 'name' && col.key !== 'actions',
-  ),
-)
-
-// cols keeps mandatory fields visible and filters optional columns through the
-// administrator hidden-column preference before rendering the table.
-const cols = computed(() =>
-  allColumns.value.filter(
-    (col) =>
-      col.key === 'select' ||
-      col.key === 'name' ||
-      col.key === 'actions' ||
-      !hiddenColumns.has(col.key),
-  ),
-)
 
 // handleEdit selects the provider row and opens its editing dialog.
 const handleEdit = (a: Provider) => {
@@ -2429,25 +2477,42 @@ const handleTempUnschedReset = async (updated: Provider) => {
   patchProviderInList(updated)
   enterAutoRefreshSilentWindow()
 }
-// formatExpiresAt formats an epoch-seconds expiry value in the configured
-// numeric date format. A missing or zero value becomes a dash; positive
-// timestamps are converted to milliseconds for Date.
-const formatExpiresAt = (value: number | null) => {
-  if (!value) return '-'
-  return formatDateTime(
-    // Convert API expiry seconds to the milliseconds Date expects.
-    new Date(value * 1000),
-    {
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit',
-      hour12: false,
-    },
-    'sv-SE',
+// providerTimestamps keeps the compact values and the full local times together.
+function providerTimestamps(row: Provider) {
+  const lastUsed = formatCompactDateTimeParts(row.last_used_at)
+  const created = formatCompactDateTimeParts(row.created_at)
+  const expires = formatCompactDateTimeParts(
+    row.expires_at ? new Date(row.expires_at * 1000) : null,
   )
+  return [
+    {
+      key: 'last_used_at',
+      label: t('admin.providers.compact.lastUsed'),
+      summary: lastUsed.full ? formatRelativeTime(row.last_used_at) : '',
+      full: lastUsed.full,
+    },
+    {
+      key: 'created_at',
+      label: t('admin.providers.compact.created'),
+      summary: created.full ? created.date + ' ' + created.time.slice(0, 5) : '',
+      full: created.full,
+    },
+    {
+      key: 'expires_at',
+      label: t('admin.providers.compact.expires'),
+      summary: expires.full ? expires.date + ' ' + expires.time.slice(0, 5) : '',
+      full: expires.full,
+    },
+  ]
 }
+
+// fallbackOriginText retains the origin ID when the API supplies no proxy name.
+function fallbackOriginText(row: Provider): string {
+  return t('admin.providers.fallbackActiveTip', {
+    origin: row.proxy_fallback_origin_name || '#' + row.proxy_fallback_origin_id,
+  })
+}
+
 // isExpired compares an epoch-seconds expiry against the current browser time.
 // Missing or zero values report false; supplied values are converted to
 // milliseconds before comparing them with Date.now.
@@ -2535,5 +2600,22 @@ onUnmounted(() => {
 <style scoped>
 .provider-tools-menu-icon {
   @apply inline-flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-control;
+}
+</style>
+
+<style scoped>
+.provider-platform-summary :deep(div > span) {
+  min-width: 0;
+  padding-block: 1px;
+  white-space: nowrap;
+}
+
+.provider-platform-summary :deep(.leading-tight[title]) {
+  display: none;
+}
+
+.provider-platform-summary :deep(.self-baseline) {
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 </style>

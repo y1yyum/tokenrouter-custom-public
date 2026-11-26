@@ -251,3 +251,45 @@ describe('国产平台提供商完整用量布局', () => {
     wrapper.unmount()
   })
 })
+
+describe('紧凑提供商用量', () => {
+  // Six upstream windows plus three local quotas keep four summaries visible and
+  // retain the remaining windows, fees, and one explicit query action.
+  it('shows four windows, an overflow count, and full usage via the details button', async () => {
+    const provider = makeProvider('kimi', 'coding')
+    const request = vi.fn()
+    const wrapper = mountCell(provider, request)
+    await wrapper.setProps({
+      compact: true,
+      todayStats: { ...todayStats, user_cost: 0 },
+      upstreamUsage: {
+        ...makeResult(provider),
+        limits: Array.from({ length: 6 }, (_, i) => ({
+          name: 'upstream-window-' + i,
+          used: i * 10,
+          limit: 100,
+        })),
+      },
+    })
+
+    const summaries = wrapper.findAll('[data-test="provider-compact-window"]')
+    expect(summaries).toHaveLength(4)
+    expect(summaries[0].text()).toContain('0%')
+    expect(wrapper.get('[data-test="provider-compact-window-overflow"]').text()).toBe('+5')
+    expect(wrapper.get('[data-test="provider-today-summary"]').text()).toContain('$1.25')
+    expect(wrapper.findAll(querySelector)).toHaveLength(1)
+    expect(request).not.toHaveBeenCalled()
+
+    const details = wrapper.get('button[aria-label="admin.providers.compact.usageDetails"]')
+    expect(details.attributes('aria-expanded')).toBe('false')
+    await details.trigger('click')
+    const dialog = document.getElementById(details.attributes('aria-controls')!)
+    expect(dialog?.textContent).toContain('upstream-window-5')
+    expect(dialog?.textContent).toContain('$0.00')
+    expect(request).not.toHaveBeenCalled()
+
+    await wrapper.get(querySelector).trigger('click')
+    expect(request).toHaveBeenCalledExactlyOnceWith(provider, { force: true })
+    wrapper.unmount()
+  })
+})

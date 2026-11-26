@@ -1,72 +1,59 @@
 <template>
-  <div class="flex flex-col gap-0.5">
-    <!-- Concurrent request slots. -->
-    <CapacityBadge
-      :color-class="concurrencyClass"
-      :current="currentConcurrency"
-      :max="provider.concurrency"
-    >
-      <Icon name="grid" size="md" class="h-2.5 w-2.5" />
-    </CapacityBadge>
-
-    <!-- Five-hour window spending limit. -->
-    <CapacityBadge
-      v-if="showWindowCost"
-      :color-class="windowCostClass"
-      :tooltip="windowCostTooltip"
-      :current="'$' + formatCost(currentWindowCost)"
-      :max="'$' + formatCost(provider.window_cost_limit)"
-    >
-      <Icon name="dollar" size="md" class="h-2.5 w-2.5" />
-    </CapacityBadge>
-
-    <!-- Active session capacity. -->
-    <CapacityBadge
-      v-if="showSessionLimit"
-      :color-class="sessionLimitClass"
-      :tooltip="sessionLimitTooltip"
-      :current="activeSessions"
-      :max="provider.max_sessions!"
-    >
-      <Icon name="users" size="md" class="h-2.5 w-2.5" />
-    </CapacityBadge>
-
-    <!-- Request-rate capacity. -->
-    <CapacityBadge
-      v-if="showRpmLimit"
-      :color-class="rpmClass"
-      :tooltip="rpmTooltip"
-      :current="currentRPM"
-      :max="provider.base_rpm!"
-      :suffix="rpmStrategyTag"
-    >
-      <Icon name="clock" size="md" class="h-2.5 w-2.5" />
-    </CapacityBadge>
-
-    <!-- Eligible local spending quotas. -->
-    <QuotaBadge
-      v-if="showDailyQuota"
-      :used="provider.quota_daily_used ?? 0"
-      :limit="provider.quota_daily_limit!"
-      label="D"
-    />
-    <QuotaBadge
-      v-if="showWeeklyQuota"
-      :used="provider.quota_weekly_used ?? 0"
-      :limit="provider.quota_weekly_limit!"
-      label="W"
-    />
-    <QuotaBadge
-      v-if="showMonthlyQuota"
-      :used="provider.quota_monthly_used ?? 0"
-      :limit="provider.quota_monthly_limit!"
-      label="M"
-    />
-    <QuotaBadge
-      v-if="showTotalQuota"
-      :used="provider.quota_used ?? 0"
-      :limit="provider.quota_limit!"
-    />
+  <div class="flex min-w-0 flex-col gap-0.5">
+    <div v-for="metric in visibleMetrics" :key="metric.key" class="flex min-w-0 items-center">
+      <CapacityBadge
+        v-if="metric.kind === 'capacity'"
+        class="capacity-summary"
+        :color-class="metric.colorClass"
+        :tooltip="metric.tooltip || metric.title"
+        :current="metric.current"
+        :max="metric.max"
+        :suffix="metric.suffix"
+      >
+        <Icon :name="metric.icon" size="xs" class="h-2.5 w-2.5 shrink-0" />
+      </CapacityBadge>
+      <QuotaBadge
+        v-else
+        class="capacity-summary"
+        :used="metric.used"
+        :limit="metric.limit"
+        :label="metric.label"
+      />
+    </div>
+    <div v-if="compact">
+      <ProviderCellDetails :label="t('admin.providers.compact.capacityDetails')">
+        <template #trigger>
+          <span v-if="metrics.length > visibleMetrics.length"
+            >+{{ metrics.length - visibleMetrics.length }}</span
+          >
+          <Icon v-else name="more" size="xs" />
+        </template>
+        <dl class="space-y-2">
+          <div v-for="metric in metrics" :key="metric.key">
+            <dt class="font-medium">{{ metric.title }}</dt>
+            <dd v-if="metric.kind === 'capacity'">
+              <CapacityBadge
+                :color-class="metric.colorClass"
+                :current="metric.current"
+                :max="metric.max"
+                :suffix="metric.suffix"
+              />
+              <p v-if="metric.tooltip" class="mt-0.5">{{ metric.tooltip }}</p>
+            </dd>
+            <dd v-else>
+              <QuotaBadge :used="metric.used" :limit="metric.limit" :label="metric.label" />
+              <p class="mt-0.5">{{
+                t(
+                  metric.used >= metric.limit
+                    ? 'admin.providers.capacity.quota.exceeded'
+                    : 'admin.providers.capacity.quota.normal',
+                )
+              }}</p>
+            </dd>
+          </div>
+        </dl>
+      </ProviderCellDetails>
+    </div>
   </div>
 </template>
 
@@ -77,6 +64,7 @@ import { useI18n } from 'vue-i18n'
 import type { Provider } from '@/api/admin/providers.types'
 import CapacityBadge from '@/views/admin/providers/table/CapacityBadge.vue'
 import QuotaBadge from '@/views/admin/providers/table/QuotaBadge.vue'
+import ProviderCellDetails from './ProviderCellDetails.vue'
 
 /**
  * ProviderCapacityCell.vue displays provider concurrency, Anthropic window-cost and session
@@ -98,6 +86,7 @@ import QuotaBadge from '@/views/admin/providers/table/QuotaBadge.vue'
  */
 const props = defineProps<{
   provider: Provider // current provider capacity record
+  compact?: boolean // Keep only the first three metrics in the row.
 }>()
 
 /**
@@ -305,4 +294,131 @@ const showTotalQuota = computed(
   () =>
     isQuotaEligible.value && props.provider.quota_limit != null && props.provider.quota_limit > 0,
 )
+
+// CapacityMetric preserves the existing badge inputs alongside a readable detail label.
+type CapacityMetric =
+  | {
+      kind: 'capacity'
+      key: string
+      title: string
+      icon: 'grid' | 'dollar' | 'users' | 'clock'
+      colorClass: string
+      current: string | number
+      max: string | number
+      suffix?: string
+      tooltip?: string
+    }
+  | {
+      kind: 'quota'
+      key: string
+      title: string
+      used: number
+      limit: number
+      label?: string
+    }
+
+// metrics uses the same eligibility and observations for inline and expanded values.
+const metrics = computed<CapacityMetric[]>(() => {
+  const provider = props.provider
+  const items: CapacityMetric[] = [
+    {
+      kind: 'capacity',
+      key: 'concurrency',
+      title: t('admin.providers.concurrency'),
+      icon: 'grid',
+      colorClass: concurrencyClass.value,
+      current: currentConcurrency.value,
+      max: provider.concurrency,
+    },
+  ]
+  if (showWindowCost.value) {
+    items.push({
+      kind: 'capacity',
+      key: 'windowCost',
+      title: t('admin.providers.compact.windowCost'),
+      icon: 'dollar',
+      colorClass: windowCostClass.value,
+      current: '$' + formatCost(currentWindowCost.value),
+      max: '$' + formatCost(provider.window_cost_limit),
+      tooltip: windowCostTooltip.value,
+    })
+  }
+  if (showSessionLimit.value) {
+    items.push({
+      kind: 'capacity',
+      key: 'session',
+      title: t('admin.providers.compact.sessions'),
+      icon: 'users',
+      colorClass: sessionLimitClass.value,
+      current: activeSessions.value,
+      max: provider.max_sessions!,
+      tooltip: sessionLimitTooltip.value,
+    })
+  }
+  if (showRpmLimit.value) {
+    items.push({
+      kind: 'capacity',
+      key: 'rpm',
+      title: t('admin.providers.compact.rpm'),
+      icon: 'clock',
+      colorClass: rpmClass.value,
+      current: currentRPM.value,
+      max: provider.base_rpm!,
+      suffix: rpmStrategyTag.value,
+      tooltip: rpmTooltip.value,
+    })
+  }
+
+  const quotas = [
+    {
+      key: 'daily',
+      used: provider.quota_daily_used,
+      limit: provider.quota_daily_limit,
+      label: 'D',
+      enabled: showDailyQuota.value,
+    },
+    {
+      key: 'weekly',
+      used: provider.quota_weekly_used,
+      limit: provider.quota_weekly_limit,
+      label: 'W',
+      enabled: showWeeklyQuota.value,
+    },
+    {
+      key: 'monthly',
+      used: provider.quota_monthly_used,
+      limit: provider.quota_monthly_limit,
+      label: 'M',
+      enabled: showMonthlyQuota.value,
+    },
+    {
+      key: 'total',
+      used: provider.quota_used,
+      limit: provider.quota_limit,
+      enabled: showTotalQuota.value,
+    },
+  ]
+  for (const quota of quotas) {
+    if (!quota.enabled || quota.limit == null) continue
+    items.push({
+      kind: 'quota',
+      key: quota.key,
+      title: t('admin.providers.compact.' + quota.key + 'Quota'),
+      used: quota.used ?? 0,
+      limit: quota.limit,
+      label: quota.label,
+    })
+  }
+  return items
+})
+
+const visibleMetrics = computed(() => (props.compact ? metrics.value.slice(0, 3) : metrics.value))
 </script>
+
+<style scoped>
+.capacity-summary {
+  max-width: 100%;
+  overflow: hidden;
+  white-space: nowrap;
+}
+</style>

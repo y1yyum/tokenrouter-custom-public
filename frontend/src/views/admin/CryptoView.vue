@@ -1,0 +1,3547 @@
+<!-- CryptoView.vue coordinates the operator's wallet, scanner and sweep settings. -->
+<template>
+  <CryptoUi>
+    <AppLayout>
+      <template v-if="loadedSnapshot" #page-heading-actions>
+        <div data-crypto-ui class="crypto-view__header-status flex flex-wrap items-center gap-2">
+          <UBadge
+            :color="loadedSnapshot.enabled && !walletSecurityLocked ? 'success' : 'neutral'"
+            variant="subtle"
+            >{{
+              t(
+                loadedSnapshot.enabled && !walletSecurityLocked
+                  ? 'admin.crypto.channelActive'
+                  : 'admin.crypto.channelPaused',
+              )
+            }}</UBadge
+          >
+          <CryptoGrantStatus />
+        </div>
+      </template>
+      <div data-crypto-ui class="crypto-view flex w-full min-w-0 flex-col gap-4 sm:gap-6">
+        <div
+          v-if="routed"
+          ref="sectionStrip"
+          class="crypto-view__section-nav -mx-1 min-w-0 overflow-x-auto overflow-y-hidden px-1 scrollbar-hide"
+          data-testid="crypto-section-nav"
+        >
+          <UNavigationMenu :items="navItems" highlight class="w-max" />
+        </div>
+
+        <!-- Wallet / security monitor / signer in one strip. Abnormal segments turn
+           red and carry the entry that fixes them; minor facts live in the cards. -->
+        <CryptoOverviewStatusBar
+          v-if="!routed || section === 'overview'"
+          :segments="overviewSegments"
+          :refreshing="refreshingOverview"
+          @refresh="refreshOverview"
+          @segment-action="onOverviewSegmentAction"
+        />
+
+        <CryptoWalletSecurityPanel
+          ref="walletSecurityPanel"
+          v-show="!routed || section === 'overview'"
+          class="crypto-view__security"
+          @change="updateWalletSecurityState"
+          @recovered="onWalletSecurityRecovered"
+        />
+        <SignerShardsPanel
+          ref="signerShardsPanel"
+          v-show="!routed || section === 'overview'"
+          class="crypto-view__signer"
+          @change="onSignerStatusChange"
+          @open-sweep="openSweepUnlock"
+          @unlocked="onSignerUnlocked"
+          @expired="onSignerWindowExpired"
+        />
+
+        <UCollapsible
+          v-show="!routed || section === 'overview'"
+          class="crypto-view__notifications"
+          :unmount-on-hide="false"
+        >
+          <UButton
+            color="neutral"
+            variant="ghost"
+            trailing-icon="i-lucide-chevron-down"
+            class="-mx-2.5 group"
+            :ui="{ trailingIcon: 'transition-transform group-data-[state=open]:rotate-180' }"
+          >
+            <span class="font-medium text-highlighted">{{
+              t('admin.crypto.walletNotificationSettings')
+            }}</span>
+            <span class="text-muted">{{ t('admin.crypto.walletNotificationOptional') }}</span>
+          </UButton>
+          <template #content>
+            <ProfileBarkCard
+              class="crypto-view__bark mt-3"
+              :title="t('admin.crypto.walletBarkTitle')"
+              :description="t('admin.crypto.walletBarkDescription')"
+            />
+          </template>
+        </UCollapsible>
+
+        <div v-if="routed && section === 'overview'" class="flex flex-col gap-3">
+          <p class="text-sm text-muted">{{ t('admin.crypto.overviewHint') }}</p>
+          <UPageGrid class="gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <UPageCard
+              v-for="entry in overviewEntries"
+              :key="entry.section"
+              :icon="entry.icon"
+              :title="entry.label"
+              :to="sectionTo(entry.section)"
+              variant="subtle"
+              :ui="{ leading: 'icon-orb-primary' }"
+            />
+          </UPageGrid>
+          <!-- Two primary exits: run a sweep (carrying the unlock intent when the
+             signer is locked) or inspect the deposit addresses. -->
+          <div class="flex flex-wrap justify-end gap-2 pt-1" data-testid="crypto-overview-actions">
+            <UButton
+              color="neutral"
+              variant="outline"
+              icon="i-lucide-wallet"
+              :to="sectionTo('addresses')"
+              data-testid="overview-view-addresses"
+              >{{ t('admin.crypto.overview.viewAddresses') }}</UButton
+            >
+            <UButton
+              icon="i-lucide-arrow-up-from-line"
+              :to="overviewSweepTarget"
+              data-testid="overview-run-sweep"
+              >{{ t('admin.crypto.sweepRun') }}</UButton
+            >
+          </div>
+        </div>
+
+        <UAlert
+          v-if="operationIntentError"
+          role="alert"
+          class="crypto-view__intent-error"
+          color="error"
+          variant="subtle"
+          icon="i-lucide-circle-alert"
+          :title="operationIntentError"
+        />
+
+        <UTabs
+          v-show="!routed || section !== 'overview'"
+          :model-value="activeTab"
+          :items="tabs"
+          variant="link"
+          class="crypto-view__tabs w-full gap-4 sm:gap-6"
+          :ui="{ list: routed ? 'hidden' : 'border-b border-default', trigger: 'grow-0' }"
+          :aria-label="t('admin.crypto.title')"
+          @update:model-value="(value: string | number) => switchTab(String(value))"
+        >
+          <!-- Node status: per-chain scan progress and RPC node health -->
+          <template #chains>
+            <div id="crypto-panel-chains" class="crypto-view__panel flex flex-col gap-4">
+              <CryptoChainStatusPanel :active="chainsActive" @open-config="openConfigTab" />
+            </div>
+          </template>
+
+          <!-- Configuration -->
+          <template #config>
+            <div
+              id="crypto-panel-config"
+              class="crypto-view__panel flex w-full flex-col gap-4 sm:gap-6 lg:max-w-3xl mx-auto"
+            >
+              <div v-if="loadingConfig" class="flex justify-center py-16"><LoadingSpinner /></div>
+              <UAlert
+                v-else-if="!config"
+                role="status"
+                color="neutral"
+                variant="subtle"
+                icon="i-lucide-circle-alert"
+                :title="configError || t('admin.crypto.configLoadFailed')"
+                :actions="[
+                  {
+                    label: t('common.refresh'),
+                    color: 'neutral',
+                    variant: 'outline',
+                    onClick: () => {
+                      void loadConfig()
+                    },
+                  },
+                ]"
+              />
+              <template v-else>
+                <UPageCard
+                  class="crypto-view__save-bar"
+                  :title="t('admin.crypto.saveTitle')"
+                  :description="t('admin.crypto.saveHint')"
+                  variant="naked"
+                  orientation="horizontal"
+                >
+                  <div class="flex items-center gap-3 lg:ms-auto">
+                    <span v-if="configSaved" class="text-sm text-success" role="status">{{
+                      t('common.saved')
+                    }}</span>
+                    <UButton
+                      :loading="savingConfig"
+                      :disabled="savingConfig"
+                      class="w-fit"
+                      @click="requestSaveConfig"
+                      >{{ savingConfig ? t('common.saving') : t('common.save') }}</UButton
+                    >
+                  </div>
+                </UPageCard>
+
+                <CryptoGasWalletPanel
+                  class="crypto-view__gas-funding"
+                  :available="walletCanDerive"
+                  :chains="loadedSnapshot?.chains ?? []"
+                  :revision="gasWalletRevision"
+                />
+
+                <section class="crypto-view__group">
+                  <UPageCard
+                    :title="t('admin.crypto.groupChannel')"
+                    :description="t('admin.crypto.groupChannelDesc')"
+                    variant="naked"
+                    class="mb-4"
+                  />
+                  <UPageCard variant="subtle">
+                    <UFormField
+                      :label="t('admin.crypto.enabled')"
+                      :description="t('admin.crypto.enabledHint')"
+                      class="flex items-center justify-between gap-4"
+                    >
+                      <Toggle
+                        :model-value="config.enabled"
+                        @update:model-value="confirmChannelToggle"
+                      />
+                    </UFormField>
+                    <USeparator />
+                    <UFormField
+                      :label="t('admin.crypto.chains')"
+                      :description="t('admin.crypto.chainsHint')"
+                    >
+                      <UCheckboxGroup
+                        :model-value="config.chains"
+                        :items="chainItems"
+                        class="mt-3"
+                        :ui="{ fieldset: 'grid grid-cols-1 gap-3 sm:grid-cols-2' }"
+                        @update:model-value="setChains"
+                      />
+                    </UFormField>
+                  </UPageCard>
+                </section>
+
+                <!-- Seeds are managed and encrypted by the main service, with fresh 2FA for changes. -->
+                <section class="crypto-view__group">
+                  <UPageCard
+                    :title="t('admin.crypto.walletLockTitle')"
+                    :description="t('admin.crypto.walletLockDesc')"
+                    variant="naked"
+                    class="mb-4"
+                  />
+                  <UPageCard variant="subtle">
+                    <UFormField
+                      :label="t('admin.crypto.walletStatusLabel')"
+                      :description="t('admin.crypto.walletManagedHint')"
+                      class="flex max-sm:flex-col justify-between items-start gap-4"
+                      :ui="{ container: 'shrink-0' }"
+                    >
+                      <div class="crypto-view__lockstate flex items-center gap-2">
+                        <UBadge
+                          :color="walletReady ? 'success' : walletCanDerive ? 'warning' : 'error'"
+                          variant="subtle"
+                          >{{ t(walletStateLabel) }}</UBadge
+                        >
+                        <UButton
+                          color="neutral"
+                          variant="outline"
+                          size="sm"
+                          :disabled="loadingWallet"
+                          @click="loadWalletStatus"
+                          >{{ t('common.refresh') }}</UButton
+                        >
+                      </div>
+                    </UFormField>
+                    <UAlert
+                      v-if="walletCanDerive && !walletReady"
+                      role="status"
+                      color="warning"
+                      variant="subtle"
+                      icon="i-lucide-triangle-alert"
+                      :description="t('admin.crypto.walletNotReady')"
+                    />
+                    <template v-if="!walletConfigured">
+                      <USeparator />
+                      <!-- Empty state: numbered setup steps instead of a wall of
+                         disabled export/import controls. -->
+                      <div
+                        class="rounded-control border border-default p-3"
+                        data-testid="crypto-wallet-setup-steps"
+                      >
+                        <p class="text-sm font-medium text-highlighted">{{
+                          t('admin.crypto.walletSetupStepsTitle')
+                        }}</p>
+                        <ol class="mt-2 grid gap-1.5 text-sm text-muted">
+                          <li
+                            v-for="(step, index) in walletSetupSteps"
+                            :key="step"
+                            class="flex gap-2"
+                          >
+                            <span
+                              class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
+                              >{{ index + 1 }}</span
+                            >
+                            <span>{{ t(step) }}</span>
+                          </li>
+                        </ol>
+                      </div>
+                      <UAlert
+                        color="error"
+                        variant="subtle"
+                        icon="i-lucide-triangle-alert"
+                        :description="t('admin.crypto.walletInitWarning')"
+                      />
+                      <UFormField
+                        :label="t('admin.crypto.depositMnemonic')"
+                        :description="t('admin.crypto.depositMnemonicImpact')"
+                      >
+                        <UInput
+                          id="crypto-deposit-mnemonic"
+                          v-model="depositMnemonic"
+                          type="password"
+                          autocomplete="off"
+                          spellcheck="false"
+                          class="mt-2 w-full"
+                        />
+                      </UFormField>
+                      <UFormField
+                        :label="t('admin.crypto.hotMnemonic')"
+                        :description="t('admin.crypto.hotMnemonicScope')"
+                      >
+                        <UInput
+                          id="crypto-initial-hot-mnemonic"
+                          v-model="initialHotMnemonic"
+                          type="password"
+                          autocomplete="off"
+                          spellcheck="false"
+                          class="mt-2 w-full"
+                        />
+                      </UFormField>
+                      <div class="flex justify-end">
+                        <UButton
+                          :loading="initializing"
+                          :disabled="
+                            initializing || !depositMnemonic.trim() || !initialHotMnemonic.trim()
+                          "
+                          @click="submitInitialize"
+                        >
+                          {{
+                            initializing
+                              ? t('common.saving')
+                              : t('admin.crypto.walletInitializeAction')
+                          }}
+                        </UButton>
+                      </div>
+                    </template>
+                    <USeparator />
+                    <UFormField
+                      :label="t('admin.crypto.walletToolsLabel')"
+                      :description="t('admin.crypto.walletToolsHint')"
+                      class="crypto-view__wallet-actions flex max-sm:flex-col justify-between items-start gap-4"
+                      :ui="{ container: 'shrink-0' }"
+                    >
+                      <div class="flex flex-wrap gap-2 sm:justify-end">
+                        <UButton
+                          color="neutral"
+                          variant="outline"
+                          size="sm"
+                          data-testid="crypto-mnemonics-open"
+                          :disabled="!walletCanDerive"
+                          @click="mnemonicsDialogOpen = true"
+                          >{{ t('admin.crypto.mnemonicsExportAction') }}</UButton
+                        >
+                        <UButton
+                          color="neutral"
+                          variant="outline"
+                          size="sm"
+                          data-testid="crypto-hot-import-open"
+                          :disabled="!walletCanDerive"
+                          @click="openWalletDialog()"
+                          >{{ t('admin.crypto.hotImportAction') }}</UButton
+                        >
+                      </div>
+                    </UFormField>
+                  </UPageCard>
+                </section>
+
+                <section id="crypto-rpc-settings" class="crypto-view__group">
+                  <UPageCard
+                    :title="t('admin.crypto.groupRpc')"
+                    :description="t('admin.crypto.groupRpcDesc')"
+                    variant="naked"
+                    class="mb-4"
+                  />
+                  <UPageCard variant="subtle">
+                    <div
+                      v-if="!rpcUnlocked"
+                      class="crypto-view__rpc-overview flex max-sm:flex-col justify-between items-start gap-4"
+                    >
+                      <div class="min-w-0 space-y-2">
+                        <p class="text-sm text-muted">{{ t('admin.crypto.rpcHiddenHint') }}</p>
+                        <div class="flex flex-wrap gap-1.5">
+                          <UBadge
+                            v-for="chain in config.chains"
+                            :key="`rpc-status-${chain}`"
+                            :color="configuredRPCChains.includes(chain) ? 'success' : 'neutral'"
+                            variant="subtle"
+                            :data-testid="`rpc-configured-${chain}`"
+                            >{{ chain }} ·
+                            {{
+                              t(
+                                configuredRPCChains.includes(chain)
+                                  ? 'admin.crypto.rpcConfigured'
+                                  : 'admin.crypto.rpcNotConfigured',
+                              )
+                            }}</UBadge
+                          >
+                        </div>
+                      </div>
+                      <UButton
+                        color="neutral"
+                        variant="outline"
+                        size="sm"
+                        class="shrink-0"
+                        :disabled="loadingPrivateRPC || savingConfig"
+                        @click="manageRPC"
+                      >
+                        {{ loadingPrivateRPC ? t('common.loading') : t('admin.crypto.rpcManage') }}
+                      </UButton>
+                    </div>
+                    <UAlert
+                      v-if="rpcError"
+                      role="alert"
+                      color="error"
+                      variant="subtle"
+                      icon="i-lucide-circle-alert"
+                      :title="rpcError"
+                    />
+
+                    <!-- Per-chain endpoint list: add / test / remove, and pull candidates from the public chainlist registry. -->
+                    <template v-if="rpcUnlocked">
+                      <template v-for="(chain, chainIndex) in config.chains" :key="`rpc-${chain}`">
+                        <USeparator v-if="chainIndex > 0" />
+                        <div class="crypto-view__rpc-chain space-y-3">
+                          <div class="flex flex-wrap items-center justify-between gap-2">
+                            <span class="font-mono text-sm font-medium text-highlighted">{{
+                              chain
+                            }}</span>
+                            <div class="flex flex-wrap gap-1.5">
+                              <UButton
+                                color="neutral"
+                                variant="outline"
+                                size="xs"
+                                icon="i-lucide-radio-tower"
+                                :disabled="fetchingCandidates === chain"
+                                @click="autoFillRPC(chain)"
+                              >
+                                {{
+                                  fetchingCandidates === chain
+                                    ? t('admin.crypto.rpcFetching')
+                                    : t('admin.crypto.rpcFetch')
+                                }}
+                              </UButton>
+                              <UButton
+                                color="neutral"
+                                variant="outline"
+                                size="xs"
+                                icon="i-lucide-plus"
+                                @click="addRPCRow(chain)"
+                                >{{ t('admin.crypto.rpcAdd') }}</UButton
+                              >
+                              <UButton
+                                color="neutral"
+                                variant="outline"
+                                size="xs"
+                                icon="i-lucide-play"
+                                :disabled="testingChain === chain"
+                                @click="testAllEndpoints(chain)"
+                              >
+                                {{
+                                  testingChain === chain
+                                    ? t('common.loading')
+                                    : t('admin.crypto.rpcTestAll')
+                                }}
+                              </UButton>
+                            </div>
+                          </div>
+                          <div
+                            v-for="(row, idx) in rpcRows[chain] ?? []"
+                            :key="`${chain}-${idx}`"
+                            class="flex flex-wrap items-center gap-2 sm:flex-nowrap"
+                          >
+                            <UInput
+                              v-model="row.url"
+                              class="crypto-view__rpc-input min-w-0 flex-1 basis-full sm:basis-auto"
+                              :ui="{ base: 'font-mono text-xs' }"
+                              :placeholder="t('admin.crypto.rpcPlaceholder')"
+                              :aria-label="`${chain} ${t('admin.crypto.rpcEndpoint')} ${idx + 1}`"
+                              @change="persistRPC(chain)"
+                            />
+                            <UBadge
+                              v-if="row.status"
+                              :color="row.ok ? 'success' : 'error'"
+                              variant="subtle"
+                              class="shrink-0"
+                              :title="row.error || ''"
+                            >
+                              {{
+                                row.ok
+                                  ? `${row.latency_ms}ms · #${row.block}`
+                                  : t('admin.crypto.rpcFail')
+                              }}
+                            </UBadge>
+                            <span v-else class="w-6 shrink-0 text-center text-sm text-dimmed"
+                              >—</span
+                            >
+                            <UButton
+                              color="neutral"
+                              variant="ghost"
+                              size="xs"
+                              :disabled="row.testing"
+                              @click="testEndpoint(chain, idx)"
+                              >{{ t('admin.crypto.rpcTest') }}</UButton
+                            >
+                            <UButton
+                              color="error"
+                              variant="ghost"
+                              size="xs"
+                              @click="removeRPCRow(chain, idx)"
+                              >{{ t('admin.crypto.rpcRemove') }}</UButton
+                            >
+                          </div>
+                          <p v-if="!(rpcRows[chain] ?? []).length" class="text-sm text-muted">{{
+                            t('common.noData')
+                          }}</p>
+                          <p
+                            v-if="rpcFetchNotes[chain]"
+                            class="crypto-view__fetch-note text-xs text-muted"
+                            >{{ rpcFetchNotes[chain] }}</p
+                          >
+                        </div>
+                      </template>
+                    </template>
+                  </UPageCard>
+                </section>
+
+                <section class="crypto-view__group">
+                  <UPageCard
+                    :title="t('admin.crypto.groupSweep')"
+                    :description="t('admin.crypto.groupSweepDesc')"
+                    variant="naked"
+                    class="mb-4"
+                  />
+                  <UPageCard variant="subtle">
+                    <UFormField
+                      :label="t('admin.crypto.globalThreshold')"
+                      :description="t('admin.crypto.globalThresholdHint')"
+                      class="flex max-sm:flex-col justify-between items-start gap-4"
+                    >
+                      <UInput
+                        v-model.number="config.sweep_global_threshold"
+                        data-testid="crypto-sweep-threshold"
+                        type="number"
+                        step="1"
+                        class="w-40"
+                      />
+                    </UFormField>
+                    <USeparator />
+                    <UFormField
+                      :label="t('admin.crypto.creditMin')"
+                      :description="t('admin.crypto.creditMinHint')"
+                      class="flex max-sm:flex-col justify-between items-start gap-4"
+                    >
+                      <UInput
+                        v-model.number="config.credit_min_amount"
+                        data-testid="crypto-credit-min"
+                        type="number"
+                        step="0.001"
+                        min="0"
+                        class="w-40"
+                      />
+                    </UFormField>
+                    <USeparator />
+                    <UFormField
+                      :label="t('admin.crypto.creditMax')"
+                      :description="t('admin.crypto.creditMaxHint')"
+                      class="flex max-sm:flex-col justify-between items-start gap-4"
+                    >
+                      <UInput
+                        v-model.number="config.credit_max_amount"
+                        data-testid="crypto-credit-max"
+                        type="number"
+                        step="1"
+                        min="0"
+                        class="w-40"
+                      />
+                    </UFormField>
+                    <USeparator />
+                    <UFormField
+                      :label="t('admin.crypto.nativePriceUrl')"
+                      :description="t('admin.crypto.nativePriceUrlHint')"
+                      class="flex max-sm:flex-col justify-between items-start gap-4"
+                    >
+                      <UInput
+                        v-model="config!.native_price_url"
+                        data-testid="crypto-native-price-url"
+                        type="url"
+                        placeholder="https://api.binance.com/api/v3/ticker/price"
+                        class="w-80"
+                      />
+                    </UFormField>
+                    <template v-for="chain in config!.chains" :key="`scan-limits-${chain}`">
+                      <USeparator />
+                      <div class="crypto-view__network-limits grid gap-4 sm:grid-cols-3">
+                        <UFormField :label="`${chain} · ${t('admin.crypto.sweepMinPerAddress')}`">
+                          <UInput
+                            v-model.number="config!.sweep_min_per_address[chain]"
+                            :data-testid="`crypto-sweep-min-${chain}`"
+                            type="number"
+                            min="0"
+                            step="0.001"
+                            class="mt-1 w-full"
+                          />
+                        </UFormField>
+                        <UFormField :label="`${chain} · ${t('admin.crypto.scanRange')}`">
+                          <UInput
+                            v-model.number="config!.scan_range[chain]"
+                            :data-testid="`crypto-scan-range-${chain}`"
+                            type="number"
+                            min="1"
+                            step="1"
+                            class="mt-1 w-full"
+                          />
+                        </UFormField>
+                        <UFormField :label="`${chain} · ${t('admin.crypto.scanConcurrency')}`">
+                          <UInput
+                            v-model.number="config!.scan_concurrency[chain]"
+                            :data-testid="`crypto-scan-concurrency-${chain}`"
+                            type="number"
+                            min="0"
+                            max="64"
+                            step="1"
+                            placeholder="0"
+                            class="mt-1 w-full"
+                          />
+                          <p class="mt-1 text-xs text-muted">{{
+                            t('admin.crypto.scanConcurrencyHint')
+                          }}</p>
+                        </UFormField>
+                      </div>
+                    </template>
+                    <USeparator />
+                    <UFormField
+                      :label="t('admin.crypto.hotWalletEvm')"
+                      :description="t('admin.crypto.sweepDestinationHint')"
+                      :error="
+                        config!.hot_wallet_evm.trim() ? false : t('admin.crypto.hotWalletMissing')
+                      "
+                      class="flex max-sm:flex-col justify-between items-start gap-4"
+                      :ui="{ container: 'w-full sm:max-w-sm' }"
+                    >
+                      <UInput
+                        v-model="config!.hot_wallet_evm"
+                        placeholder="0x…"
+                        class="w-full"
+                        :ui="{ base: 'font-mono text-xs' }"
+                      />
+                      <div class="mt-2 flex flex-wrap items-center gap-2">
+                        <UButton
+                          color="neutral"
+                          variant="outline"
+                          size="xs"
+                          :disabled="loadingHotAddress || !walletCanDerive"
+                          :title="
+                            !walletOk
+                              ? t('admin.crypto.walletUnavailable')
+                              : !walletLoaded
+                                ? t('admin.crypto.hotAddressLocked')
+                                : ''
+                          "
+                          @click="fillHotWalletAddresses"
+                        >
+                          {{
+                            loadingHotAddress
+                              ? t('common.loading')
+                              : t('admin.crypto.hotAddressFill')
+                          }}
+                        </UButton>
+                        <span v-if="hotAddressNote" class="text-xs text-muted">{{
+                          hotAddressNote
+                        }}</span>
+                      </div>
+                      <p class="mt-2 text-xs text-muted">{{ t('admin.crypto.hotIndexHint') }}</p>
+                    </UFormField>
+                    <USeparator />
+                    <UFormField
+                      :label="t('admin.crypto.sweepAuto')"
+                      :description="t('admin.crypto.sweepAutoHint')"
+                      class="flex items-center justify-between gap-4"
+                    >
+                      <Toggle
+                        :model-value="config!.sweep_auto"
+                        @update:model-value="confirmSweepAutoToggle"
+                      />
+                    </UFormField>
+                  </UPageCard>
+                </section>
+
+                <!-- Health: an empty pool blocks new deposits; a dry hot wallet blocks sweeps. Both are silent failures without this. -->
+                <section class="crypto-view__group" data-testid="crypto-health">
+                  <UPageCard
+                    :title="t('admin.crypto.healthTitle')"
+                    :description="t('admin.crypto.healthDesc')"
+                    variant="naked"
+                    orientation="horizontal"
+                    :ui="{ container: 'lg:grid-cols-[minmax(0,1fr)_auto]' }"
+                    class="mb-4"
+                  >
+                    <div class="flex items-center gap-3 lg:ms-auto">
+                      <span v-if="healthError" class="text-sm text-error">{{ healthError }}</span>
+                      <UButton
+                        color="neutral"
+                        variant="outline"
+                        size="sm"
+                        class="w-fit"
+                        :disabled="loadingHealth || !walletCanDerive"
+                        @click="loadHealth"
+                        >{{ t('common.refresh') }}</UButton
+                      >
+                    </div>
+                  </UPageCard>
+                  <UPageGrid
+                    v-if="Object.keys(poolStatus?.free ?? {}).length || hotWallets.length"
+                    class="gap-4 sm:grid-cols-2 lg:grid-cols-3"
+                  >
+                    <UPageCard
+                      v-for="(count, family) in poolStatus?.free ?? {}"
+                      :key="`pool-${family}`"
+                      variant="subtle"
+                      :title="`${t('admin.crypto.poolFree')} · ${family}`"
+                      :ui="statCardUi"
+                    >
+                      <div class="flex items-center gap-2">
+                        <span class="text-2xl font-semibold text-highlighted">{{ count }}</span>
+                        <UBadge
+                          v-if="count <= (poolStatus?.low_watermark ?? 0)"
+                          color="warning"
+                          variant="subtle"
+                          >{{ t('admin.crypto.poolLow') }}</UBadge
+                        >
+                      </div>
+                    </UPageCard>
+                    <UPageCard
+                      v-for="hw in hotWallets"
+                      :key="`hw-${hw.chain}`"
+                      variant="subtle"
+                      :title="`${hw.symbol} · ${hw.chain}`"
+                      :ui="statCardUi"
+                    >
+                      <p class="text-xs text-muted"
+                        >{{ t('admin.crypto.hotGasWallet') }} ·
+                        <span class="font-mono">{{ short(hw.address) }}</span></p
+                      >
+                      <div class="flex items-center gap-2">
+                        <span
+                          class="text-2xl font-semibold"
+                          :class="hw.error ? 'text-warning text-base' : 'text-highlighted'"
+                        >
+                          {{
+                            hw.error
+                              ? t(
+                                  hw.error_code === 'RPC_DISCOVERY_PENDING'
+                                    ? 'admin.crypto.rpcDiscovering'
+                                    : 'admin.crypto.hotWalletUnreachable',
+                                )
+                              : hw.balance
+                          }}
+                        </span>
+                        <UBadge v-if="!hw.error && !hw.enough" color="warning" variant="subtle">{{
+                          t('admin.crypto.gasInsufficient')
+                        }}</UBadge>
+                      </div>
+                      <p v-if="hw.rpc_source === 'chainlist'" class="text-xs text-muted">{{
+                        t('admin.crypto.rpcAutoSource')
+                      }}</p>
+                    </UPageCard>
+                  </UPageGrid>
+                </section>
+              </template>
+            </div>
+          </template>
+
+          <!-- Addresses -->
+          <template #addresses>
+            <div id="crypto-panel-addresses" class="crypto-view__panel flex flex-col gap-4">
+              <!-- Whole-set totals: they must not change when paging. -->
+              <UPageGrid class="lg:grid-cols-5 gap-4 sm:gap-6 lg:gap-px">
+                <UPageCard
+                  v-for="stat in addressStats"
+                  :key="stat.label"
+                  :icon="stat.icon"
+                  :title="t(stat.label)"
+                  variant="subtle"
+                  :ui="statCardUi"
+                  class="lg:rounded-none first:rounded-l-control last:rounded-r-control"
+                >
+                  <span class="text-2xl font-semibold text-highlighted">{{ stat.value }}</span>
+                </UPageCard>
+              </UPageGrid>
+
+              <div class="crypto-view__filters flex flex-wrap items-center justify-between gap-1.5">
+                <UInput
+                  v-model.number="addressUserId"
+                  type="number"
+                  icon="i-lucide-search"
+                  class="max-w-sm"
+                  :placeholder="t('admin.crypto.userId')"
+                  @keyup.enter="applyAddressFilter"
+                />
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <USelect
+                    :model-value="addressFamily || ALL"
+                    :items="familyItems"
+                    class="min-w-32"
+                    :aria-label="t('admin.crypto.family')"
+                    @update:model-value="setAddressFamily"
+                  />
+                  <UButton
+                    color="neutral"
+                    variant="outline"
+                    icon="i-lucide-search"
+                    @click="applyAddressFilter"
+                    >{{ t('common.search') }}</UButton
+                  >
+                  <UButton
+                    color="neutral"
+                    variant="outline"
+                    icon="i-lucide-refresh-cw"
+                    :disabled="loadingAddresses"
+                    @click="loadAddresses"
+                    >{{ t('common.refresh') }}</UButton
+                  >
+                  <UDropdownMenu :items="columnMenu('address')" :content="{ align: 'end' }">
+                    <UButton
+                      color="neutral"
+                      variant="outline"
+                      trailing-icon="i-lucide-settings-2"
+                      >{{ t('admin.crypto.columns') }}</UButton
+                    >
+                  </UDropdownMenu>
+                </div>
+              </div>
+
+              <UTable
+                v-model:column-visibility="addressVisibility"
+                :data="addresses"
+                :columns="addressTableColumns"
+                :loading="loadingAddresses"
+                :empty="t('common.noData')"
+                :ui="tableUi"
+              >
+                <template v-for="col in sortableAddressKeys" :key="col" #[`${col}-header`]>
+                  <UButton
+                    color="neutral"
+                    variant="ghost"
+                    size="sm"
+                    class="-mx-2.5"
+                    :class="addressSortBy === col ? 'text-highlighted' : ''"
+                    :trailing-icon="
+                      addressSortBy !== col
+                        ? 'i-lucide-arrow-up-down'
+                        : addressSortDir === 'asc'
+                          ? 'i-lucide-arrow-up-narrow-wide'
+                          : 'i-lucide-arrow-down-wide-narrow'
+                    "
+                    @click="sortAddresses(col)"
+                    >{{ addressColumnLabel(col) }}</UButton
+                  >
+                </template>
+                <template #address-cell="{ row }">
+                  <UButton
+                    color="neutral"
+                    variant="link"
+                    size="sm"
+                    class="px-0 font-mono"
+                    :title="row.original.address"
+                    @click="copyAddress(row.original.address)"
+                  >
+                    {{ short(row.original.address) }}
+                    <UIcon
+                      :name="
+                        copiedAddress === row.original.address ? 'i-lucide-check' : 'i-lucide-copy'
+                      "
+                      class="size-3.5 text-dimmed"
+                    />
+                  </UButton>
+                </template>
+                <template #credited_total-cell="{ row }">{{
+                  fmtAmount(row.original.credited_total)
+                }}</template>
+                <template #swept_total-cell="{ row }">{{
+                  fmtAmount(row.original.swept_total)
+                }}</template>
+                <template #status-cell="{ row }">
+                  <UBadge :color="statusColor(row.original.status)" variant="subtle">{{
+                    statusLabel(row.original.status)
+                  }}</UBadge>
+                </template>
+                <template #actions-cell="{ row }">
+                  <div class="flex justify-end gap-1">
+                    <UButton
+                      v-if="row.original.family === 'evm' || row.original.family === 'solana'"
+                      color="neutral"
+                      variant="ghost"
+                      size="xs"
+                      icon="i-lucide-key-round"
+                      :data-export-address="row.original.id"
+                      @click="privateKeyAddress = { ...row.original }"
+                      >{{ t('admin.crypto.privateKeyExportAction') }}</UButton
+                    >
+                    <UButton
+                      :color="row.original.status === 'active' ? 'error' : 'neutral'"
+                      variant="ghost"
+                      size="xs"
+                      @click="toggleAddress(row.original)"
+                    >
+                      {{
+                        row.original.status === 'active'
+                          ? t('admin.crypto.disable')
+                          : t('admin.crypto.enable')
+                      }}
+                    </UButton>
+                  </div>
+                </template>
+              </UTable>
+
+              <div
+                class="crypto-view__pager flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4"
+              >
+                <span class="text-sm text-muted">{{
+                  t('admin.crypto.pageSummary', {
+                    page: addressPage,
+                    pages: addressTotalPages,
+                    total: addressTotal,
+                  })
+                }}</span>
+                <UPagination
+                  v-if="addressTotalPages > 1"
+                  :page="addressPage"
+                  :total="addressTotal"
+                  :items-per-page="addressPageSize"
+                  @update:page="gotoAddressPage"
+                />
+              </div>
+            </div>
+          </template>
+
+          <!-- Sweep -->
+          <template #sweep>
+            <div id="crypto-panel-sweep" class="crypto-view__panel flex flex-col gap-4 sm:gap-6">
+              <div class="crypto-view__filters flex flex-wrap items-center justify-end gap-1.5">
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-refresh-cw"
+                  @click="loadSweepRecords"
+                  >{{ t('common.refresh') }}</UButton
+                >
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-list-checks"
+                  @click="loadSweepPlan"
+                  >{{ t('admin.crypto.loadPlan') }}</UButton
+                >
+                <UButton
+                  color="neutral"
+                  variant="outline"
+                  icon="i-lucide-flask-conical"
+                  :disabled="sweeping"
+                  @click="doSweep(true)"
+                  >{{ t('admin.crypto.sweepDryRun') }}</UButton
+                >
+                <UButton
+                  ref="sweepRunButton"
+                  data-testid="crypto-sweep-run"
+                  icon="i-lucide-arrow-up-from-line"
+                  :disabled="sweeping || !sweepReady"
+                  :title="sweepBlockedTitle"
+                  @click="requestSweep"
+                  >{{ t('admin.crypto.sweepRun') }}</UButton
+                >
+              </div>
+              <!-- Readiness is a backend verdict; show the exact blocking reason
+                 inline instead of leaving a disabled button with no explanation. -->
+              <UAlert
+                v-if="!sweepReady && signerEffectivelyLocked"
+                role="status"
+                color="warning"
+                variant="subtle"
+                :icon="windowExpiredVisible ? 'i-lucide-timer-off' : 'i-lucide-lock'"
+                :title="
+                  windowExpiredVisible
+                    ? t('admin.crypto.signer.lockedExpired')
+                    : t('admin.crypto.signer.locked')
+                "
+                :description="
+                  windowExpiredVisible
+                    ? t('admin.crypto.sweepUnlockWindowExpired')
+                    : t('admin.crypto.sweepGate.signerLocked')
+                "
+                :actions="[
+                  {
+                    label: t('admin.crypto.sweepUnlockCta'),
+                    color: 'warning',
+                    variant: 'solid',
+                    onClick: () => openSweepUnlock(),
+                  },
+                ]"
+                data-testid="crypto-sweep-signer-locked"
+              />
+              <UAlert
+                v-else-if="!sweepReady && sweepBlockedDescription"
+                role="alert"
+                color="warning"
+                variant="subtle"
+                icon="i-lucide-triangle-alert"
+                :title="t('admin.crypto.sweepGate.blockedTitle')"
+                :description="sweepBlockedDescription"
+                data-testid="crypto-sweep-gate-blocked"
+              />
+              <UAlert
+                v-else-if="signerUnlockRemaining > 0"
+                role="status"
+                color="success"
+                variant="subtle"
+                icon="i-lucide-timer"
+                :title="t('admin.crypto.sweepUnlockWindow', { time: signerUnlockLabel })"
+                :description="t('admin.crypto.sweepUnlockFocusHint')"
+                data-testid="crypto-sweep-unlock-window"
+              />
+              <CryptoGasWalletPanel
+                class="crypto-view__gas-funding"
+                :available="walletCanDerive"
+                :chains="loadedSnapshot?.chains ?? []"
+                :revision="gasWalletRevision"
+              />
+              <UAlert
+                v-if="activeSweep && !activeSweep.finished"
+                color="info"
+                variant="subtle"
+                icon="i-lucide-loader-circle"
+                :title="t('admin.crypto.sweepRunning')"
+                :description="t('admin.crypto.sweepRunningHint')"
+              />
+              <UAlert
+                v-if="sweepRunError"
+                color="warning"
+                variant="subtle"
+                icon="i-lucide-triangle-alert"
+                :title="sweepRunError"
+              />
+
+              <section v-if="blockedSweeps.length" class="crypto-view__blocked space-y-3">
+                <UAlert
+                  role="alert"
+                  color="warning"
+                  variant="subtle"
+                  icon="i-lucide-triangle-alert"
+                  :title="t('admin.crypto.blockedTitle')"
+                  :description="t('admin.crypto.blockedHint')"
+                />
+                <UTable :data="blockedSweeps" :columns="blockedColumns" :ui="tableUi">
+                  <template #address-cell="{ row }"
+                    ><span class="font-mono"
+                      >#{{ row.original.job_id }} · {{ short(row.original.address) }}</span
+                    ></template
+                  >
+                  <template #owner-cell="{ row }"
+                    ><CryptoOwnerCell :owner="ownerOf(row.original.address)"
+                  /></template>
+                  <template #status-cell="{ row }">
+                    <div class="flex flex-col items-start gap-1">
+                      <UBadge :color="statusColor(row.original.status)" variant="subtle">{{
+                        statusLabel(row.original.status)
+                      }}</UBadge>
+                      <span
+                        v-if="row.original.error"
+                        class="max-w-64 text-xs break-words whitespace-normal text-muted"
+                        >{{ row.original.error }}</span
+                      >
+                    </div>
+                  </template>
+                  <template #age_minutes-cell="{ row }">{{ row.original.age_minutes }}m</template>
+                  <template #actions-cell="{ row }">
+                    <div class="flex justify-end">
+                      <span
+                        v-if="!row.original.can_reconcile"
+                        class="max-w-48 text-end text-xs text-muted"
+                        data-testid="blocked-legacy"
+                        >{{ t('admin.crypto.reconcileLegacy') }}</span
+                      >
+                      <UButton
+                        v-else
+                        color="neutral"
+                        variant="outline"
+                        size="xs"
+                        :disabled="reconciling === row.original.job_id"
+                        @click="reconcileJob(row.original.job_id)"
+                      >
+                        {{
+                          reconciling === row.original.job_id
+                            ? t('common.loading')
+                            : t('admin.crypto.reconcile')
+                        }}
+                      </UButton>
+                    </div>
+                  </template>
+                </UTable>
+              </section>
+
+              <section v-if="sweepSummary" class="crypto-view__plan space-y-3">
+                <p class="crypto-view__plan-total text-sm text-toned">
+                  {{ t('admin.crypto.planned') }}:
+                  <strong class="text-highlighted">{{ sweepSummary.planned }}</strong> ·
+                  {{ t('admin.crypto.swept') }}:
+                  <strong class="text-highlighted">{{ sweepSummary.swept }}</strong> ·
+                  {{ t('admin.crypto.failed') }}:
+                  <strong class="text-highlighted">{{ sweepSummary.failed }}</strong> ·
+                  {{ t('admin.crypto.pending') }}:
+                  <strong class="text-highlighted">{{ sweepSummary.pending ?? 0 }}</strong> · gas:
+                  <strong class="text-highlighted">{{ sweepSummary.gas_topups }}</strong>
+                  <UBadge v-if="sweepSummary.dry_run" color="neutral" variant="subtle" class="ms-1"
+                    >dry-run</UBadge
+                  >
+                </p>
+                <UTable
+                  v-if="sweepSummary.entries?.length"
+                  :data="sweepSummary.entries"
+                  :columns="summaryColumns"
+                  :ui="tableUi"
+                >
+                  <template #address-cell="{ row }"
+                    ><span class="font-mono">{{ short(row.original.address) }}</span></template
+                  >
+                  <template #owner-cell="{ row }"
+                    ><CryptoOwnerCell :owner="ownerOf(row.original.address)"
+                  /></template>
+                  <template #status-cell="{ row }">
+                    <div class="flex flex-col items-start gap-1">
+                      <UBadge :color="statusColor(row.original.status)" variant="subtle">{{
+                        statusLabel(row.original.status)
+                      }}</UBadge>
+                      <span
+                        v-if="row.original.error"
+                        class="max-w-64 text-xs break-words whitespace-normal text-muted"
+                        >{{ row.original.error }}</span
+                      >
+                    </div>
+                  </template>
+                  <template #tx-cell="{ row }"
+                    ><span class="font-mono">{{
+                      short(row.original.sweep_tx_hash || row.original.gas_tx_hash)
+                    }}</span></template
+                  >
+                </UTable>
+              </section>
+
+              <section v-if="sweepPlan" class="crypto-view__plan space-y-3">
+                <p class="crypto-view__plan-total text-sm text-toned">
+                  {{ t('admin.crypto.totalToSweep') }}:
+                  <strong class="text-highlighted">{{ sweepPlan.TotalUSD.toFixed(2) }} USDT</strong>
+                  <UBadge v-if="sweepPlan.DryRun" color="neutral" variant="subtle" class="ms-1"
+                    >dry-run</UBadge
+                  >
+                </p>
+                <UTable
+                  v-if="sweepPlan.Entries?.length"
+                  :data="sweepPlan.Entries"
+                  :columns="planColumns"
+                  :ui="tableUi"
+                >
+                  <template #Address-cell="{ row }"
+                    ><span class="font-mono">{{ row.original.Address }}</span></template
+                  >
+                  <template #owner-cell="{ row }"
+                    ><CryptoOwnerCell :owner="ownerOf(row.original.Address)"
+                  /></template>
+                  <template #AmountDecimal-cell="{ row }">{{
+                    row.original.AmountDecimal.toFixed(2)
+                  }}</template>
+                </UTable>
+              </section>
+
+              <CryptoSweepRecordsPanel
+                v-if="sweepRecords.length || !sweepPlan"
+                :records="sweepRecords"
+                :has-more="sweepRecordsHasMore"
+                :loading="loadingSweepRecords"
+                :loading-more="loadingMoreSweepRecords"
+                @load-more="loadMoreRecords"
+                @refresh="loadSweepRecords"
+                @reconcile="reconcileJob"
+                @resweep="resweepChain"
+              />
+            </div>
+          </template>
+
+          <!-- Deposits: the reconciliation view -->
+          <template #deposits>
+            <div id="crypto-panel-deposits" class="crypto-view__panel flex flex-col gap-4">
+              <UPageGrid class="lg:grid-cols-5 gap-4 sm:gap-6 lg:gap-px">
+                <UPageCard
+                  v-for="stat in depositStats"
+                  :key="stat.label"
+                  :icon="stat.icon"
+                  :title="t(stat.label)"
+                  variant="subtle"
+                  :ui="statCardUi"
+                  class="lg:rounded-none first:rounded-l-control last:rounded-r-control"
+                >
+                  <span class="text-2xl font-semibold text-highlighted">{{ stat.value }}</span>
+                </UPageCard>
+              </UPageGrid>
+
+              <CryptoScanProgress />
+
+              <div class="crypto-view__filters flex flex-wrap items-center justify-between gap-1.5">
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <USelect
+                    :model-value="depositChain || ALL"
+                    :items="depositChainItems"
+                    class="min-w-36"
+                    :aria-label="t('admin.crypto.chain')"
+                    @update:model-value="setDepositChain"
+                  />
+                  <USelect
+                    :model-value="depositStatus || ALL"
+                    :items="depositStatusItems"
+                    class="min-w-32"
+                    :aria-label="t('common.status')"
+                    @update:model-value="setDepositStatus"
+                  />
+                </div>
+                <div class="flex flex-wrap items-center gap-1.5">
+                  <UButton
+                    v-if="selectedDeposits.length"
+                    color="warning"
+                    icon="i-lucide-circle-check-big"
+                    data-testid="deposit-confirm-open"
+                    :loading="confirmingDeposits"
+                    :disabled="confirmingDeposits || loadingDeposits"
+                    @click="openDepositConfirm"
+                    >{{
+                      t('admin.crypto.depositConfirmAction', {
+                        count: selectedDeposits.length,
+                        total: fmtAmount(selectedDepositsTotal),
+                      })
+                    }}</UButton
+                  >
+                  <UButton
+                    color="neutral"
+                    variant="outline"
+                    icon="i-lucide-scan-search"
+                    :loading="scanningDeposits"
+                    :disabled="loadingDeposits || scanningDeposits"
+                    @click="runDepositCatchup"
+                    >{{ t('admin.crypto.scanDeposits') }}</UButton
+                  >
+                  <UButton
+                    color="neutral"
+                    variant="outline"
+                    icon="i-lucide-refresh-cw"
+                    :disabled="loadingDeposits"
+                    @click="loadDeposits"
+                    >{{ t('common.refresh') }}</UButton
+                  >
+                  <UButton
+                    color="neutral"
+                    variant="outline"
+                    icon="i-lucide-download"
+                    :disabled="exporting"
+                    @click="downloadCSV"
+                    >{{ t('admin.crypto.exportCsv') }}</UButton
+                  >
+                  <UDropdownMenu :items="columnMenu('deposit')" :content="{ align: 'end' }">
+                    <UButton
+                      color="neutral"
+                      variant="outline"
+                      trailing-icon="i-lucide-settings-2"
+                      >{{ t('admin.crypto.columns') }}</UButton
+                    >
+                  </UDropdownMenu>
+                </div>
+              </div>
+
+              <UTable
+                v-model:column-visibility="depositVisibility"
+                :data="deposits"
+                :columns="depositTableColumns"
+                :loading="loadingDeposits"
+                :empty="t('common.noData')"
+                :ui="tableUi"
+              >
+                <template #select-header>
+                  <UCheckbox
+                    :model-value="
+                      allPendingSelected ? true : somePendingSelected ? 'indeterminate' : false
+                    "
+                    :aria-label="t('admin.crypto.depositSelectAll')"
+                    data-testid="deposit-select-all"
+                    @update:model-value="toggleAllPendingDeposits($event === true)"
+                  />
+                </template>
+                <template #select-cell="{ row }">
+                  <UCheckbox
+                    v-if="row.original.status === 'pending'"
+                    :model-value="selectedDepositIds.includes(row.original.id)"
+                    :aria-label="t('admin.crypto.depositSelectRow', { id: row.original.id })"
+                    data-testid="deposit-select-row"
+                    @update:model-value="toggleDepositSelected(row.original.id, $event === true)"
+                  />
+                </template>
+                <template #from_address-cell="{ row }"
+                  ><span class="font-mono" :title="row.original.from_address">{{
+                    short(row.original.from_address)
+                  }}</span></template
+                >
+                <template #to_address-cell="{ row }"
+                  ><span class="font-mono" :title="row.original.to_address">{{
+                    short(row.original.to_address)
+                  }}</span></template
+                >
+                <template #token_symbol-cell="{ row }"
+                  ><UBadge color="neutral" variant="outline">{{
+                    row.original.token_symbol || 'USDT'
+                  }}</UBadge></template
+                >
+                <template #native_price_usd-cell="{ row }">
+                  <span
+                    v-if="row.original.native_price_usd"
+                    class="whitespace-nowrap"
+                    :title="row.original.native_price_source"
+                    >${{ row.original.native_price_usd }}</span
+                  >
+                  <span v-else class="text-muted">—</span>
+                </template>
+                <template #native_price_at-cell="{ row }">
+                  <span v-if="row.original.native_price_at" class="whitespace-nowrap text-muted">{{
+                    fmtTime(row.original.native_price_at)
+                  }}</span>
+                  <span v-else class="text-muted">—</span>
+                </template>
+                <template #status-cell="{ row }">
+                  <div class="flex flex-wrap items-center gap-1.5">
+                    <UBadge :color="statusColor(row.original.status)" variant="subtle">{{
+                      statusLabel(row.original.status)
+                    }}</UBadge>
+                    <UBadge
+                      v-if="isDepositProvisional(row.original)"
+                      color="warning"
+                      variant="subtle"
+                      :title="t('deposit.provisionalHint')"
+                      data-testid="deposit-provisional-badge"
+                      >{{ t('deposit.statusProvisional') }}</UBadge
+                    >
+                    <UBadge
+                      v-if="isDepositRevoked(row.original)"
+                      color="error"
+                      variant="subtle"
+                      data-testid="deposit-revoked-badge"
+                      >{{ t('deposit.statusRevoked') }}</UBadge
+                    >
+                  </div>
+                  <p
+                    v-if="isDepositRevoked(row.original)"
+                    class="mt-1 max-w-56 text-xs text-error"
+                    data-testid="deposit-revoked-reason"
+                  >
+                    {{ depositRevokeReason(row.original) }}
+                  </p>
+                </template>
+                <template #credited_at-cell="{ row }">
+                  <span v-if="row.original.credited_at" class="whitespace-nowrap text-muted">{{
+                    fmtTime(row.original.credited_at)
+                  }}</span>
+                  <span v-else class="text-muted">—</span>
+                </template>
+                <template #tx_hash-cell="{ row }">
+                  <ULink
+                    v-if="explorerTxURL(row.original.chain, row.original.tx_hash)"
+                    class="font-mono text-primary hover:underline"
+                    :to="explorerTxURL(row.original.chain, row.original.tx_hash)"
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    >{{ short(row.original.tx_hash) }}</ULink
+                  >
+                  <span v-else class="font-mono">{{ short(row.original.tx_hash) }}</span>
+                </template>
+                <template #created_at-cell="{ row }"
+                  ><span class="whitespace-nowrap text-muted">{{
+                    fmtTime(row.original.created_at)
+                  }}</span></template
+                >
+              </UTable>
+
+              <div
+                class="crypto-view__pager flex flex-wrap items-center justify-between gap-3 border-t border-default pt-4"
+              >
+                <span class="text-sm text-muted">{{
+                  t('admin.crypto.pageSummary', {
+                    page: depositPage,
+                    pages: depositTotalPages,
+                    total: depositSummary.total,
+                  })
+                }}</span>
+                <UPagination
+                  v-if="depositTotalPages > 1"
+                  :page="depositPage"
+                  :total="depositSummary.total"
+                  :items-per-page="depositPageSize"
+                  @update:page="gotoDepositPage"
+                />
+              </div>
+            </div>
+          </template>
+        </UTabs>
+      </div>
+
+      <ConfirmDialog
+        :show="channelConfirmOpen"
+        :title="t('admin.crypto.channelConfirmTitle')"
+        :message="channelConfirmMessage"
+        :confirm-text="t('admin.crypto.channelConfirmAction')"
+        :cancel-text="t('common.cancel')"
+        :danger="!config?.enabled"
+        @confirm="commitChannelToggle"
+        @cancel="channelConfirmOpen = false"
+      />
+
+      <ConfirmDialog
+        :show="sweepAutoConfirmOpen"
+        :title="t('admin.crypto.sweepAutoConfirmTitle')"
+        :message="sweepAutoConfirmMessage"
+        :confirm-text="t('admin.crypto.sweepAutoConfirmAction')"
+        :cancel-text="t('common.cancel')"
+        danger
+        @confirm="commitSweepAutoToggle"
+        @cancel="sweepAutoConfirmOpen = false"
+      />
+
+      <CryptoMnemonicsDialog :show="mnemonicsDialogOpen" @close="mnemonicsDialogOpen = false" />
+      <ShardUnlockDialog
+        :show="sweepUnlockOpen"
+        mode="sweep"
+        :crypto="signerCrypto"
+        :locked="signerLocked"
+        :run-sweep="runUnlockedSweep"
+        @close="sweepUnlockOpen = false"
+        @completed="onUnlockedSweepCompleted"
+      />
+      <CryptoPrivateKeyDialog :address="privateKeyAddress" @close="privateKeyAddress = null" />
+      <CryptoDepositConfirmDialog
+        :show="depositDialogOpen"
+        :rows="depositDialogRows"
+        :total="depositDialogTotal"
+        :outcome="depositOutcome"
+        @close="depositDialogOpen = false"
+        @confirm="submitDepositConfirm"
+      />
+      <BaseDialog
+        :panel-data="{ 'data-crypto-ui': '' }"
+        trap-focus
+        :show="walletDialog !== null"
+        :title="t('admin.crypto.hotImportAction')"
+        @close="closeWalletDialog"
+      >
+        <form
+          id="crypto-wallet-form"
+          class="space-y-4"
+          autocomplete="off"
+          @submit.prevent="submitWallet"
+        >
+          <UAlert
+            color="warning"
+            variant="subtle"
+            icon="i-lucide-triangle-alert"
+            :description="t('admin.crypto.hotImportWarning')"
+          />
+          <UFormField :label="t('admin.crypto.hotMnemonic')" required>
+            <UInput
+              id="crypto-hot-mnemonic"
+              v-model="hotMnemonic"
+              type="password"
+              autocomplete="off"
+              spellcheck="false"
+              required
+              class="w-full"
+            />
+          </UFormField>
+        </form>
+        <template #footer>
+          <div class="flex justify-end gap-2">
+            <UButton
+              color="neutral"
+              variant="subtle"
+              data-testid="crypto-wallet-cancel"
+              @click="closeWalletDialog"
+              >{{ t('common.cancel') }}</UButton
+            >
+            <UButton
+              type="submit"
+              form="crypto-wallet-form"
+              color="error"
+              :disabled="!hotMnemonic.trim()"
+              >{{ t('admin.crypto.walletContinue') }}</UButton
+            >
+          </div>
+        </template>
+      </BaseDialog>
+      <CryptoSecurityDialog ref="securityDialog" />
+    </AppLayout>
+  </CryptoUi>
+</template>
+<script setup lang="ts">
+import UAlert from '@nuxt/ui/components/Alert.vue'
+import UBadge from '@nuxt/ui/components/Badge.vue'
+import UButton from '@nuxt/ui/components/Button.vue'
+import UCheckbox from '@nuxt/ui/components/Checkbox.vue'
+import UCheckboxGroup from '@nuxt/ui/components/CheckboxGroup.vue'
+import UCollapsible from '@nuxt/ui/components/Collapsible.vue'
+import UDropdownMenu from '@nuxt/ui/components/DropdownMenu.vue'
+import UFormField from '@nuxt/ui/components/FormField.vue'
+import UIcon from '@nuxt/ui/components/Icon.vue'
+import UInput from '@nuxt/ui/components/Input.vue'
+import ULink from '@nuxt/ui/components/Link.vue'
+import UNavigationMenu from '@nuxt/ui/components/NavigationMenu.vue'
+import UPageCard from '@nuxt/ui/components/PageCard.vue'
+import UPageGrid from '@nuxt/ui/components/PageGrid.vue'
+import UPagination from '@nuxt/ui/components/Pagination.vue'
+import USelect from '@nuxt/ui/components/Select.vue'
+import USeparator from '@nuxt/ui/components/Separator.vue'
+import UTable from '@nuxt/ui/components/Table.vue'
+import UTabs from '@nuxt/ui/components/Tabs.vue'
+import {
+  computed,
+  getCurrentInstance,
+  nextTick,
+  onMounted,
+  onUnmounted,
+  provide,
+  ref,
+  watch,
+} from 'vue'
+import type { Router } from 'vue-router'
+import { revealActiveNavItem } from '@/utils/revealActiveNavItem'
+import { useI18n } from 'vue-i18n'
+import AppLayout from '@/components/layout/AppLayout.vue'
+import CryptoUi from '@/components/crypto/CryptoUi.vue'
+import { useSectionRoute } from './sysSectionRoute'
+import ConfirmDialog from '@/components/common/ConfirmDialog.vue'
+import BaseDialog from '@/components/common/BaseDialog.vue'
+import CryptoSecurityDialog from '@/components/crypto/CryptoSecurityDialog.vue'
+import CryptoDepositConfirmDialog from '@/components/crypto/CryptoDepositConfirmDialog.vue'
+import CryptoGrantStatus from '@/components/crypto/CryptoGrantStatus.vue'
+import CryptoMnemonicsDialog from '@/components/crypto/CryptoMnemonicsDialog.vue'
+import CryptoPrivateKeyDialog from '@/components/crypto/CryptoPrivateKeyDialog.vue'
+import CryptoWalletSecurityPanel from '@/components/crypto/CryptoWalletSecurityPanel.vue'
+import CryptoOverviewStatusBar from '@/components/crypto/CryptoOverviewStatusBar.vue'
+import type { OverviewStatusId, OverviewStatusSegment } from '@/components/crypto/overviewStatus'
+import SignerShardsPanel from '@/components/crypto/signer/SignerShardsPanel.vue'
+import ShardUnlockDialog from '@/components/crypto/signer/ShardUnlockDialog.vue'
+import CryptoGasWalletPanel from '@/components/crypto/CryptoGasWalletPanel.vue'
+import CryptoChainStatusPanel from '@/components/crypto/CryptoChainStatusPanel.vue'
+import CryptoScanProgress from '@/components/crypto/CryptoScanProgress.vue'
+import { cryptoScanKey, useCryptoScan } from '@/composables/useCryptoScan'
+import ProfileBarkCard from '@/components/user/profile/ProfileBarkCard.vue'
+import LoadingSpinner from '@/components/common/LoadingSpinner.vue'
+import Toggle from '@/components/common/Toggle.vue'
+import CryptoOwnerCell from '@/components/crypto/CryptoOwnerCell.vue'
+import CryptoSweepRecordsPanel from '@/components/crypto/CryptoSweepRecordsPanel.vue'
+import type { DropdownMenuItem, TableColumn } from '@nuxt/ui'
+import { useAppStore } from '@/stores/app'
+import { useClipboard } from '@/composables/useClipboard'
+import { useAddressOwners } from '@/composables/useAddressOwners'
+import { useSweepRecords } from '@/composables/useSweepRecords'
+import { extractApiErrorMessage } from '@/utils/apiError'
+import { explorerTxURL } from '@/utils/cryptoExplorer'
+import { depositRevokeReasonCopy } from '@/utils/depositRevoke'
+import {
+  getCryptoConfig,
+  getCryptoConfigPrivate,
+  getHotWalletAddress,
+  getHotWalletStatus,
+  getPoolStatus,
+  getWalletStatus,
+  getSweepPlan,
+  getSweepReadiness,
+  listAllAddresses,
+  listDepositsPaged,
+  confirmDeposits,
+  listSweepRecords,
+  listBlockedSweeps,
+  reconcileSweep,
+  startSweep,
+  listSweepRuns,
+  waitForSweepRun,
+  setAddressStatus,
+  exportDepositsCSV,
+  initializeWallet,
+  updateCryptoConfig,
+  testRPCEndpoint,
+  autoPickRPC,
+  importHotMnemonic,
+  reportWalletOperationIntent,
+  type AddressSortKey,
+  type AdminAddressSummary,
+  type CryptoConfig,
+  type CryptoConfigPatch,
+  type DepositConfirmOutcome,
+  type DepositRecord,
+  type DepositSummary,
+  type DepositAddress,
+  type HotWalletStatus,
+  type PoolStatus,
+  type SweepPlan,
+  type BlockedSweep,
+  type SweepSummary,
+  type SweepRun,
+  type SweepGate,
+  type WalletSecurityStatus,
+  type WalletOperationAction,
+  type CryptoVerification,
+} from '@/api/admin/crypto'
+import type { SignerShardStatus } from '@/api/admin/cryptoSigner'
+import {
+  detectSignerCrypto,
+  detectSignerCryptoSupport,
+  type SignerCrypto,
+} from '@/utils/signer/cryptoProvider'
+import { buildSweepAuditInfo, type SweepAuditInfo } from '@/utils/signer/audit'
+import { isShareRequiredError } from '@/utils/signer/errors'
+
+const { t } = useI18n()
+const appStore = useAppStore()
+const { copyToClipboard } = useClipboard()
+const securityDialog = ref<InstanceType<typeof CryptoSecurityDialog> | null>(null)
+const privateKeyAddress = ref<DepositAddress | null>(null)
+const operationIntentError = ref('')
+
+async function notifyOperationIntent(action: WalletOperationAction): Promise<boolean> {
+  operationIntentError.value = ''
+  try {
+    await reportWalletOperationIntent(action)
+    return true
+  } catch {
+    operationIntentError.value = t('admin.crypto.walletOperationNotifyFailed')
+    appStore.showError(operationIntentError.value)
+    return false
+  }
+}
+
+async function withCryptoVerification(
+  label: string,
+  callback: (verification: CryptoVerification) => Promise<unknown>,
+): Promise<boolean> {
+  const operationTab = activeTab.value
+  return (
+    (await securityDialog.value?.verify(label, async (verification) => {
+      if (activeTab.value !== operationTab) return
+      await callback(verification)
+    })) ?? false
+  )
+}
+
+// UTabs (reka) owns roving focus and arrow/Home/End keys; each panel is a named slot.
+const tabs = computed(() => [
+  { value: 'config', slot: 'config' as const, label: t('admin.crypto.tabConfig') },
+  { value: 'addresses', slot: 'addresses' as const, label: t('admin.crypto.tabAddresses') },
+  { value: 'sweep', slot: 'sweep' as const, label: t('admin.crypto.tabSweep') },
+  { value: 'deposits', slot: 'deposits' as const, label: t('admin.crypto.tabDeposits') },
+  { value: 'chains', slot: 'chains' as const, label: t('admin.crypto.tabChains') },
+])
+// Open on the address list: it is the operator's main view (the config tab
+// is a one-time setup step).
+const activeTab = ref('addresses')
+type CryptoSection = 'overview' | 'addresses' | 'sweep' | 'deposits' | 'chains' | 'config'
+const {
+  section,
+  routed,
+  to: sectionTo,
+} = useSectionRoute<CryptoSection>('overview', {
+  overview: 'AdminCrypto',
+  addresses: 'AdminCryptoAddresses',
+  sweep: 'AdminCryptoSweeps',
+  deposits: 'AdminCryptoDeposits',
+  chains: 'AdminCryptoChains',
+  config: 'AdminCryptoSettings',
+})
+const overviewEntries = computed(() => [
+  { section: 'addresses' as const, label: t('admin.crypto.tabAddresses'), icon: 'i-lucide-wallet' },
+  {
+    section: 'sweep' as const,
+    label: t('admin.crypto.tabSweep'),
+    icon: 'i-lucide-arrow-up-from-line',
+  },
+  {
+    section: 'deposits' as const,
+    label: t('admin.crypto.tabDeposits'),
+    icon: 'i-lucide-arrow-down-to-line',
+  },
+  { section: 'chains' as const, label: t('admin.crypto.tabChains'), icon: 'i-lucide-activity' },
+  { section: 'config' as const, label: t('admin.crypto.tabConfig'), icon: 'i-lucide-settings-2' },
+])
+const navItems = computed(() => [
+  {
+    label: t('admin.crypto.tabOverview'),
+    icon: 'i-lucide-layout-dashboard',
+    to: sectionTo('overview'),
+  },
+  ...overviewEntries.value.map((entry) => ({
+    label: entry.label,
+    icon: entry.icon,
+    to: sectionTo(entry.section),
+  })),
+])
+// Six entries do not fit a phone. The strip scrolls sideways (finger swipe, no scrollbar)
+// instead of squeezing the labels, and keeps the current entry in view.
+const sectionStrip = ref<HTMLElement | null>(null)
+function revealSectionStrip(smooth: boolean) {
+  void nextTick(() => {
+    revealActiveNavItem(sectionStrip.value, { smooth })
+  })
+}
+watch(
+  sectionStrip,
+  (strip) => {
+    if (strip) revealSectionStrip(false)
+  },
+  { flush: 'post' },
+)
+watch(section, () => revealSectionStrip(true), { flush: 'post' })
+// The node-status panel polls only while its tab is the visible one. In routed mode the
+// overview keeps the last tab mounted behind v-show, so the route decides, not activeTab.
+const chainsActive = computed(() =>
+  routed ? section.value === 'chains' : activeTab.value === 'chains',
+)
+function openConfigTab() {
+  if (routed) section.value = 'config'
+  else switchTab('config')
+}
+
+const config = ref<CryptoConfig | null>(null)
+// Snapshot of the last loaded/saved config: the save confirmation diffs
+// against it to name exactly which dangerous fields are changing.
+const loadedSnapshot = ref<CryptoConfig | null>(null)
+const loadingConfig = ref(false)
+const savingConfig = ref(false)
+const configSaved = ref(false)
+const configError = ref('')
+const rpcUnlocked = ref(false)
+const configuredRPCChains = ref<string[]>([])
+const loadingPrivateRPC = ref(false)
+const rpcError = ref('')
+
+const addressUserId = ref<number | null>(null)
+const addresses = ref<DepositAddress[]>([])
+const addressFamily = ref('')
+const addressPage = ref(1)
+const addressPageSize = 50
+const addressTotal = ref(0)
+const addressSortBy = ref<AddressSortKey>('id')
+const addressSortDir = ref<'asc' | 'desc'>('desc')
+const loadingAddresses = ref(false)
+const copiedAddress = ref('')
+const addressSummary = ref<AdminAddressSummary>({
+  address_count: 0,
+  deposit_count: 0,
+  credited_total: 0,
+  swept_total: 0,
+})
+
+// Table columns in body order; keyed entries sort server-side over the whole set.
+const addressColumns: Array<{
+  id: keyof DepositAddress
+  key: AddressSortKey | null
+  label: string
+}> = [
+  { id: 'id', key: 'id', label: 'admin.crypto.colId' },
+  { id: 'user_id', key: 'user_id', label: 'admin.crypto.userId' },
+  { id: 'family', key: null, label: 'admin.crypto.family' },
+  { id: 'address', key: null, label: 'admin.crypto.address' },
+  { id: 'credited_total', key: 'credited_total', label: 'admin.crypto.credited' },
+  { id: 'swept_total', key: 'swept_total', label: 'admin.crypto.swept' },
+  { id: 'deposit_count', key: 'deposit_count', label: 'admin.crypto.statDeposits' },
+]
+const sortableAddressKeys = addressColumns.flatMap((col) => (col.key ? [col.key] : []))
+const addressColumnLabel = (key: AddressSortKey) =>
+  t(addressColumns.find((col) => col.key === key)?.label ?? key)
+const addressTableColumns = computed<TableColumn<DepositAddress>[]>(() => [
+  ...addressColumns.map((col) => ({ accessorKey: col.id, header: t(col.label) })),
+  { accessorKey: 'status', header: t('common.status') },
+  { id: 'actions', header: '', enableHiding: false },
+])
+
+// Nuxt UI's Select cannot hold an empty-string item; this sentinel stands for "all" and maps back to ''.
+const ALL = '__all__'
+const familyItems = computed(() => [
+  { label: t('admin.crypto.allFamilies'), value: ALL },
+  { label: 'EVM', value: 'evm' },
+  { label: 'Solana', value: 'solana' },
+])
+function setAddressFamily(value: string) {
+  addressFamily.value = value === ALL ? '' : value
+  applyAddressFilter()
+}
+const depositChainItems = computed(() => [
+  { label: t('admin.crypto.allChains'), value: ALL },
+  ...(config.value?.chains ?? []).map((chain) => ({ label: chain, value: chain })),
+])
+const depositStatusItems = computed(() => [
+  { label: t('admin.crypto.allStatuses'), value: ALL },
+  { label: t('deposit.statusCredited'), value: 'credited' },
+  { label: t('deposit.statusPending'), value: 'pending' },
+  { label: t('deposit.statusIgnored'), value: 'ignored' },
+])
+function setDepositChain(value: string) {
+  depositChain.value = value === ALL ? '' : value
+  applyDepositFilter()
+}
+function setDepositStatus(value: string) {
+  depositStatus.value = value === ALL ? '' : value
+  applyDepositFilter()
+}
+
+// Template look shared by every table on the page (dashboard template customers.vue).
+const tableUi = {
+  base: 'border-separate border-spacing-0',
+  thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
+  tbody: '[&>tr]:last:[&>td]:border-b-0',
+  th: 'py-2 first:rounded-l-control last:rounded-r-control border-y border-default first:border-l last:border-r',
+  td: 'border-b border-default',
+  separator: 'h-0',
+}
+// Stat cards as in the template's HomeStats.
+const statCardUi = {
+  container: 'gap-y-1.5',
+  wrapper: 'items-start',
+  leading: 'icon-orb-primary',
+  title: 'font-normal text-muted text-xs uppercase',
+}
+
+// Rarely used columns stay behind the "Columns" menu; the choice persists per table.
+function persistedVisibility(key: string, defaults: Record<string, boolean>) {
+  let stored: Record<string, boolean>
+  try {
+    stored = JSON.parse(localStorage.getItem(key) || '{}') ?? {}
+  } catch {
+    stored = {}
+  }
+  const state = ref<Record<string, boolean>>({ ...defaults, ...stored })
+  watch(
+    state,
+    (value) => {
+      try {
+        localStorage.setItem(key, JSON.stringify(value))
+      } catch {
+        /* storage unavailable */
+      }
+    },
+    { deep: true },
+  )
+  return state
+}
+const addressVisibility = persistedVisibility('admin.crypto.addressColumns', {
+  family: false,
+  deposit_count: false,
+})
+const depositVisibility = persistedVisibility('admin.crypto.depositColumns', {
+  from_address: false,
+  token_symbol: false,
+  native_price_at: false,
+})
+// Templates unwrap refs, so the table is named here and its visibility ref looked up.
+function columnMenu(table: 'address' | 'deposit'): DropdownMenuItem[] {
+  const visibility = table === 'address' ? addressVisibility : depositVisibility
+  const columns: TableColumn<any>[] =
+    table === 'address' ? addressTableColumns.value : depositTableColumns.value
+  return columns.flatMap((col) => {
+    const id = (col as { accessorKey?: string }).accessorKey ?? col.id
+    if (!id || col.enableHiding === false) return []
+    return [
+      {
+        label: typeof col.header === 'string' ? col.header : id,
+        type: 'checkbox' as const,
+        checked: visibility.value[id] !== false,
+        onUpdateChecked(checked: boolean) {
+          visibility.value = { ...visibility.value, [id]: !!checked }
+        },
+        onSelect(event: Event) {
+          event.preventDefault()
+        },
+      },
+    ]
+  })
+}
+
+const blockedColumns = computed<TableColumn<BlockedSweep>[]>(() => [
+  { accessorKey: 'chain', header: t('admin.crypto.chain') },
+  { accessorKey: 'address', header: t('admin.crypto.address') },
+  { id: 'owner', header: t('admin.crypto.sweepView.colUser') },
+  { accessorKey: 'status', header: t('common.status') },
+  { accessorKey: 'age_minutes', header: t('admin.crypto.blockedAge') },
+  { id: 'actions', header: '' },
+])
+const summaryColumns = computed<TableColumn<SweepSummary['entries'][number]>[]>(() => [
+  { accessorKey: 'chain', header: t('admin.crypto.chain') },
+  { accessorKey: 'address', header: t('admin.crypto.address') },
+  { id: 'owner', header: t('admin.crypto.sweepView.colUser') },
+  { accessorKey: 'status', header: t('common.status') },
+  { id: 'tx', header: 'TX' },
+])
+const planColumns = computed<TableColumn<NonNullable<SweepPlan['Entries']>[number]>[]>(() => [
+  { accessorKey: 'Chain', header: t('admin.crypto.chain') },
+  { accessorKey: 'Address', header: t('admin.crypto.address') },
+  { id: 'owner', header: t('admin.crypto.sweepView.colUser') },
+  { accessorKey: 'AmountDecimal', header: t('admin.crypto.amount') },
+])
+const depositTableColumns = computed<TableColumn<DepositRecord>[]>(() => [
+  // Only pending rows can be confirmed by hand; a page with none keeps the table as it was.
+  ...(pendingDeposits.value.length ? [{ id: 'select', header: '', enableHiding: false }] : []),
+  { accessorKey: 'chain', header: t('admin.crypto.chain') },
+  { accessorKey: 'from_address', header: t('admin.crypto.from') },
+  { accessorKey: 'to_address', header: t('admin.crypto.address') },
+  { accessorKey: 'token_symbol', header: t('admin.crypto.token') },
+  { accessorKey: 'amount', header: t('admin.crypto.amount') },
+  { accessorKey: 'native_price_usd', header: t('admin.crypto.nativePrice') },
+  { accessorKey: 'native_price_at', header: t('admin.crypto.nativePriceAt') },
+  { accessorKey: 'status', header: t('common.status') },
+  { accessorKey: 'credited_at', header: t('admin.crypto.depCreditedAt') },
+  { accessorKey: 'tx_hash', header: 'TX' },
+  { accessorKey: 'created_at', header: t('admin.crypto.colTime') },
+])
+
+const addressTotalPages = computed(() =>
+  Math.max(1, Math.ceil(addressTotal.value / addressPageSize)),
+)
+
+const sweepPlan = ref<SweepPlan | null>(null)
+const {
+  records: sweepRecords,
+  hasMore: sweepRecordsHasMore,
+  loading: loadingSweepRecords,
+  loadingMore: loadingMoreSweepRecords,
+  reload: reloadSweepRecords,
+  loadMore: loadMoreSweepRecords,
+} = useSweepRecords((page) =>
+  listSweepRecords(undefined, { limit: page.limit, beforeId: page.beforeId }),
+)
+const blockedSweeps = ref<BlockedSweep[]>([])
+const reconciling = ref<number | null>(null)
+const sweepSummary = ref<SweepSummary | null>(null)
+// Who owns the addresses in the blocked / summary / plan tables. The records
+// panel resolves its own rows; both share one cache.
+const { ownerOf } = useAddressOwners(() => [
+  ...blockedSweeps.value.map((job) => job.address),
+  ...(sweepSummary.value?.entries ?? []).map((entry) => entry.address),
+  ...(sweepPlan.value?.Entries ?? []).map((entry) => entry.Address),
+])
+const sweeping = ref(false)
+const activeSweep = ref<SweepRun | null>(null)
+const sweepRunError = ref('')
+let sweepPoll: AbortController | null = null
+onUnmounted(() => sweepPoll?.abort())
+const channelConfirmOpen = ref(false)
+const sweepAutoConfirmOpen = ref(false)
+const pendingChannelEnabled = ref(false)
+const pendingSweepAuto = ref(false)
+
+const deposits = ref<DepositRecord[]>([])
+const depositSummary = ref<DepositSummary>({
+  total: 0,
+  credited: 0,
+  pending: 0,
+  ignored: 0,
+  amount: 0,
+  provisional: 0,
+  revoked: 0,
+})
+const depositChain = ref('')
+const depositStatus = ref('')
+const depositPage = ref(1)
+const depositPageSize = 50
+const loadingDeposits = ref(false)
+const cryptoScan = useCryptoScan(
+  withCryptoVerification,
+  async (completed) => {
+    if (completed) depositPage.value = 1
+    await loadDeposits()
+  },
+  appStore,
+)
+provide(cryptoScanKey, cryptoScan)
+const { running: scanningDeposits, resume: resumeScanRun } = cryptoScan
+const runDepositCatchup = () => cryptoScan.start()
+
+const depositTotalPages = computed(() =>
+  Math.max(1, Math.ceil(depositSummary.value.total / depositPageSize)),
+)
+
+// Manual confirmation of pending deposits. Selection is per page: loadDeposits
+// drops ids that are no longer pending rows, so a page or filter change starts clean.
+const selectedDepositIds = ref<number[]>([])
+const confirmingDeposits = ref(false)
+const depositDialogOpen = ref(false)
+const depositDialogRows = ref<DepositRecord[]>([])
+const depositDialogTotal = ref('')
+const depositOutcome = ref<DepositConfirmOutcome | null>(null)
+
+const pendingDeposits = computed(() => deposits.value.filter((item) => item.status === 'pending'))
+const selectedDeposits = computed(() =>
+  pendingDeposits.value.filter((item) => selectedDepositIds.value.includes(item.id)),
+)
+const selectedDepositsTotal = computed(() =>
+  selectedDeposits.value.reduce((sum, item) => sum + (Number(item.amount) || 0), 0),
+)
+const allPendingSelected = computed(
+  () =>
+    pendingDeposits.value.length > 0 &&
+    selectedDeposits.value.length === pendingDeposits.value.length,
+)
+const somePendingSelected = computed(
+  () => selectedDeposits.value.length > 0 && !allPendingSelected.value,
+)
+
+const poolStatus = ref<PoolStatus | null>(null)
+const hotWallets = ref<HotWalletStatus[]>([])
+const loadingHealth = ref(false)
+const healthError = ref('')
+const exporting = ref(false)
+
+const walletConfigured = ref(false)
+const walletLoaded = ref(false)
+const walletChannelEnabled = ref(false)
+const walletOk = ref(false)
+const walletSecurityLocked = ref(false)
+// Last security-monitor snapshot, kept for the merged overview status strip.
+const walletSecurityStatus = ref<WalletSecurityStatus | null>(null)
+// v3 vault state from the signer shard setup (PR #519 contract).
+const walletSignerLocked = ref(false)
+const signerStatus = ref<SignerShardStatus | null>(null)
+// Backend-owned sweep readiness (GET /admin/crypto/sweep/readiness). Null means
+// the endpoint is unavailable (older backend/spec) and the local fallback runs.
+const sweepGate = ref<SweepGate | null>(null)
+const signerCrypto = ref<SignerCrypto | null>(null)
+const sweepUnlockOpen = ref(false)
+// Detail cards expose their loaders so the single overview refresh can update
+// them together with the page statistics.
+const walletSecurityPanel = ref<{ refresh?: () => Promise<void> } | null>(null)
+const signerShardsPanel = ref<{ refresh?: () => Promise<void> } | null>(null)
+const refreshingOverview = ref(false)
+const signerLocked = computed(() => signerStatus.value?.locked === true || walletSignerLocked.value)
+const walletCanDerive = computed(
+  () => walletOk.value && walletLoaded.value && !walletSecurityLocked.value,
+)
+const walletReady = computed(() => walletCanDerive.value && walletChannelEnabled.value)
+const walletStateLabel = computed(() =>
+  walletSecurityLocked.value
+    ? 'admin.crypto.walletSecurityLocked'
+    : !walletOk.value
+      ? 'admin.crypto.walletUnavailable'
+      : !walletConfigured.value
+        ? 'admin.crypto.walletNotConfigured'
+        : !walletLoaded.value
+          ? 'admin.crypto.walletUnavailable'
+          : walletReady.value
+            ? 'admin.crypto.walletReady'
+            : 'admin.crypto.walletNeedsConfig',
+)
+const loadingHotAddress = ref(false)
+const gasWalletRevision = ref(0)
+const hotAddressNote = ref('')
+const loadingWallet = ref(false)
+const initializing = ref(false)
+const depositMnemonic = ref('')
+const initialHotMnemonic = ref('')
+const walletDialog = ref<'import' | null>(null)
+const mnemonicsDialogOpen = ref(false)
+const hotMnemonic = ref('')
+
+// A real sweep needs a destination. Without one the backend refuses anyway;
+// blocking here stops the operator before they wonder why nothing happened.
+const sweepDestinationConfigured = computed(() => {
+  const hot = config.value?.hot_wallet_evm?.trim() ?? ''
+  if (!hot) return false
+  return hot.replace(/^0x/i, '').replace(/0/g, '') !== ''
+})
+// Fallback used only when the readiness endpoint is unavailable: the old local
+// derivation, so an older backend still gets a working (if less precise) page.
+const sweepGateFallbackReady = computed(() => walletReady.value && sweepDestinationConfigured.value)
+const sweepGateReason = computed(() => sweepGate.value?.reason ?? '')
+const sweepGateReasonKey = computed(() => {
+  switch (sweepGateReason.value) {
+    case 'wallet_unavailable':
+      return 'admin.crypto.sweepGate.walletUnavailable'
+    case 'destination_missing':
+      return 'admin.crypto.sweepGate.destinationMissing'
+    case 'destination_mismatch':
+      return 'admin.crypto.sweepGate.destinationMismatch'
+    case 'destination_invalid':
+      return 'admin.crypto.sweepGate.destinationInvalid'
+    case 'channel_disabled':
+      return 'admin.crypto.sweepGate.channelDisabled'
+    case 'security_locked':
+      return 'admin.crypto.sweepGate.securityLocked'
+    case 'wallet_not_ready':
+      return 'admin.crypto.sweepGate.walletNotReady'
+    case 'signer_locked':
+      return 'admin.crypto.sweepGate.signerLocked'
+    default:
+      return 'admin.crypto.sweepGate.walletNotReady'
+  }
+})
+const sweepReady = computed(() =>
+  sweepGate.value ? sweepGate.value.ready : sweepGateFallbackReady.value,
+)
+const sweepBlockedDescription = computed(() => {
+  if (sweepGate.value) {
+    return sweepGate.value.ready ? '' : t(sweepGateReasonKey.value)
+  }
+  // Pre-readiness-endpoint fallback wording (matches the old tooltip).
+  if (sweepGateFallbackReady.value) return ''
+  return !walletOk.value
+    ? t('admin.crypto.walletUnavailable')
+    : !walletLoaded.value
+      ? t('admin.crypto.hotAddressLocked')
+      : t('admin.crypto.walletNotReady')
+})
+const sweepBlockedTitle = computed(() => (sweepReady.value ? '' : sweepBlockedDescription.value))
+
+// The signer window is published by the backend (signer/status.unlocked_until).
+// Count down locally only against that deadline; when it lapses the state is
+// re-read so the button goes back to disabled on its own.
+const unlockClock = ref(Date.now())
+let unlockTicker: ReturnType<typeof setInterval> | null = null
+const signerUnlockUntilMs = computed(() => {
+  const raw = signerStatus.value?.unlocked_until ?? sweepGate.value?.signer_unlocked_until
+  if (!raw) return 0
+  const parsed = Date.parse(raw)
+  return Number.isFinite(parsed) ? parsed : 0
+})
+const signerUnlockRemaining = computed(() => {
+  if (!signerUnlockUntilMs.value) return 0
+  return Math.max(0, Math.ceil((signerUnlockUntilMs.value - unlockClock.value) / 1000))
+})
+const signerUnlockLabel = computed(() => {
+  const total = signerUnlockRemaining.value
+  return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
+})
+const signerWindowExpired = ref(false)
+watch(signerUnlockRemaining, (remaining, previous) => {
+  if (previous > 0 && remaining === 0) {
+    // The 15-minute lease ran out: the signer is sealed again.
+    signerWindowExpired.value = true
+    void refreshSweepState()
+  } else if (remaining > 0) {
+    signerWindowExpired.value = false
+  }
+})
+
+// A lease that lapsed on this page means the signer is already locked, even
+// before the next status read confirms it. Badges, the sweep gate alert and the
+// overview CTA all key off these two computeds so they can never disagree.
+const signerWindowExpiredNow = computed(
+  () => !signerLocked.value && signerUnlockUntilMs.value > 0 && signerUnlockRemaining.value === 0,
+)
+const signerEffectivelyLocked = computed(() => signerLocked.value || signerWindowExpiredNow.value)
+const windowExpiredVisible = computed(
+  () => signerWindowExpired.value || signerWindowExpiredNow.value,
+)
+const securityMonitoringHealthy = computed(
+  () =>
+    !!walletSecurityStatus.value &&
+    walletSecurityStatus.value.enabled &&
+    !walletSecurityStatus.value.deposits_paused &&
+    !walletSecurityLocked.value,
+)
+const signerHealthy = computed(
+  () => !!signerStatus.value?.configured && !signerEffectivelyLocked.value,
+)
+const overviewSweepTarget = computed(() =>
+  signerEffectivelyLocked.value
+    ? { name: 'AdminCryptoSweeps', query: { unlock: '1' } }
+    : { name: 'AdminCryptoSweeps' },
+)
+const securityHintKey = computed(() => {
+  if (!walletSecurityStatus.value) return 'admin.crypto.overview.statusUnknown'
+  if (walletSecurityLocked.value) return 'admin.crypto.walletSecurityLocked'
+  if (walletSecurityStatus.value.deposits_paused) return 'admin.crypto.walletSecurityDepositsPaused'
+  if (!walletSecurityStatus.value.enabled) return 'admin.crypto.walletSecurityDisabled'
+  return 'admin.crypto.walletSecurityMonitoring'
+})
+const signerHintKey = computed(() => {
+  if (!signerStatus.value?.configured) return 'admin.crypto.signer.notConfiguredTitle'
+  if (windowExpiredVisible.value) return 'admin.crypto.signer.lockedExpired'
+  if (signerLocked.value) return 'admin.crypto.signer.locked'
+  return 'admin.crypto.signer.unlocked'
+})
+const overviewSegments = computed<OverviewStatusSegment[]>(() => [
+  {
+    id: 'wallet',
+    ok: walletReady.value,
+    titleKey: 'admin.crypto.overview.walletSegment',
+    hintKey: walletReady.value ? 'admin.crypto.walletReady' : walletStateLabel.value,
+    actionLabel: 'admin.crypto.overview.walletAction',
+  },
+  {
+    id: 'security',
+    ok: securityMonitoringHealthy.value,
+    titleKey: 'admin.crypto.overview.securitySegment',
+    hintKey: securityHintKey.value,
+    actionLabel: 'admin.crypto.overview.securityAction',
+  },
+  {
+    id: 'signer',
+    ok: signerHealthy.value,
+    titleKey: 'admin.crypto.overview.signerSegment',
+    hintKey: signerHintKey.value,
+    actionLabel: 'admin.crypto.overview.signerAction',
+  },
+])
+const walletSetupSteps = [
+  'admin.crypto.walletSetupStep1',
+  'admin.crypto.walletSetupStep2',
+  'admin.crypto.walletSetupStep3',
+] as const
+
+function goSection(target: CryptoSection): void {
+  if (routed) section.value = target
+  else switchTab(target)
+}
+
+function scrollToDetail(selector: string): void {
+  const element = document.querySelector(selector)
+  if (!element || typeof (element as HTMLElement).scrollIntoView !== 'function') return
+  ;(element as HTMLElement).scrollIntoView({ block: 'center' })
+}
+
+function onOverviewSegmentAction(id: OverviewStatusId): void {
+  if (id === 'wallet') {
+    goSection('config')
+    return
+  }
+  if (id === 'security') {
+    scrollToDetail('.crypto-view__security')
+    return
+  }
+  // A configured signer is fixed by unlocking it; an unconfigured one first
+  // needs the setup card, which is right below on the overview.
+  if (signerStatus.value?.configured) {
+    openSweepUnlock()
+    return
+  }
+  scrollToDetail('.crypto-view__signer')
+}
+
+/**
+ * The single overview refresh: status sources (wallet, security monitor,
+ * signer, sweep readiness) plus the address/deposit statistics in one click.
+ */
+async function refreshOverview(): Promise<void> {
+  if (refreshingOverview.value) return
+  refreshingOverview.value = true
+  try {
+    await Promise.allSettled([
+      refreshSweepState(),
+      walletSecurityPanel.value?.refresh?.(),
+      signerShardsPanel.value?.refresh?.(),
+      loadAddresses(),
+      loadDeposits(),
+    ])
+  } finally {
+    refreshingOverview.value = false
+  }
+}
+
+// The card re-reads the signer by itself; here only the page-level flag has to
+// follow so the sweep gate wording turns into "window expired" immediately.
+function onSignerWindowExpired(): void {
+  signerWindowExpired.value = true
+}
+
+// UButton instance ref; used to focus Run sweep right after an unlock.
+const sweepRunButton = ref<{ $el?: HTMLElement } | null>(null)
+let disposed = false
+const routerInstance = getCurrentInstance()?.appContext.config.globalProperties.$router as
+  Router | undefined
+
+const sweepConfirmMessage = computed(() =>
+  t('admin.crypto.sweepConfirmMessage', {
+    count: sweepPlan.value?.Entries?.length ?? 0,
+    total: (sweepPlan.value?.TotalUSD ?? 0).toFixed(2),
+    hot: config.value?.hot_wallet_evm?.trim() || t('admin.crypto.hotWalletNone'),
+  }),
+)
+
+const channelConfirmMessage = computed(() =>
+  t('admin.crypto.channelConfirmMessage', {
+    state: pendingChannelEnabled.value ? t('admin.crypto.enabled') : t('admin.crypto.disabled'),
+  }),
+)
+
+const sweepAutoConfirmMessage = computed(() =>
+  t('admin.crypto.sweepAutoConfirmMessage', {
+    state: pendingSweepAuto.value ? t('common.enabled') : t('common.disabled'),
+  }),
+)
+
+function statusLabel(status: string): string {
+  const labels: Record<string, string> = {
+    active: 'admin.crypto.statusActive',
+    disabled: 'admin.crypto.statusDisabled',
+    credited: 'deposit.statusCredited',
+    pending: 'deposit.statusPending',
+    ignored: 'deposit.statusIgnored',
+    reverted: 'deposit.statusReverted',
+    swept: 'admin.crypto.statusSwept',
+    failed: 'admin.crypto.failed',
+    planned: 'admin.crypto.planned',
+    gas_pending: 'admin.crypto.statusGasPending',
+    gas_confirmed: 'admin.crypto.statusGasConfirmed',
+    sweep_pending: 'admin.crypto.statusTokenPending',
+    token_pending: 'admin.crypto.statusTokenPending',
+    manual_review: 'admin.crypto.statusManualReview',
+  }
+  return labels[status] ? t(labels[status]) : status
+}
+
+const depositNetworks = [
+  { id: 'bsc', label: 'BSC (BEP20)', tokens: 'USDT / USDC' },
+  { id: 'ethereum', label: 'Ethereum (ERC20)', tokens: 'USDT / USDC' },
+  { id: 'polygon', label: 'Polygon (PoS)', tokens: 'USDT / USDC' },
+  { id: 'plasma', label: 'Plasma', tokens: 'USDT / USDC' },
+  { id: 'arbitrum', label: 'Arbitrum One', tokens: 'USDT / USDC' },
+  { id: 'base', label: 'Base', tokens: 'USDC' },
+  { id: 'xlayer', label: 'X Layer', tokens: 'USDT / USDC / USDC.e' },
+]
+// Checkbox group items; the test id lands on each checkbox button.
+const chainItems = depositNetworks.map((network) => ({
+  value: network.id,
+  label: network.label,
+  description: network.tokens,
+  'data-testid': `crypto-chain-${network.id}`,
+}))
+function setChains(value: unknown[]) {
+  if (!config.value) return
+  config.value.chains = value.map(String)
+  syncRPCRows()
+}
+
+// Badge colors keep the old meaning: green = done/active, amber = in flight, red = stopped/rejected.
+function statusColor(status: string): 'success' | 'warning' | 'error' | 'neutral' {
+  if (['active', 'swept', 'credited'].includes(status)) return 'success'
+  if (
+    [
+      'pending',
+      'gas_pending',
+      'gas_confirmed',
+      'token_pending',
+      'sweep_pending',
+      'manual_review',
+      'planned',
+    ].includes(status)
+  )
+    return 'warning'
+  if (['disabled', 'failed', 'ignored', 'reverted'].includes(status)) return 'error'
+  return 'neutral'
+}
+
+// Instant-credit state for one deposit row. provisional=true without a
+// revocation means the balance was credited at 0 confirmations and is still
+// inside the risk window; revoked_at means the chain invalidated it and the
+// credit was clawed back. Older backends omit both fields: degrade to nothing.
+function isDepositProvisional(row: DepositRecord): boolean {
+  return Boolean(row.provisional) && !row.revoked_at
+}
+
+function isDepositRevoked(row: DepositRecord): boolean {
+  return Boolean(row.revoked_at)
+}
+
+function depositRevokeReason(row: DepositRecord): string {
+  if (!row.revoked_at) return ''
+  const copy = depositRevokeReasonCopy(row.revoke_reason)
+  return copy.params ? t(copy.key, copy.params) : t(copy.key)
+}
+
+const addressStats = computed(() => [
+  {
+    label: 'admin.crypto.statAddresses',
+    icon: 'i-lucide-wallet-cards',
+    value: addressSummary.value.address_count,
+  },
+  {
+    label: 'admin.crypto.statDeposits',
+    icon: 'i-lucide-inbox',
+    value: addressSummary.value.deposit_count,
+  },
+  {
+    label: 'admin.crypto.statCredited',
+    icon: 'i-lucide-arrow-down-to-line',
+    value: fmtAmount(addressSummary.value.credited_total),
+  },
+  {
+    label: 'admin.crypto.statSwept',
+    icon: 'i-lucide-arrow-up-from-line',
+    value: fmtAmount(addressSummary.value.swept_total),
+  },
+  {
+    label: 'admin.crypto.statUnswept',
+    icon: 'i-lucide-hourglass',
+    value: fmtAmount(addressSummary.value.credited_total - addressSummary.value.swept_total),
+  },
+])
+const depositStats = computed(() => [
+  {
+    label: 'admin.crypto.depTotal',
+    icon: 'i-lucide-list-checks',
+    value: depositSummary.value.total,
+  },
+  {
+    label: 'admin.crypto.depCredited',
+    icon: 'i-lucide-circle-check',
+    value: depositSummary.value.credited,
+  },
+  {
+    label: 'admin.crypto.depPending',
+    icon: 'i-lucide-hourglass',
+    value: depositSummary.value.pending,
+  },
+  {
+    label: 'admin.crypto.depIgnored',
+    icon: 'i-lucide-circle-alert',
+    value: depositSummary.value.ignored,
+  },
+  {
+    label: 'admin.crypto.depAmount',
+    icon: 'i-lucide-coins',
+    value: fmtAmount(depositSummary.value.amount),
+  },
+  // Instant-credit risk window: a nonzero provisional count means money is out
+  // before final confirmation; revoked counts the claw-backs (subset of reverted).
+  {
+    label: 'admin.crypto.depProvisional',
+    icon: 'i-lucide-timer',
+    value: depositSummary.value.provisional ?? 0,
+  },
+  {
+    label: 'admin.crypto.depRevoked',
+    icon: 'i-lucide-undo-2',
+    value: depositSummary.value.revoked ?? 0,
+  },
+])
+
+// --- RPC endpoint table -------------------------------------------------
+// config.rpc stores a comma-separated string per chain; the table edits it
+// as rows. Both directions go through the same helpers so the saved value
+// and the visible rows can never disagree.
+
+interface RPCRow {
+  url: string
+  testing: boolean
+  status: boolean | null
+  ok: boolean
+  latency_ms: number
+  block: number
+  error: string
+}
+
+const rpcRows = ref<Record<string, RPCRow[]>>({})
+const fetchingCandidates = ref('')
+const testingChain = ref('')
+// How many healthy endpoints one click of "fetch from chainlist" adds.
+const RPC_AUTO_FILL_COUNT = 3
+// Per-chain note under the RPC table (how many probed / added, or an error).
+const rpcFetchNotes = ref<Record<string, string>>({})
+
+function rowsFromConfig(chain: string): RPCRow[] {
+  const raw = config.value?.rpc?.[chain] ?? ''
+  return raw
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .map((url) => ({
+      url,
+      testing: false,
+      status: null,
+      ok: false,
+      latency_ms: 0,
+      block: 0,
+      error: '',
+    }))
+}
+
+// Rebuild rows when the channels list changes (e.g. after loading config).
+function syncRPCRows() {
+  const next: Record<string, RPCRow[]> = {}
+  for (const chain of config.value?.chains ?? []) {
+    next[chain] = rowsFromConfig(chain)
+  }
+  rpcRows.value = next
+}
+
+// persistRPC writes the rows back into the comma-separated config value.
+function persistRPC(chain: string) {
+  if (!config.value) return
+  config.value.rpc ??= {}
+  config.value.rpc[chain] = (rpcRows.value[chain] ?? [])
+    .map((r) => r.url.trim())
+    .filter(Boolean)
+    .join(',')
+}
+
+function addRPCRow(chain: string) {
+  rpcRows.value[chain] ??= []
+  rpcRows.value[chain].push({
+    url: '',
+    testing: false,
+    status: null,
+    ok: false,
+    latency_ms: 0,
+    block: 0,
+    error: '',
+  })
+}
+
+function removeRPCRow(chain: string, idx: number) {
+  rpcRows.value[chain]?.splice(idx, 1)
+  persistRPC(chain)
+}
+
+async function testEndpoint(chain: string, idx: number) {
+  const row = rpcRows.value[chain]?.[idx]
+  if (!row || !row.url.trim()) return false
+  const endpoint = row.url.trim()
+  row.testing = true
+  try {
+    return await withCryptoVerification(
+      t('admin.crypto.rpcVerify', { chain, endpoint }),
+      async (verification) => {
+        const result = await testRPCEndpoint(chain, endpoint, verification)
+        row.status = true
+        row.ok = result.ok
+        row.latency_ms = result.latency_ms
+        row.block = result.block ?? 0
+        row.error = result.error ?? ''
+      },
+    )
+  } finally {
+    row.testing = false
+  }
+}
+
+async function testAllEndpoints(chain: string) {
+  testingChain.value = chain
+  try {
+    const rows = rpcRows.value[chain] ?? []
+    for (let i = 0; i < rows.length; i++) {
+      if (rows[i].url.trim() && !(await testEndpoint(chain, i))) break
+    }
+  } finally {
+    testingChain.value = ''
+  }
+}
+
+// autoFillRPC pulls the public registry, probes every candidate in parallel
+// on the server and appends the fastest healthy endpoints it does not
+// already have — three by default. One click, ready-to-scan nodes.
+async function autoFillRPC(chain: string) {
+  fetchingCandidates.value = chain
+  rpcFetchNotes.value[chain] = ''
+  try {
+    const exclude = (rpcRows.value[chain] ?? []).map((r) => r.url.trim()).filter(Boolean)
+    const want = Math.max(1, RPC_AUTO_FILL_COUNT)
+    await withCryptoVerification(
+      t('admin.crypto.rpcAutoVerify', { chain }),
+      async (verification) => {
+        const { picked, probed } = await autoPickRPC(chain, exclude, want, verification)
+        if (!picked.length) {
+          rpcFetchNotes.value[chain] = t('admin.crypto.rpcFetchEmpty', { probed })
+          return
+        }
+        for (const endpoint of picked) {
+          addRPCRow(chain)
+          const rows = rpcRows.value[chain] ?? []
+          const row = rows[rows.length - 1]
+          row.url = endpoint.endpoint
+          // Keep the probe numbers: the operator sees latency without re-testing.
+          row.status = true
+          row.ok = true
+          row.latency_ms = endpoint.latency_ms
+          row.block = endpoint.block ?? 0
+        }
+        persistRPC(chain)
+        rpcFetchNotes.value[chain] = t('admin.crypto.rpcFetchDone', {
+          count: picked.length,
+          probed,
+        })
+      },
+    )
+  } finally {
+    fetchingCandidates.value = ''
+  }
+}
+
+function short(value: string): string {
+  if (!value) return '—'
+  return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value
+}
+
+function switchTab(id: string) {
+  if (id !== activeTab.value) {
+    securityDialog.value?.forceClose()
+    clearWalletInputs()
+  }
+  activeTab.value = id
+  // Load on entry: an empty table on first visit reads as "no data".
+  if (id === 'addresses') {
+    void loadAddresses()
+  }
+  if (id === 'sweep') {
+    void loadSweepRecords()
+  }
+  if (id === 'deposits') {
+    void loadDeposits()
+    void resumeScanRun()
+  }
+}
+
+async function loadConfig() {
+  if (loadingConfig.value) return
+  loadingConfig.value = true
+  configError.value = ''
+  try {
+    const loaded = await getCryptoConfig()
+    // Earlier saves may predate some keys (rpc, chains); normalise here so a
+    // legacy row cannot blank the whole page on a null index.
+    config.value = {
+      ...loaded,
+      chains: loaded.chains ?? [],
+      // Public reads contain only configured-chain metadata. Do not retain
+      // credentials even if an older server accidentally includes them here.
+      rpc: {},
+      sweep_min_per_address: loaded.sweep_min_per_address ?? {},
+      gas_topup: loaded.gas_topup ?? {},
+      confirmations: loaded.confirmations ?? {},
+      scan_range: loaded.scan_range ?? {},
+      scan_concurrency: loaded.scan_concurrency ?? {},
+      hot_wallet_evm: loaded.hot_wallet_evm ?? '',
+      hot_wallet_solana: loaded.hot_wallet_solana ?? '',
+      hot_index: 0,
+      credit_min_amount: loaded.credit_min_amount ?? 0.001,
+      credit_max_amount: loaded.credit_max_amount ?? 10000,
+      native_price_url: loaded.native_price_url ?? '',
+      sweep_auto: loaded.sweep_auto ?? false,
+    }
+    configuredRPCChains.value = [...(loaded.rpc_configured ?? [])]
+    rpcUnlocked.value = false
+    rpcError.value = ''
+    loadedSnapshot.value = JSON.parse(JSON.stringify(config.value))
+    syncRPCRows()
+  } catch (err) {
+    configError.value = extractApiErrorMessage(err, t('admin.crypto.configLoadFailed'))
+  } finally {
+    loadingConfig.value = false
+  }
+}
+
+async function manageRPC() {
+  if (!config.value || loadingPrivateRPC.value || savingConfig.value) return
+  loadingPrivateRPC.value = true
+  rpcError.value = ''
+  try {
+    await withCryptoVerification(t('admin.crypto.securityConfigRead'), async (verification) => {
+      const loaded = await getCryptoConfigPrivate(verification)
+      if (!config.value || !loadedSnapshot.value || activeTab.value !== 'config') return
+      const rpc = { ...(loaded.rpc ?? {}) }
+      // Reading credentials changes neither the form's other edits nor the
+      // save diff. Only subsequent endpoint edits may submit the RPC map.
+      config.value.rpc = { ...rpc }
+      loadedSnapshot.value.rpc = { ...rpc }
+      configuredRPCChains.value = Object.keys(rpc).filter((chain) => rpc[chain]?.trim())
+      rpcUnlocked.value = true
+      syncRPCRows()
+    })
+  } catch (err) {
+    rpcError.value = extractApiErrorMessage(err, t('admin.crypto.rpcLoadFailed'))
+  } finally {
+    loadingPrivateRPC.value = false
+  }
+}
+
+// Keep this strict allowlist aligned with the server. Any other changed field
+// requires payment verification, including fields added in the future.
+const LOW_RISK_CONFIG_FIELDS = new Set<keyof CryptoConfigPatch>([
+  'sweep_global_threshold',
+  'sweep_min_per_address',
+  'scan_range',
+  'scan_concurrency',
+  'credit_min_amount',
+  'credit_max_amount',
+])
+
+const RISKY_FIELDS: Array<{ key: keyof CryptoConfig; label: string }> = [
+  { key: 'enabled', label: 'admin.crypto.enabled' },
+  { key: 'hot_wallet_evm', label: 'admin.crypto.hotWalletEvm' },
+  { key: 'hot_wallet_solana', label: 'admin.crypto.hotWalletSolana' },
+  { key: 'sweep_auto', label: 'admin.crypto.sweepAuto' },
+  { key: 'credit_multiplier', label: 'admin.crypto.creditMultiplier' },
+  { key: 'native_price_url', label: 'admin.crypto.nativePriceUrl' },
+  { key: 'chains', label: 'admin.crypto.chains' },
+  { key: 'rpc', label: 'admin.crypto.rpc' },
+  { key: 'gas_topup', label: 'admin.crypto.gasTopup' },
+  { key: 'confirmations', label: 'admin.crypto.confirmations' },
+]
+
+// riskyChanges lists the dangerous edits between the loaded snapshot and the
+// current form, as human-readable "label: before → after" lines.
+const riskyChanges = computed<string[]>(() => {
+  const before = loadedSnapshot.value
+  const after = config.value
+  if (!before || !after) return []
+  const out: string[] = []
+  for (const field of RISKY_FIELDS) {
+    const a = before[field.key]
+    const b = after[field.key]
+    if (JSON.stringify(a) === JSON.stringify(b)) continue
+    if (field.key === 'rpc') {
+      out.push(t('admin.crypto.rpcChanged'))
+      continue
+    }
+    out.push(`${t(field.label)}: ${formatChange(a)} → ${formatChange(b)}`)
+  }
+  return out
+})
+
+function formatChange(value: unknown): string {
+  if (value === null || value === undefined || value === '') return '—'
+  if (typeof value === 'boolean') return value ? t('common.enabled') : t('common.disabled')
+  if (typeof value === 'object') return JSON.stringify(value)
+  return String(value)
+}
+
+async function saveConfig() {
+  if (!config.value || savingConfig.value) return
+  const patch = JSON.parse(JSON.stringify(buildConfigPatch())) as CryptoConfigPatch
+  if (!Object.keys(patch).length) return
+  const snapshot = JSON.parse(JSON.stringify(config.value)) as CryptoConfig
+  const label = `${t('admin.crypto.saveConfirmMessage', { count: riskyChanges.value.length })}\n${riskyChanges.value.join('\n')}`
+  savingConfig.value = true
+  configSaved.value = false
+  const operationTab = activeTab.value
+  try {
+    if (
+      ('hot_wallet_evm' in patch || 'hot_wallet_solana' in patch) &&
+      !(await notifyOperationIntent('destination_change'))
+    )
+      return
+    if (activeTab.value !== operationTab) return
+    // Send only the fields that actually changed. The backend patch applies
+    // pointers onto the stored config, so posting the whole object used to
+    // rewrite maps the UI never renders (rpc, gas_topup, confirmations,
+    // scan_range, per-chain thresholds) — a null map could blank them.
+    const save = async (verification?: CryptoVerification) => {
+      await updateCryptoConfig(patch, verification)
+      loadedSnapshot.value = snapshot
+      if (rpcUnlocked.value)
+        configuredRPCChains.value = Object.keys(snapshot.rpc).filter((chain) =>
+          snapshot.rpc[chain]?.trim(),
+        )
+      configSaved.value = true
+      await loadWalletStatus()
+      if ('enabled' in patch) void appStore.fetchPublicSettings(true)
+    }
+    const requiresVerification = Object.keys(patch).some(
+      (key) => !LOW_RISK_CONFIG_FIELDS.has(key as keyof CryptoConfigPatch),
+    )
+    if (requiresVerification) await withCryptoVerification(label, save)
+    else await save()
+  } catch (err) {
+    appStore.showError(extractApiErrorMessage(err, t('common.error')))
+  } finally {
+    savingConfig.value = false
+  }
+}
+
+// buildConfigPatch diffs the form against the loaded snapshot. Map fields are
+// compared as a whole: if any chain entry changed, that map is sent in full.
+function buildConfigPatch(): CryptoConfigPatch {
+  const before = loadedSnapshot.value
+  const after = config.value
+  if (!before || !after) return {}
+  const patch: Record<string, unknown> = {}
+  for (const key of Object.keys(after) as Array<keyof CryptoConfig>) {
+    // Metadata is read-only; a hidden public RPC placeholder cannot erase
+    // configured endpoints when another setting is saved.
+    if (key === 'hot_index' || key === 'rpc_configured' || (key === 'rpc' && !rpcUnlocked.value))
+      continue
+    if (JSON.stringify(before[key]) !== JSON.stringify(after[key])) {
+      patch[key] = after[key]
+    }
+  }
+  return patch as CryptoConfigPatch
+}
+
+// requestSaveConfig gates the write behind a confirmation whenever the diff
+// touches money-moving fields.
+function requestSaveConfig() {
+  void saveConfig()
+}
+
+// fmtAmount keeps money columns readable and never renders NaN.
+function fmtAmount(value: number | null | undefined): string {
+  const n = Number(value ?? 0)
+  if (!Number.isFinite(n)) return '0.00'
+  // At least 2 digits, up to 8: a 0.067 credit must not display as 0.07.
+  return n.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 8 })
+}
+
+function sortAddresses(key: AddressSortKey) {
+  if (addressSortBy.value === key) {
+    addressSortDir.value = addressSortDir.value === 'asc' ? 'desc' : 'asc'
+  } else {
+    addressSortBy.value = key
+    // Totals are most useful largest-first; identifiers keep their natural order.
+    addressSortDir.value = key === 'id' || key === 'user_id' ? 'desc' : 'desc'
+  }
+  addressPage.value = 1
+  void loadAddresses()
+}
+
+function applyAddressFilter() {
+  addressPage.value = 1
+  void loadAddresses()
+}
+
+function gotoAddressPage(page: number) {
+  if (page < 1 || page > addressTotalPages.value) return
+  addressPage.value = page
+  void loadAddresses()
+}
+
+async function copyAddress(address: string) {
+  if (!(await copyToClipboard(address))) return
+  copiedAddress.value = address
+  window.setTimeout(() => {
+    if (copiedAddress.value === address) copiedAddress.value = ''
+  }, 1500)
+}
+
+async function loadAddresses() {
+  loadingAddresses.value = true
+  try {
+    const { items, total, summary } = await listAllAddresses({
+      userId: addressUserId.value,
+      page: addressPage.value,
+      pageSize: addressPageSize,
+      sortBy: addressSortBy.value,
+      sortDir: addressSortDir.value,
+    })
+    addresses.value = items
+    addressTotal.value = total
+    addressSummary.value = summary
+  } finally {
+    loadingAddresses.value = false
+  }
+}
+
+async function toggleAddress(row: DepositAddress) {
+  const next = row.status === 'active' ? 'disabled' : 'active'
+  const label = t('admin.crypto.addressConfirmMessage', {
+    address: row.address,
+    action: t(next === 'disabled' ? 'admin.crypto.disable' : 'admin.crypto.enable'),
+  })
+  const updated = await withCryptoVerification(label, async (verification) => {
+    await setAddressStatus(row.id, next, verification)
+  })
+  if (updated) await loadAddresses()
+}
+
+function confirmChannelToggle(value: boolean) {
+  if (value && walletSecurityLocked.value) {
+    appStore.showError(t('admin.crypto.walletSecurityRecoveryHint'))
+    return
+  }
+  pendingChannelEnabled.value = value
+  channelConfirmOpen.value = true
+}
+
+function commitChannelToggle() {
+  if (!config.value) return
+  config.value.enabled = pendingChannelEnabled.value
+  channelConfirmOpen.value = false
+}
+
+function confirmSweepAutoToggle(value: boolean) {
+  pendingSweepAuto.value = value
+  sweepAutoConfirmOpen.value = true
+}
+
+function commitSweepAutoToggle() {
+  if (!config.value) return
+  config.value.sweep_auto = pendingSweepAuto.value
+  sweepAutoConfirmOpen.value = false
+}
+
+async function loadSweepPlan() {
+  sweepPlan.value = await getSweepPlan()
+}
+
+async function doSweep(dryRun: boolean, chains?: string[]) {
+  if (sweeping.value) return
+  sweeping.value = true
+  const operationTab = activeTab.value
+  let shareRequired = false
+  try {
+    if (!dryRun && !(await notifyOperationIntent('sweep'))) return
+    if (activeTab.value !== operationTab) return
+    if (!dryRun) await loadSweepPlan()
+    if (activeTab.value !== operationTab) return
+    const label = dryRun ? t('admin.crypto.sweepDryRun') : sweepConfirmMessage.value
+    const completed = await withCryptoVerification(label, async (verification) => {
+      try {
+        activeSweep.value = await startSweep(dryRun, verification, chains)
+      } catch (error) {
+        // A v3 vault can reject the run even when the shard status was not
+        // loaded yet; route the operator to the share prompt instead of a
+        // generic failure.
+        if (!dryRun && isShareRequiredError(error)) shareRequired = true
+        throw error
+      }
+    })
+    if (completed && activeSweep.value) await followSweepRun(activeSweep.value)
+  } finally {
+    sweeping.value = false
+    if (shareRequired) {
+      walletSignerLocked.value = true
+      openSweepUnlock()
+    }
+  }
+}
+
+/**
+ * Executes one real sweep after the operator unlocked the signer with a share.
+ * Returns the audit summary shown inside the unlock dialog.
+ */
+async function runUnlockedSweep(share: string, totpCode: string): Promise<SweepAuditInfo> {
+  if (!(await notifyOperationIntent('sweep')))
+    throw new Error(t('admin.crypto.walletOperationNotifyFailed'))
+  await loadSweepPlan()
+  const plan = sweepPlan.value
+  sweeping.value = true
+  sweepRunError.value = ''
+  sweepPoll?.abort()
+  const controller = new AbortController()
+  sweepPoll = controller
+  try {
+    const run = await startSweep(false, { totpCode }, undefined, share)
+    activeSweep.value = run
+    const finished = await waitForSweepRun(run, controller.signal, (next) => {
+      activeSweep.value = next
+    })
+    sweepSummary.value = finished.summary ?? null
+    await Promise.all([loadSweepRecords(), loadSweepPlan()])
+    if (finished.error) {
+      sweepRunError.value = finished.error
+      throw new Error(finished.error)
+    }
+    appStore.showSuccess(t('admin.crypto.sweepCompleted'))
+    return buildSweepAuditInfo({ plan, summary: finished.summary, finished: finished.finished })
+  } finally {
+    if (sweepPoll === controller) {
+      sweepPoll = null
+      sweeping.value = false
+    }
+  }
+}
+
+function onUnlockedSweepCompleted(): void {
+  walletSignerLocked.value = false
+  if (signerStatus.value) signerStatus.value = { ...signerStatus.value, locked: false }
+  signerWindowExpired.value = false
+  void refreshSweepState().then(() => focusSweepRunButton())
+}
+
+// A released failure no longer holds its address, so the normal sweep run is
+// the re-sweep entry point. Scope it to the record's chain instead of sweeping
+// every chain the operator did not ask about.
+async function resweepChain(chain: string) {
+  if (!chain) return
+  await doSweep(false, [chain])
+}
+
+async function followSweepRun(run: SweepRun) {
+  sweepPoll?.abort()
+  const controller = new AbortController()
+  sweepPoll = controller
+  sweeping.value = true
+  sweepRunError.value = ''
+  try {
+    const result = await waitForSweepRun(run, controller.signal, (next) => {
+      activeSweep.value = next
+    })
+    sweepSummary.value = result.summary ?? null
+    if (result.error) sweepRunError.value = result.error
+    else appStore.showSuccess(t('admin.crypto.sweepCompleted'))
+    await Promise.all([loadSweepRecords(), loadSweepPlan()])
+  } catch {
+    if (!controller.signal.aborted) sweepRunError.value = t('admin.crypto.sweepStatusUnavailable')
+  } finally {
+    if (sweepPoll === controller) {
+      sweepPoll = null
+      sweeping.value = false
+    }
+  }
+}
+
+// The run button opens a confirmation that restates the destination and the
+// amount: two deliberate clicks before any funds move. A locked signer needs
+// a recovery share first, so it opens the unlock dialog instead.
+function requestSweep() {
+  if (!sweepReady.value) return
+  if (signerLocked.value) {
+    openSweepUnlock()
+    return
+  }
+  void doSweep(false)
+}
+
+async function loadMoreRecords() {
+  try {
+    await loadMoreSweepRecords()
+  } catch (error) {
+    appStore.showError(extractApiErrorMessage(error, t('admin.crypto.sweepView.loadMoreFailed')))
+  }
+}
+
+async function loadSweepRecords() {
+  await reloadSweepRecords()
+  blockedSweeps.value = await listBlockedSweeps()
+  if (!sweepPoll) {
+    try {
+      const runs = await listSweepRuns()
+      const running = runs.find((run) => !run.finished)
+      if (running) void followSweepRun(running)
+    } catch {
+      // Run status is auxiliary; keep records usable when the in-memory
+      // process state was lost during a restart.
+    }
+  }
+}
+
+// Reconcile never signs or broadcasts; unconfirmed jobs keep their reservation.
+async function reconcileJob(id: number) {
+  if (reconciling.value !== null) return
+  reconciling.value = id
+  try {
+    await withCryptoVerification(t('admin.crypto.reconcile'), async (verification) => {
+      const result = await reconcileSweep(id, verification)
+      appStore.showSuccess(result.message)
+    })
+    await Promise.all([loadSweepRecords(), loadSweepPlan()])
+  } finally {
+    reconciling.value = null
+  }
+}
+
+function fmtTime(value: string): string {
+  if (!value) return '—'
+  const d = new Date(value)
+  if (Number.isNaN(d.getTime())) return '—'
+  return d.toLocaleString()
+}
+
+function applyDepositFilter() {
+  depositPage.value = 1
+  void loadDeposits()
+}
+
+function gotoDepositPage(page: number) {
+  if (page < 1 || page > depositTotalPages.value) return
+  depositPage.value = page
+  void loadDeposits()
+}
+
+async function loadHealth() {
+  if (loadingHealth.value) return
+  loadingHealth.value = true
+  healthError.value = ''
+  try {
+    const pool = await getPoolStatus()
+    let hot: HotWalletStatus[] = []
+    if (walletCanDerive.value) {
+      hot = await getHotWalletStatus()
+    }
+    poolStatus.value = pool
+    hotWallets.value = hot
+  } catch (err: unknown) {
+    // The hot wallet may simply be unset: that is a configuration state,
+    // not a page-breaking error.
+    healthError.value = extractApiErrorMessage(err, '')
+    hotWallets.value = []
+  } finally {
+    loadingHealth.value = false
+  }
+}
+
+async function downloadCSV() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const chain = depositChain.value
+    const status = depositStatus.value
+    const operationTab = activeTab.value
+    await withCryptoVerification(t('admin.crypto.csvVerify'), async (verification) => {
+      const blob = await exportDepositsCSV(chain, status, verification)
+      if (operationTab !== activeTab.value) return
+      downloadBlob(blob, 'crypto-deposits.csv')
+    })
+  } finally {
+    exporting.value = false
+  }
+}
+
+async function loadWalletStatus() {
+  loadingWallet.value = true
+  try {
+    const st = await getWalletStatus()
+    walletOk.value = st.ok === true
+    walletConfigured.value = st.configured === true
+    walletLoaded.value = st.ready === true
+    walletChannelEnabled.value = st.enabled === true
+    walletSignerLocked.value = st.signer_locked === true
+    if (st.shards) signerStatus.value = st.shards
+    if (st.security) updateWalletSecurityState(st.security)
+  } catch {
+    // Reflect unavailable state in the wallet badge without breaking the page.
+    walletOk.value = false
+    walletLoaded.value = false
+    walletChannelEnabled.value = false
+  } finally {
+    loadingWallet.value = false
+  }
+}
+
+// The backend owns the "can I sweep" verdict; keep wallet/status and the gate
+// in step so the button and its reason never disagree.
+async function loadSweepGate() {
+  try {
+    const gate = await getSweepReadiness()
+    // Only a well-formed verdict replaces the local fallback; a spec/mock or an
+    // older backend must not accidentally make the button unusable.
+    sweepGate.value = gate && typeof gate.ready === 'boolean' ? gate : null
+  } catch {
+    // Older backend or a transient read failure: keep the local fallback.
+    sweepGate.value = null
+  }
+}
+
+async function refreshSweepState() {
+  await Promise.all([loadWalletStatus(), loadSweepGate()])
+}
+
+// Focus Run sweep after an unlock so the operator lands on the enabled action.
+async function focusSweepRunButton() {
+  await nextTick()
+  const element = sweepRunButton.value?.$el
+  if (!element || typeof element.focus !== 'function') return
+  element.focus()
+  if (typeof element.scrollIntoView === 'function') element.scrollIntoView({ block: 'center' })
+}
+
+function updateWalletSecurityState(state: WalletSecurityStatus) {
+  walletSecurityStatus.value = state
+  walletSecurityLocked.value = state.locked || state.deposits_paused
+  if (walletSecurityLocked.value) reflectSecurityChannelPause()
+}
+
+function onSignerStatusChange(next: SignerShardStatus) {
+  signerStatus.value = next
+  walletSignerLocked.value = next.locked
+  // A verify+unlock changes both the signer and the sweep gate.
+  void loadSweepGate()
+}
+
+/**
+ * Verify+unlock succeeded on the signer panel. Refresh the sweep gate, jump to
+ * the sweep panel (routed mode) and focus the now-enabled run button.
+ */
+async function onSignerUnlocked(next: SignerShardStatus): Promise<void> {
+  signerStatus.value = next
+  walletSignerLocked.value = next.locked
+  signerWindowExpired.value = false
+  await refreshSweepState()
+  // The signer card already raised the unlock toast; do not double-toast here.
+  if (!routed) {
+    switchTab('sweep')
+    await focusSweepRunButton()
+    return
+  }
+  const current = routerInstance?.currentRoute.value
+  if (!routerInstance || current?.name === 'AdminCryptoSweeps') {
+    await focusSweepRunButton()
+    return
+  }
+  // The sweeps route carries one-shot focus intent for both reused and remounted views.
+  await routerInstance.push({
+    name: 'AdminCryptoSweeps',
+    query: { ...current?.query, unlock: 'ready' },
+  })
+}
+
+/**
+ * Resolve the browser crypto implementation on demand. A non-secure context
+ * or a missing CSPRNG disables the flow with an explicit message; there is no
+ * weak-random fallback.
+ */
+function ensureSignerCrypto(): boolean {
+  if (signerCrypto.value) return true
+  const support = detectSignerCryptoSupport()
+  if (!support.supported) {
+    appStore.showError(describeCryptoUnavailable(support.reason))
+    return false
+  }
+  try {
+    signerCrypto.value = detectSignerCrypto()
+    return true
+  } catch {
+    appStore.showError(describeCryptoUnavailable(support.reason))
+    return false
+  }
+}
+
+function openUnlockDialog(): void {
+  if (!ensureSignerCrypto()) return
+  sweepUnlockOpen.value = true
+}
+
+// Drop the one-shot route intent so a refresh, a back/forward step or a second
+// click cannot replay the unlock dialog.
+function stripUnlockIntent(): void {
+  if (!routerInstance) return
+  const current = routerInstance.currentRoute.value
+  if (String(current.query.unlock ?? '') === '') return
+  const { unlock: _unlock, ...rest } = current.query
+  void routerInstance.replace({ name: current.name ?? undefined, query: rest, hash: current.hash })
+}
+
+/**
+ * Opens the signer unlock flow.
+ *
+ * Routing is the trap that made the unlock-and-sweep action a dead end: each crypto
+ * sub-page is its own route with its own page key, so switching to
+ * /admin/crypto/sweeps remounts the view and silently drops any local
+ * "dialog open" flag. The intent therefore travels in the URL and the sweeps
+ * route consumes it on mount.
+ */
+function openSweepUnlock(): void {
+  if (!routed) {
+    switchTab('sweep')
+    openUnlockDialog()
+    return
+  }
+  if (!routerInstance) return
+  const current = routerInstance.currentRoute.value
+  if (current.name === 'AdminCryptoSweeps') {
+    // Already on the sweep page and still mounted: open locally.
+    openUnlockDialog()
+    return
+  }
+  const query = { ...current.query, unlock: '1' }
+  void routerInstance.push({ name: 'AdminCryptoSweeps', query })
+}
+
+/**
+ * Runs on mount: consumes `?unlock=1` (open the shard dialog) or
+ * `?unlock=ready` (signer just unlocked, focus Run sweep).
+ */
+async function consumeUnlockIntent(): Promise<void> {
+  if (!routerInstance || disposed) return
+  const current = routerInstance.currentRoute.value
+  if (current.name !== 'AdminCryptoSweeps') return
+  const intent = current.query.unlock
+  if (intent !== '1' && intent !== 'ready') return
+  stripUnlockIntent()
+  if (intent === 'ready') {
+    await focusSweepRunButton()
+    return
+  }
+  if (signerEffectivelyLocked.value) openUnlockDialog()
+}
+
+function describeCryptoUnavailable(reason: string | null): string {
+  return t(
+    reason === 'insecure-context'
+      ? 'admin.crypto.signer.insecureContext'
+      : reason === 'no-csprng'
+        ? 'admin.crypto.signer.noCsprng'
+        : 'admin.crypto.signer.noAes',
+  )
+}
+
+function reflectSecurityChannelPause() {
+  walletChannelEnabled.value = false
+  // The security guard pauses the channel, and recovery deliberately keeps it
+  // disabled. Preserve other unsaved edits and never reread RPC credentials
+  // with a second TOTP prompt just to update the public on/off indicator.
+  if (config.value) config.value.enabled = false
+  if (loadedSnapshot.value) loadedSnapshot.value.enabled = false
+}
+
+async function onWalletSecurityRecovered() {
+  reflectSecurityChannelPause()
+  void appStore.fetchPublicSettings(true)
+  await refreshSweepState()
+}
+
+// Derive the Gas wallet addresses in the main service and fill the destination.
+async function fillHotWalletAddresses() {
+  if (!walletCanDerive.value || loadingHotAddress.value) return
+  loadingHotAddress.value = true
+  hotAddressNote.value = ''
+  try {
+    const addr = await getHotWalletAddress()
+    if (!config.value) return
+    config.value.hot_wallet_evm = addr.evm
+    config.value.hot_wallet_solana = addr.solana
+    hotAddressNote.value = t('admin.crypto.hotAddressFilled', { index: addr.index })
+  } catch (e) {
+    hotAddressNote.value = extractApiErrorMessage(e)
+  } finally {
+    loadingHotAddress.value = false
+  }
+}
+
+async function submitInitialize() {
+  if (!depositMnemonic.value.trim() || !initialHotMnemonic.value.trim() || initializing.value)
+    return
+  initializing.value = true
+  const operationTab = activeTab.value
+  try {
+    const completed = await withCryptoVerification(
+      t('admin.crypto.walletInitWarning'),
+      async (verification) => {
+        if (operationTab !== activeTab.value) return
+        await initializeWallet(
+          depositMnemonic.value.trim(),
+          initialHotMnemonic.value.trim(),
+          verification,
+        )
+      },
+    )
+    if (completed && operationTab === activeTab.value) {
+      await loadWalletStatus()
+      appStore.showSuccess(t('admin.crypto.walletInitializeDone'))
+    }
+  } finally {
+    depositMnemonic.value = ''
+    initialHotMnemonic.value = ''
+    initializing.value = false
+  }
+}
+
+function downloadBlob(blob: Blob, filename: string) {
+  const url = URL.createObjectURL(blob)
+  const anchor = document.createElement('a')
+  anchor.href = url
+  anchor.download = filename
+  document.body.appendChild(anchor)
+  try {
+    anchor.click()
+  } finally {
+    anchor.remove()
+    URL.revokeObjectURL(url)
+  }
+}
+
+function closeWalletDialog() {
+  walletDialog.value = null
+  hotMnemonic.value = ''
+}
+
+function openWalletDialog() {
+  closeWalletDialog()
+  walletDialog.value = 'import'
+}
+
+async function submitWallet() {
+  if (!walletDialog.value || !hotMnemonic.value.trim()) return
+  const operationTab = activeTab.value
+  let mnemonic = hotMnemonic.value.trim()
+  walletDialog.value = null
+  try {
+    const completed = await withCryptoVerification(
+      t('admin.crypto.hotImportWarning'),
+      async (verification) => {
+        if (operationTab !== activeTab.value) return
+        const result = await importHotMnemonic(mnemonic, verification)
+        if (!result.saved) throw new Error(t('common.error'))
+      },
+    )
+    if (completed && operationTab === activeTab.value) {
+      hotAddressNote.value = ''
+      gasWalletRevision.value++
+      await loadWalletStatus()
+      appStore.showSuccess(t('admin.crypto.hotImportDone'))
+    }
+  } finally {
+    mnemonic = ''
+    closeWalletDialog()
+  }
+}
+
+function clearWalletInputs() {
+  closeWalletDialog()
+  depositMnemonic.value = ''
+  initialHotMnemonic.value = ''
+}
+
+watch(activeTab, clearWalletInputs)
+watch(activeTab, () => {
+  mnemonicsDialogOpen.value = false
+})
+watch(
+  activeTab,
+  () => {
+    privateKeyAddress.value = null
+  },
+  { flush: 'sync' },
+)
+onUnmounted(clearWalletInputs)
+
+async function loadDeposits() {
+  loadingDeposits.value = true
+  try {
+    const { items, summary } = await listDepositsPaged(
+      depositChain.value,
+      depositStatus.value,
+      depositPage.value,
+      depositPageSize,
+    )
+    deposits.value = items
+    depositSummary.value = summary
+    const pending = new Set(
+      items.filter((item) => item.status === 'pending').map((item) => item.id),
+    )
+    selectedDepositIds.value = selectedDepositIds.value.filter((id) => pending.has(id))
+  } finally {
+    loadingDeposits.value = false
+  }
+}
+
+function toggleDepositSelected(id: number, selected: boolean) {
+  const rest = selectedDepositIds.value.filter((item) => item !== id)
+  selectedDepositIds.value = selected ? [...rest, id] : rest
+}
+
+function toggleAllPendingDeposits(selected: boolean) {
+  selectedDepositIds.value = selected ? pendingDeposits.value.map((item) => item.id) : []
+}
+
+// The dialog works on a snapshot, so a refresh behind it cannot change what the
+// operator agreed to credit.
+function openDepositConfirm() {
+  if (confirmingDeposits.value || !selectedDeposits.value.length) return
+  depositOutcome.value = null
+  depositDialogRows.value = [...selectedDeposits.value]
+  depositDialogTotal.value = fmtAmount(selectedDepositsTotal.value)
+  depositDialogOpen.value = true
+}
+
+// Same payment-proof path as sweep / address status: withCryptoVerification reuses
+// a live grant or asks for a fresh TOTP, and the proof rides on this one request.
+async function submitDepositConfirm(note: string) {
+  if (confirmingDeposits.value || !depositDialogRows.value.length) return
+  confirmingDeposits.value = true
+  const rows = depositDialogRows.value
+  const ids = rows.map((row) => row.id)
+  const chains = [...new Set(rows.map((row) => row.chain))].join(', ')
+  depositDialogOpen.value = false
+  depositOutcome.value = null
+  let attempted = false
+  try {
+    await withCryptoVerification(
+      t('admin.crypto.depositConfirmVerify', {
+        count: ids.length,
+        total: depositDialogTotal.value,
+        chains,
+      }),
+      async (verification) => {
+        attempted = true
+        depositOutcome.value = await confirmDeposits(ids, verification, note)
+      },
+    )
+    // A request-level failure is shown by the verification dialog; per-deposit
+    // results (including rejected ones) are shown here.
+    if (depositOutcome.value) depositDialogOpen.value = true
+    // After any request that went out, the list is the only reliable record of
+    // what was credited. A cancelled verification leaves the selection alone.
+    if (attempted) {
+      selectedDepositIds.value = []
+      try {
+        await loadDeposits()
+      } catch (error) {
+        appStore.showError(extractApiErrorMessage(error, t('common.error')))
+      }
+    }
+  } finally {
+    confirmingDeposits.value = false
+  }
+}
+
+// Sibling routes can reuse this view. Consume an unlock intent after the target
+// panel renders, with initial navigation handled after signer state loads.
+watch(
+  () => routerInstance?.currentRoute.value.fullPath,
+  () => {
+    void consumeUnlockIntent()
+  },
+  { flush: 'post' },
+)
+
+// Sub-page routes drive the tab panels; the overview keeps the addresses panel ready behind it.
+watch(
+  section,
+  (value) => {
+    if (routed && value !== 'overview' && value !== activeTab.value) switchTab(value)
+  },
+  { immediate: true },
+)
+
+onMounted(async () => {
+  void loadConfig()
+  // The default tab is addresses, so load it without waiting for a click.
+  void loadAddresses()
+  // The lock badge lives in the config tab but reflects live state; the sweep
+  // gate is what enables Run sweep and names the blocking reason.
+  await refreshSweepState()
+  await consumeUnlockIntent()
+  unlockTicker = setInterval(() => {
+    unlockClock.value = Date.now()
+  }, 1000)
+})
+
+onUnmounted(() => {
+  disposed = true
+  if (unlockTicker) clearInterval(unlockTicker)
+  unlockTicker = null
+})
+</script>

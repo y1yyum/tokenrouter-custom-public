@@ -6,6 +6,9 @@
 export default {
   // Common
   common: {
+    apply: '应用',
+    creating: '创建中…',
+    required: '为必填项',
     submitting: '提交中…',
     sending: '发送中…',
     tryAgain: '重试',
@@ -46,6 +49,8 @@ export default {
     all: '全部',
     selectAll: '全选',
     reorderColumn: '拖动调整“{column}”的位置，也可使用左右方向键',
+    sortAscending: '升序',
+    sortDescending: '降序',
     none: '无',
     or: '或',
     noData: '暂无数据',
@@ -174,6 +179,8 @@ export default {
   },
   // Navigation
   nav: {
+    cryptoDeposit: '链上充值',
+    cryptoDeposits: '链上收款管理',
     dashboard: '仪表盘',
     modelMarketplace: '模型广场',
     usageRanking: '用量排行',

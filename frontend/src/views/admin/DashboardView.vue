@@ -6,7 +6,7 @@
         class="btn btn-secondary shrink-0 btn-icon"
         :disabled="chartsLoading"
         :title="t('common.refresh')"
-        @click="loadDashboardStats"
+        @click="refreshDashboard"
       >
         <Icon name="refresh" size="sm" :class="chartsLoading ? 'animate-spin' : ''" />
       </button>
@@ -16,6 +16,33 @@
       <DashboardSkeleton v-if="loading && !stats" />
 
       <template v-else-if="stats">
+        <!-- User ID Pool Capacity Alert Banner -->
+        <div
+          v-if="stats.user_id_pool_alert"
+          data-test="user-id-pool-alert"
+          :class="[
+            'flex items-center justify-between rounded-surface border p-4 text-sm font-medium',
+            stats.user_id_pool_alert.severity === 'critical'
+              ? 'border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200'
+              : 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200',
+          ]"
+        >
+          <div class="flex items-center gap-3">
+            <Icon name="exclamationTriangle" size="md" />
+            <span>{{ stats.user_id_pool_alert.message }}</span>
+          </div>
+          <span
+            :class="[
+              'rounded-full px-2.5 py-0.5 text-xs font-semibold',
+              stats.user_id_pool_alert.severity === 'critical'
+                ? 'bg-red-200 text-red-900 dark:bg-red-900 dark:text-red-100'
+                : 'bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100',
+            ]"
+          >
+            {{ stats.user_id_pool_alert.usage_percent.toFixed(1) }}%
+          </span>
+        </div>
+
         <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <div class="card p-4">
             <div class="flex flex-col gap-2 lg:flex-row lg:items-center">
@@ -396,6 +423,16 @@
         :message="t('admin.dashboard.failedToLoad')"
         @retry="loadDashboardStats"
       />
+      <ImportedCallsPanel
+        ref="importedCalls"
+        view="groups"
+        :start-date="startDate"
+        :end-date="endDate"
+      >
+        <template v-if="!stats && !loading" #selected-dates>
+          <DateRangePicker v-model:start-date="startDate" v-model:end-date="endDate" />
+        </template>
+      </ImportedCallsPanel>
     </div>
   </AppLayout>
 </template>
@@ -418,6 +455,7 @@ import LoadErrorState from '@/components/common/LoadErrorState.vue'
 import AppLayout from '@/components/layout/AppLayout.vue'
 import ChartSkeleton from '@/components/common/ChartSkeleton.vue'
 import DashboardSkeleton from '@/components/common/DashboardSkeleton.vue'
+import ImportedCallsPanel from '@/components/admin/usage/ImportedCallsPanel.vue'
 import Icon from '@/components/icons/Icon.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import Select from '@/components/common/Select.vue'
@@ -452,7 +490,8 @@ import {
 // datasets. This keeps accounts with equal display names distinct and fills absent
 // dates with zero tokens. Chart reloads retain summary statistics, while initial
 // loading requests statistics together with trend data. Ranking failures clear ranking
-// rows and totals and expose the ranking error state.
+// rows and totals and expose the ranking error state. Imported groups load independently
+// at mount and follow the date picker only when the administrator selects that scope.
 
 // The translation function supplies dashboard labels and messages throughout the
 // mounted administrator view and its charts.
@@ -475,6 +514,7 @@ const { formatBalanceAmount, formatUsdAmount } = useBalanceDisplay()
 // progress, user trends, and ranking feedback.
 const stats = ref<DashboardStats | null>(null)
 const loading = ref(true)
+const importedCalls = ref<InstanceType<typeof ImportedCallsPanel> | null>(null)
 const chartsLoading = ref(false)
 const userTrendLoading = ref(false)
 const rankingLoading = ref(false)
@@ -886,11 +926,16 @@ const loadUserSpendingRanking = async () => {
   }
 }
 
-// loadDashboardStats starts the snapshot, user trend, and ranking requests together. It
-// includes summary statistics and waits for all three request wrappers, each of which
-// handles its own errors and loading state.
+// loadDashboardStats starts the native summary, trend, and ranking requests. Each
+// section owns its failure state and the imported panel starts its own initial read.
 const loadDashboardStats = async () => {
   await Promise.all([loadDashboardSnapshot(true), loadUsersTrend(), loadUserSpendingRanking()])
+}
+
+// refreshDashboard repeats both native and historical queries for the current selections.
+function refreshDashboard() {
+  importedCalls.value?.reload()
+  void loadDashboardStats()
 }
 
 // loadChartData reloads the chart, user trend, and ranking panels together. The

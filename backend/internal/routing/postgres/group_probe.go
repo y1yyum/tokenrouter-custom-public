@@ -13,7 +13,7 @@ import (
 )
 
 // group_probe.go persists probe leases and outcomes and aggregates group
-// availability history.
+// availability history from probe rounds and imported call counts.
 // Availability probes use durable per-group leases so separate runner instances
 // can claim work. Claiming reconciles enabled active groups with schedule rows
 // before locking due rows and recording lease owners in one transaction. A
@@ -25,10 +25,42 @@ import (
 // observations by their start time in fixed-duration local buckets, while
 // latest status is selected independently across all retained history. An empty
 // bucket reports unknown availability, and an older latest observation can
-// remain visible outside the counting window.
+// remain visible outside the counting window. Imported minutes use the same
+// bucket boundaries and count each recorded request, without inferring an
+// individual request outcome or completion time from the most recent minute.
+
+// Availability queries return the same bucket grain for probe rounds and imported calls.
+// A probe row represents a single round. An imported minute contains request counts
+// that must be summed before calculating the success fraction.
+const (
+	probeAvailabilityBucketsSQL = `
+		SELECT
+			group_id,
+			FLOOR((EXTRACT(EPOCH FROM started_at) - EXTRACT(EPOCH FROM $2::timestamptz)) / ($4::double precision * 60))::int AS bucket_index,
+			COUNT(*) FILTER (WHERE success = true) AS success_count,
+			COUNT(*) AS total_count
+		FROM group_availability_probe_results
+		WHERE group_id = ANY($1)
+		  AND started_at >= $2
+		  AND started_at < $3
+		GROUP BY group_id, bucket_index
+	`
+	importedAvailabilityBucketsSQL = `
+		SELECT
+			group_id,
+			FLOOR((EXTRACT(EPOCH FROM bucket_start) - EXTRACT(EPOCH FROM $2::timestamptz)) / ($4::double precision * 60))::int AS bucket_index,
+			SUM(success_requests)::bigint AS success_count,
+			SUM(success_requests + error_requests)::bigint AS total_count
+		FROM marketplace_imported_call_minutes
+		WHERE group_id = ANY($1)
+		  AND bucket_start >= $2
+		  AND bucket_start < $3
+		GROUP BY group_id, bucket_index
+	`
+)
 
 // GroupAvailabilityProbeStore persists probe leases, observations, and
-// marketplace availability summaries in PostgreSQL.
+// marketplace availability summaries for probes and imported calls in PostgreSQL.
 type GroupAvailabilityProbeStore struct {
 	// db is borrowed from the application and stays open through runner and
 	// summary calls. Store methods create transactions without owning the pool's
@@ -239,6 +271,75 @@ func (r *GroupAvailabilityProbeStore) SaveResultAndScheduleNext(ctx context.Cont
 // the assembled result.
 // @project-doc docs/interfaces/model_catalog_and_marketplace.md#group_availability_probe
 func (r *GroupAvailabilityProbeStore) GetSummaryByGroupIDs(ctx context.Context, groupIDs []int64, days int, bucketMinutes int, timezoneName string, now time.Time) (map[int64]*routing.GroupAvailabilitySummary, error) {
+	out, err := r.summarizeAvailability(ctx, groupIDs, days, bucketMinutes, timezoneName, now, probeAvailabilityBucketsSQL)
+	if err != nil || len(out) == 0 {
+		return out, err
+	}
+
+	// Read latest status outside the counting window so groups with older retained
+	// observations still show their last known outcome and completion time.
+	lastRows, err := r.db.QueryContext(ctx, `
+		SELECT requested.group_id, latest.status, latest.finished_at
+		FROM unnest($1::bigint[]) AS requested(group_id)
+		CROSS JOIN LATERAL (
+			SELECT status, finished_at
+			FROM group_availability_probe_results
+			WHERE group_id = requested.group_id
+			ORDER BY started_at DESC, id DESC
+			LIMIT 1
+		) latest
+	`, pq.Array(groupIDs))
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = lastRows.Close() }()
+
+	for lastRows.Next() {
+		var groupID int64
+		var status string
+		var checkedAt time.Time
+		if err := lastRows.Scan(&groupID, &status, &checkedAt); err != nil {
+			return nil, err
+		}
+		if summary, ok := out[groupID]; ok {
+			summary.LastStatus = status
+			t := checkedAt
+			summary.LastCheckedAt = &t
+		}
+	}
+	if err := lastRows.Err(); err != nil {
+		return nil, err
+	}
+
+	return out, nil
+}
+
+// GetImportedSummaryByGroupIDs returns weighted call counts for the same group
+// window used by probe queries. Successful calls are divided by all recorded
+// outcomes. The source's health-scoring exclusions do not alter request success.
+//
+// The result contains only groups with in-window outcomes. Minute aggregates
+// cannot identify a specific last request, so probe status and time are omitted.
+func (r *GroupAvailabilityProbeStore) GetImportedSummaryByGroupIDs(ctx context.Context, groupIDs []int64, days int, bucketMinutes int, timezoneName string, now time.Time) (map[int64]*routing.GroupAvailabilitySummary, error) {
+	out, err := r.summarizeAvailability(ctx, groupIDs, days, bucketMinutes, timezoneName, now, importedAvailabilityBucketsSQL)
+	if err != nil {
+		return nil, err
+	}
+	for groupID, summary := range out {
+		if summary.TotalCount == 0 {
+			delete(out, groupID)
+			continue
+		}
+		summary.Source = routing.GroupAvailabilitySourceImportedCalls
+	}
+	return out, nil
+}
+
+// summarizeAvailability places query counts in a normalized local time window.
+// Both queries receive the same half-open UTC interval and return a group and
+// bucket index with success and total counts. The initialized summaries include
+// empty buckets so consumers can distinguish missing observations from failures.
+func (r *GroupAvailabilityProbeStore) summarizeAvailability(ctx context.Context, groupIDs []int64, days int, bucketMinutes int, timezoneName string, now time.Time, query string) (map[int64]*routing.GroupAvailabilitySummary, error) {
 	out := make(map[int64]*routing.GroupAvailabilitySummary, len(groupIDs))
 	if r == nil || r.db == nil || len(groupIDs) == 0 {
 		return out, nil
@@ -282,18 +383,7 @@ func (r *GroupAvailabilityProbeStore) GetSummaryByGroupIDs(ctx context.Context, 
 		out[groupID] = summary
 	}
 
-	rows, err := r.db.QueryContext(ctx, `
-		SELECT
-			group_id,
-			FLOOR((EXTRACT(EPOCH FROM started_at) - EXTRACT(EPOCH FROM $2::timestamptz)) / ($4::double precision * 60))::int AS bucket_index,
-			COUNT(*) FILTER (WHERE success = true) AS success_count,
-			COUNT(*) AS total_count
-		FROM group_availability_probe_results
-		WHERE group_id = ANY($1)
-		  AND started_at >= $2
-		  AND started_at < $3
-		GROUP BY group_id, bucket_index
-	`, pq.Array(groupIDs), startUTC, endUTC, bucketMinutes)
+	rows, err := r.db.QueryContext(ctx, query, pq.Array(groupIDs), startUTC, endUTC, bucketMinutes)
 	if err != nil {
 		return nil, err
 	}
@@ -327,41 +417,6 @@ func (r *GroupAvailabilityProbeStore) GetSummaryByGroupIDs(ctx context.Context, 
 
 	for _, summary := range out {
 		summary.AvailabilityRate = availabilityRate(summary.SuccessCount, summary.TotalCount)
-	}
-
-	// Read latest status outside the counting window so groups with older retained
-	// observations still show their last known outcome and completion time.
-	lastRows, err := r.db.QueryContext(ctx, `
-		SELECT requested.group_id, latest.status, latest.finished_at
-		FROM unnest($1::bigint[]) AS requested(group_id)
-		CROSS JOIN LATERAL (
-			SELECT status, finished_at
-			FROM group_availability_probe_results
-			WHERE group_id = requested.group_id
-			ORDER BY started_at DESC, id DESC
-			LIMIT 1
-		) latest
-	`, pq.Array(groupIDs))
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = lastRows.Close() }()
-
-	for lastRows.Next() {
-		var groupID int64
-		var status string
-		var checkedAt time.Time
-		if err := lastRows.Scan(&groupID, &status, &checkedAt); err != nil {
-			return nil, err
-		}
-		if summary, ok := out[groupID]; ok {
-			summary.LastStatus = status
-			t := checkedAt
-			summary.LastCheckedAt = &t
-		}
-	}
-	if err := lastRows.Err(); err != nil {
-		return nil, err
 	}
 
 	return out, nil

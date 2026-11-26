@@ -1,6 +1,42 @@
 <template>
   <AppLayout>
-    <div class="space-y-4">
+    <div
+      v-segmented
+      class="segmented mb-4"
+      role="group"
+      :aria-label="t('admin.usage.requestSource')"
+    >
+      <button
+        type="button"
+        class="segmented-item px-3 py-1.5 text-sm"
+        :class="{ 'segmented-item-active': !historyRange }"
+        :aria-pressed="!historyRange"
+        @click="historyRange = null"
+        >{{ t('admin.usage.imported.local') }}</button
+      >
+      <button
+        type="button"
+        class="segmented-item px-3 py-1.5 text-sm"
+        :class="{ 'segmented-item-active': historyRange }"
+        :aria-pressed="!!historyRange"
+        @click="historyRange ??= { startDate, endDate }"
+        >{{ t('admin.usage.imported.tab') }}</button
+      >
+    </div>
+    <ImportedCallsPanel
+      v-if="historyRange"
+      view="minutes"
+      :start-date="historyRange.startDate"
+      :end-date="historyRange.endDate"
+    >
+      <template #selected-dates>
+        <DateRangePicker
+          v-model:start-date="historyRange.startDate"
+          v-model:end-date="historyRange.endDate"
+        />
+      </template>
+    </ImportedCallsPanel>
+    <div v-show="!historyRange" class="space-y-4">
       <UsageStatsCards :stats="usageStats" :loading="inboundEndpointLoading" />
       <!-- Charts Section -->
       <div class="space-y-4">
@@ -172,15 +208,16 @@
       >
         <UsageTable
           flat
-          column-order-storage-key="admin-usage-column-order"
+          :column-order-storage-key="columnOrderStorageKey"
+          :initial-column-order="initialColumnOrder"
           :data="usageLogs"
           :loading="loading"
           :columns="visibleColumns"
-          compact-user-column
+          compact-role="admin"
           :show-ip-geo-toolbar="false"
           :server-side-sort="true"
-          :default-sort-key="'created_at'"
-          :default-sort-order="'desc'"
+          :default-sort-key="sortState.sort_by"
+          :default-sort-order="sortState.sort_order"
           @sort="handleSort"
           @userClick="handleUserClick"
         />
@@ -274,6 +311,7 @@
 <script setup lang="ts">
 import MotionTransition from '@/components/common/MotionTransition.vue'
 import { vContentReveal } from '@/directives/contentReveal'
+import { vSegmented } from '@/directives/segmented'
 
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -289,8 +327,12 @@ import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'
+import ImportedCallsPanel from '@/components/admin/usage/ImportedCallsPanel.vue'
 import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'
+import { getUsageTableColumns } from '@/components/admin/usage/usageTableColumns'
+import { useDenseTablePreferences } from '@/composables/useDenseTablePreferences'
+import { getColumnSortOptions } from '@/components/common/table/types'
 import UsageExportDialog from '@/components/usage/UsageExportDialog.vue'
 import IpGeoBatchToolbar from '@/components/common/IpGeoBatchToolbar.vue'
 import UserTokenRanking from '@/components/admin/usage/UserTokenRanking.vue'
@@ -326,7 +368,8 @@ import type { UsageExportFilterLabel } from '@/types/ui'
 // model-source caches have separate invalidation rules. Column preferences are stored
 // independently for usage and errors, and hidden-column migration appends newly hidden
 // defaults while retaining saved choices. Ranking mounts on first selection and continues
-// following shared filters afterward.
+// following shared filters afterward. Opening imported history copies the native date
+// selection into a separate picker and leaves the native filter components mounted.
 
 // Translation and application notifications provide labels and request feedback for usage
 // records, filters, and export actions.
@@ -521,6 +564,12 @@ const defaultRange = getLast24HoursRangeDates()
 // granularity when the range changes.
 const startDate = ref(defaultRange.start)
 const endDate = ref(defaultRange.end)
+// historyRange holds a copy of the native bounds for one visit to the historical
+// view. Returning to local records restores the still-mounted filters and pagination.
+const historyRange = ref<{
+  startDate: string // Local history range start.
+  endDate: string // Local history range end.
+} | null>(null)
 // requestDateParams removes both date predicates when a request ID is selected. Otherwise
 // it returns an empty override object so the existing selected dates remain in the query.
 const requestDateParams = () =>
@@ -986,6 +1035,8 @@ const handlePageSizeChange = (s: number) => {
 // handleSort stores the requested server ordering and reloads page one. Returning to the
 // first page gives the selected ordering a consistent starting point for the usage table.
 const handleSort = (key: string, order: 'asc' | 'desc') => {
+  if (!visibleSortKeys.value.includes(key)) return
+  if (sortState.sort_by === key && sortState.sort_order === order) return
   sortState.sort_by = key
   sortState.sort_order = order
   pagination.page = 1
@@ -1009,74 +1060,29 @@ const openCleanupDialog = () => {
   cleanupDialogVisible.value = true
 }
 
-// Usage column constants define mandatory fields, default hidden choices, and the browser
-// storage namespace for saved preferences.
-const ALWAYS_VISIBLE = ['user', 'created_at']
-const DEFAULT_HIDDEN_COLUMNS = ['reasoning_effort', 'upstream_request_id', 'user_agent']
-const HIDDEN_COLUMNS_KEY = 'usage-hidden-columns'
-const HIDDEN_COLUMNS_VERSION_KEY = 'usage-hidden-columns-version'
-// HIDDEN_COLUMNS_CURRENT_VERSION identifies the migration that adds upstream request ID to
-// stored hidden preferences while keeping existing choices.
-const HIDDEN_COLUMNS_CURRENT_VERSION = 'upstream-request-id-hidden-by-default'
-
-// allColumns supplies the canonical translated usage column order before mandatory and
-// saved visibility choices are applied.
-const allColumns = computed(() => [
-  { key: 'user', label: t('admin.usage.user'), sortable: false, class: 'w-36 min-w-36 max-w-36' },
-  { key: 'api_key', label: t('usage.apiKeyFilter'), sortable: false },
-  { key: 'provider', label: t('admin.usage.provider'), sortable: false },
-  { key: 'model', label: t('usage.model'), sortable: true },
-  { key: 'reasoning_effort', label: t('usage.reasoningEffort'), sortable: false },
-  { key: 'endpoint', label: t('usage.endpoint'), sortable: false },
-  { key: 'group', label: t('admin.usage.group'), sortable: false },
-  { key: 'stream', label: t('usage.type'), sortable: false },
-  { key: 'billing_mode', label: t('admin.usage.billingMode'), sortable: false },
-  { key: 'tokens', label: t('usage.tokens'), sortable: false },
-  { key: 'cost', label: t('usage.cost'), sortable: false },
-  { key: 'latency', label: t('usage.latency'), sortable: false },
-  { key: 'tps', label: t('usage.tps'), sortable: false },
-  { key: 'created_at', label: t('usage.time'), sortable: true },
-  { key: 'request_id', label: t('admin.usage.requestId'), sortable: false },
-  { key: 'upstream_request_id', label: t('admin.usage.upstreamRequestId'), sortable: false },
-  { key: 'user_agent', label: t('usage.userAgent'), sortable: false },
-  { key: 'ip_address', label: t('admin.usage.ipAddress'), sortable: false },
-])
-
-// Usage visibility state keeps a mutable hidden-key set and derives the optional controls
-// and displayed column definitions.
-const hiddenColumns = reactive<Set<string>>(new Set())
-
+// Mandatory usage columns stay accessible while the remaining columns use restored
+// visibility. Error records keep their own preference namespace.
+const ALWAYS_VISIBLE = ['time', 'caller']
+const { isColumnVisible, toggleColumn, columnOrderStorageKey, initialColumnOrder } =
+  useDenseTablePreferences('adminUsage')
+const allColumns = computed(() => getUsageTableColumns('admin', t))
 const toggleableColumns = computed(() =>
-  allColumns.value.filter((col) => !ALWAYS_VISIBLE.includes(col.key)),
+  allColumns.value.filter((column) => !ALWAYS_VISIBLE.includes(column.key)),
 )
-
 const visibleColumns = computed(() =>
-  allColumns.value.filter((col) => ALWAYS_VISIBLE.includes(col.key) || !hiddenColumns.has(col.key)),
+  allColumns.value.filter((column) => isColumnVisible(column.key)),
+)
+const visibleSortKeys = computed(() =>
+  visibleColumns.value.flatMap((column) =>
+    getColumnSortOptions(column).map((option) => option.key),
+  ),
 )
 
-// isColumnVisible reports whether a column key is absent from saved hidden choices.
-const isColumnVisible = (key: string) => !hiddenColumns.has(key)
-
-// toggleColumn flips one usage visibility choice before persisting its hidden set and
-// migration version. Storage errors are logged, leaving the in-memory selection active for
-// the current page session.
-const toggleColumn = (key: string) => {
-  if (hiddenColumns.has(key)) {
-    hiddenColumns.delete(key)
-  } else {
-    hiddenColumns.add(key)
-  }
-  try {
-    // Write the hidden set before its migration version so a later load can retry
-    // migration when the second write fails.
-    localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
-    localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
-  } catch (e) {
-    // Browser persistence failure leaves the selected usage visibility active in memory,
-    // while logging that a future reload may not retain it.
-    console.error('Failed to save columns:', e)
-  }
-}
+// Losing the active sort column returns to page one with the default order. Other
+// visibility changes leave the server query and page intact.
+watch(visibleSortKeys, (keys) => {
+  if (!keys.includes(sortState.sort_by)) handleSort('created_at', 'desc')
+})
 
 // Error column constants define mandatory detail fields and a separate browser preference
 // namespace from the usage table.
@@ -1164,44 +1170,6 @@ const isCurrentColumnVisible = (key: string) =>
 // toggleCurrentColumn delegates a visibility change to the active tab's preference owner.
 const toggleCurrentColumn = (key: string) =>
   activeTab.value === 'errors' ? toggleErrColumn(key) : toggleColumn(key)
-
-// loadSavedColumns restores administrator usage visibility and migrates old hidden-column
-// preferences. Existing saved keys remain in the hidden set, while an outdated version adds
-// upstream request ID before saving the updated set and version.
-//
-// New profiles use the default hidden choices and record the current version. Storage or
-// parsing failures add defaults to the in-memory set, including any keys already restored
-// before failure. The writes are sequential, so a failed version write can leave the
-// updated hidden set available for the next load.
-const loadSavedColumns = () => {
-  try {
-    const saved = localStorage.getItem(HIDDEN_COLUMNS_KEY)
-    if (saved) {
-      ;(JSON.parse(saved) as string[]).forEach((key) => {
-        hiddenColumns.add(key)
-      })
-      // Append the newly hidden column before storing the migration version so saved
-      // choices for existing columns remain intact.
-      const savedVersion = localStorage.getItem(HIDDEN_COLUMNS_VERSION_KEY)
-      if (savedVersion !== HIDDEN_COLUMNS_CURRENT_VERSION) {
-        hiddenColumns.add('upstream_request_id')
-        localStorage.setItem(HIDDEN_COLUMNS_KEY, JSON.stringify([...hiddenColumns]))
-        localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
-      }
-    } else {
-      DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
-        hiddenColumns.add(key)
-      })
-      localStorage.setItem(HIDDEN_COLUMNS_VERSION_KEY, HIDDEN_COLUMNS_CURRENT_VERSION)
-    }
-  } catch {
-    // Add usage defaults after a read or write failure; any keys already restored remain
-    // in the set for this session.
-    DEFAULT_HIDDEN_COLUMNS.forEach((key) => {
-      hiddenColumns.add(key)
-    })
-  }
-}
 
 // DetailTab identifies usage records, errors, or the administrator user ranking.
 type DetailTab = 'usage' | 'errors' | 'ranking'
@@ -1334,7 +1302,6 @@ onMounted(() => {
   window.setTimeout(() => {
     void loadChartData()
   }, 120)
-  loadSavedColumns()
   loadSavedErrColumns()
   // Register one document listener for this mounted page so clicks outside the column menu
   // can close its floating controls.

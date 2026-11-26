@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -15,7 +16,8 @@ import (
 // normal shutdown runs increasing StopOrder and lets hooks at the same level
 // run concurrently. A hook is eligible for cleanup before its start callback
 // runs because failed startup can leave partially acquired resources. Hooks
-// registered with no Start are eligible as soon as registered.
+// registered with no Start are eligible as soon as registered. Selective
+// startup leaves unselected start callbacks and their cleanup inactive.
 //
 // The first Stop or Rollback owns one shared cleanup attempt and its context.
 // It waits for startup to finish before selecting eligible hooks; rollback
@@ -133,6 +135,22 @@ func (m *Manager) Register(h Hook) {
 // check; a callback already admitted may still run. Reporters run synchronously
 // during startup.
 func (m *Manager) Start(ctx context.Context) error {
+	return m.start(ctx, nil)
+}
+
+// StartOnly runs the named start callbacks in normal startup order. Omitted
+// start callbacks stay inactive for cleanup. Stop-only hooks remain eligible,
+// and subsequent startup calls observe the result of the first attempt.
+func (m *Manager) StartOnly(ctx context.Context, names ...string) error {
+	return m.start(ctx, func(name string) bool {
+		return slices.Contains(names, name)
+	})
+}
+
+// start validates all registrations before applying the optional selection to
+// executable hooks. A nil selector starts every hook. The same first-attempt
+// and cancellation rules apply to both startup methods.
+func (m *Manager) start(ctx context.Context, selected func(string) bool) error {
 	m.mu.Lock()
 	if m.closed {
 		m.mu.Unlock()
@@ -167,7 +185,7 @@ func (m *Manager) Start(ctx context.Context) error {
 		seen[e.hook.Name] = true
 	}
 	for _, e := range entries {
-		if e.hook.Start == nil {
+		if e.hook.Start == nil || (selected != nil && !selected(e.hook.Name)) {
 			continue
 		}
 		if err := ctx.Err(); err != nil {

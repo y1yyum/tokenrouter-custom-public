@@ -55,6 +55,7 @@ RequestLogger
 | `/api/v1/marketplace/models/available` | 用户 JWT | `routing`：公开分组与当前用户获授权的专属分组，返回私有、不缓存响应 |
 | `/api/v1/admin/plugins*`、`/api/v1/admin/plugin-catalog*`、`/api/v1/admin/plugin-indexes*` | 管理员（执行代码与来源变更另需 step-up） | `plugin`：安装、更新回滚、市场与索引来源，见[安装管理](plugin_contracts.md#administration) |
 | `/api/v1/plugins/*` | UI 描述需用户 JWT；静态资源公开；API 按 manifest 决定 | `plugin`：插件页面描述、版本化静态资源和非流式 HTTP 代理，见[插件契约](plugin_contracts.md#http_contributions) |
+| `/api/v1/admin/crypto/*` | 管理员 JWT 和支付操作员身份 | `cryptopay` 管理收款配置、地址、来款、扫描、钱包和归集。见[专属地址链上充值](../domains/payments_and_entitlements.md#onchain_balance_deposits) |
 | `/api/v1/admin/*` | 管理员 JWT 或站点管理 Key（部分路由要求浏览器会话或 step-up） | 各领域管理入口：用户、分组、提供商、价格配置、设置、运维、备份、支付和安全管理 |
 | `/mcp` | 专用 MCP Bearer 令牌或 OAuth access token | MCP 管理入口：四个通用管理工具，按操作授权，MCP JSON-RPC 协议，见 [MCP 管理接口](mcp_management.md) |
 | `/api/v1/admin/mcp/oauth/*` | 管理员 JWT | MCP OAuth 浏览器授权与应用管理，见 [MCP OAuth 应用授权](mcp_management.md#oauth_authorization) |
@@ -95,7 +96,7 @@ RequestLogger
 | --- | --- | --- |
 | JWT access token | 面板 `Authorization: Bearer`，少数 WebSocket 用子协议 | 校验用户状态、token version 及可选会话绑定；管理员路由另校验角色 |
 | Refresh token | `/api/v1/auth/refresh` 及 logout 约定 payload 或 cookie | 仅用于令牌轮换和撤销，不可直接访问业务资源 |
-| 管理 API Key | 管理接口 `x-api-key` | 站点只保存一个当前值，以 ID 最小的启用管理员为 actor。轮换或删除后旧值失效。此 Key 无独立到期时间、逐操作授权或团队范围，要求浏览器会话或近期 TOTP 的路由另行校验 |
+| 管理 API Key | 管理接口 `x-api-key` | 站点只保存一个当前值，以最早创建（`created_at` 最小、`id` 最小兜底）的启用管理员为 actor。轮换或删除后旧值失效。此 Key 无独立到期时间、逐操作授权或团队范围，要求浏览器会话或近期 TOTP 的路由另行校验 |
 | TokenRouter API Key | 网关 `Authorization: Bearer`、`x-api-key`，Gemini 入口另支持 `x-goog-api-key` | 校验 Key、用户与团队、分组、IP、额度、订阅和资源归属；通用网关拒绝 query 参数传 Key |
 | MCP 专用令牌、MCP OAuth access token | `/mcp` 的 `Authorization: Bearer` | 归属当前启用的全局管理员，按操作 ID 授权。OAuth 另绑定站点的 MCP resource。到期、撤销及审计归属见 [MCP 管理接口](mcp_management.md#access_tokens) |
 | OAuth 与 pending 补全状态 | auth callback 与补全接口 | 由 provider state、浏览器会话、一次性完成码和过期时间共同约束 |
@@ -304,6 +305,17 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 - 产物状态错误：文件超保留期或本地产物缺失返回 `410 USAGE_EXPORT_EXPIRED`，任务未完成返回 `409 USAGE_EXPORT_NOT_READY`。
 
 管理员用量统计 `GET /api/v1/admin/usage/stats` 的可选参数 `endpoint_source` 接受 `inbound`、`upstream`、`path`；省略、空值或 `all` 返回全部端点维度，其他值返回 400。摘要字段照常返回，缓存按端点来源分别保存；管理页先加载摘要和入站端点，切换图表后再拉取上游端点或路径，筛选变化和离开页面时取消过期请求。
+
+后台仪表盘和使用记录通过管理员接口 `GET /api/v1/admin/usage/imported-calls` 读取 `source=raks` 的历史调用。未登录返回 401，已登录的普通用户返回 403。无日期参数时返回完整导入范围。日期参数按 `timezone` 解析，纯日期的 `end_date` 包含当日，带时间的上界为开区间。
+
+| 视图 | 返回 |
+| --- | --- |
+| `view=groups` | 按目标分组汇总请求、四类 Token、总耗时及首 Token 延迟的毫秒合计与采样数。 |
+| `view=minutes` | 按分钟、分组、源平台和模型分页，`total` 为匹配的分钟汇总条数。分组选项取自完整日期范围，明细可通过 `group_id` 和 `model` 精确筛选。 |
+
+总请求为成功与失败之和。Token 合计包含输入、输出、缓存写入及缓存读取。两类平均延迟各用合计除以采样数，零样本显示「—」。历史调用独立于本站使用记录、计费、导出和清理任务。
+
+管理员总览接口 `GET /api/v1/admin/dashboard/stats` 与 `GET /api/v1/admin/dashboard/snapshot-v2`（`include_stats=true`）在 8 位用户 ID 池使用率达到 50% / 75% / 90% 时附加可空 `user_id_pool_alert`（含 `tier_digit`、`used_count`、`capacity`、`usage_percent`、`threshold`、`severity` 与 `message`）；缺表或低于 50% 时省略该字段。
 
 <a id="announcement_api"></a>
 ### 公告接口
