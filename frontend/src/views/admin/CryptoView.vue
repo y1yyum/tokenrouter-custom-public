@@ -1,3 +1,4 @@
+<!-- CryptoView.vue coordinates the operator's wallet, scanner and sweep settings. -->
 <template>
   <CryptoUi>
     <AppLayout>
@@ -272,7 +273,7 @@
                       <!-- Empty state: numbered setup steps instead of a wall of
                          disabled export/import controls. -->
                       <div
-                        class="rounded-lg border border-default p-3"
+                        class="rounded-control border border-default p-3"
                         data-testid="crypto-wallet-setup-steps"
                       >
                         <p class="text-sm font-medium text-highlighted">{{
@@ -285,7 +286,7 @@
                             class="flex gap-2"
                           >
                             <span
-                              class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary"
+                              class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
                               >{{ index + 1 }}</span
                             >
                             <span>{{ t(step) }}</span>
@@ -788,7 +789,7 @@
                   :title="t(stat.label)"
                   variant="subtle"
                   :ui="statCardUi"
-                  class="lg:rounded-none first:rounded-l-lg last:rounded-r-lg"
+                  class="lg:rounded-none first:rounded-l-control last:rounded-r-control"
                 >
                   <span class="text-2xl font-semibold text-highlighted">{{ stat.value }}</span>
                 </UPageCard>
@@ -1203,7 +1204,7 @@
                   :title="t(stat.label)"
                   variant="subtle"
                   :ui="statCardUi"
-                  class="lg:rounded-none first:rounded-l-lg last:rounded-r-lg"
+                  class="lg:rounded-none first:rounded-l-control last:rounded-r-control"
                 >
                   <span class="text-2xl font-semibold text-highlighted">{{ stat.value }}</span>
                 </UPageCard>
@@ -1824,7 +1825,7 @@ const tableUi = {
   base: 'border-separate border-spacing-0',
   thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
   tbody: '[&>tr]:last:[&>td]:border-b-0',
-  th: 'py-2 first:rounded-l-lg last:rounded-r-lg border-y border-default first:border-l last:border-r',
+  th: 'py-2 first:rounded-l-control last:rounded-r-control border-y border-default first:border-l last:border-r',
   td: 'border-b border-default',
   separator: 'h-0',
 }
@@ -1838,7 +1839,7 @@ const statCardUi = {
 
 // Rarely used columns stay behind the "Columns" menu; the choice persists per table.
 function persistedVisibility(key: string, defaults: Record<string, boolean>) {
-  let stored: Record<string, boolean> = {}
+  let stored: Record<string, boolean>
   try {
     stored = JSON.parse(localStorage.getItem(key) || '{}') ?? {}
   } catch {
@@ -2276,7 +2277,7 @@ function onSignerWindowExpired(): void {
   signerWindowExpired.value = true
 }
 
-// UButton instance ref; used to focus 执行归集 right after an unlock.
+// UButton instance ref; used to focus Run sweep right after an unlock.
 const sweepRunButton = ref<{ $el?: HTMLElement } | null>(null)
 let disposed = false
 const routerInstance = getCurrentInstance()?.appContext.config.globalProperties.$router as
@@ -2868,9 +2869,10 @@ async function toggleAddress(row: DepositAddress) {
     address: row.address,
     action: t(next === 'disabled' ? 'admin.crypto.disable' : 'admin.crypto.enable'),
   })
-  ;(await withCryptoVerification(label, async (verification) => {
+  const updated = await withCryptoVerification(label, async (verification) => {
     await setAddressStatus(row.id, next, verification)
-  })) && (await loadAddresses())
+  })
+  if (updated) await loadAddresses()
 }
 
 function confirmChannelToggle(value: boolean) {
@@ -3156,7 +3158,7 @@ async function refreshSweepState() {
   await Promise.all([loadWalletStatus(), loadSweepGate()])
 }
 
-// Focus 执行归集 after an unlock so the operator lands on the enabled action.
+// Focus Run sweep after an unlock so the operator lands on the enabled action.
 async function focusSweepRunButton() {
   await nextTick()
   const element = sweepRunButton.value?.$el
@@ -3244,7 +3246,7 @@ function stripUnlockIntent(): void {
 /**
  * Opens the signer unlock flow.
  *
- * Routing is the trap that made 「去解锁并归集」 a dead end: each crypto
+ * Routing is the trap that made the unlock-and-sweep action a dead end: each crypto
  * sub-page is its own route with its own page key, so switching to
  * /admin/crypto/sweeps remounts the view and silently drops any local
  * "dialog open" flag. The intent therefore travels in the URL and the sweeps
@@ -3269,7 +3271,7 @@ function openSweepUnlock(): void {
 
 /**
  * Runs on mount: consumes `?unlock=1` (open the shard dialog) or
- * `?unlock=ready` (signer just unlocked, focus 执行归集).
+ * `?unlock=ready` (signer just unlocked, focus Run sweep).
  */
 async function consumeUnlockIntent(): Promise<void> {
   if (!routerInstance || disposed) return
@@ -3529,7 +3531,7 @@ onMounted(async () => {
   // The default tab is addresses, so load it without waiting for a click.
   void loadAddresses()
   // The lock badge lives in the config tab but reflects live state; the sweep
-  // gate is what enables 执行归集 and names the blocking reason.
+  // gate is what enables Run sweep and names the blocking reason.
   await refreshSweepState()
   await consumeUnlockIntent()
   unlockTicker = setInterval(() => {

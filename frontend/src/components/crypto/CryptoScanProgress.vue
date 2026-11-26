@@ -1,3 +1,4 @@
+<!-- CryptoScanProgress.vue displays block heights and progress during a chain scan. -->
 <template>
   <UAlert
     v-if="scanning || activeScan"

@@ -1,3 +1,4 @@
+<!-- DepositAmountField.vue validates the proposed transfer against the selected network limits. -->
 <template>
   <div class="deposit-amount" :class="{ 'deposit-amount--error': check.blocked }">
     <label class="deposit-amount__label" for="deposit-amount-input">{{
@@ -157,7 +158,7 @@ const notionalText = computed(() => {
   min-height: 2.75rem;
   padding: 0.55rem 3.5rem 0.55rem 0.75rem;
   border: 1px solid var(--ui-border-accented);
-  border-radius: 6px;
+  border-radius: var(--radius-compact);
   background: var(--ui-bg, transparent);
   color: inherit;
   font-size: 0.9375rem;

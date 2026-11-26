@@ -1,3 +1,4 @@
+// cryptoGrant.ts holds the session's short-lived verification grant.
 import { ref } from 'vue'
 
 import type { CryptoGrant } from '@/api/admin/crypto'

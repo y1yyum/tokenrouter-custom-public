@@ -1,3 +1,4 @@
+<!-- LoadingSpinner.vue announces loading progress and renders the requested spinner size. -->
 <template>
   <div
     :class="['inline-flex shrink-0', sizeClasses, colorClass]"

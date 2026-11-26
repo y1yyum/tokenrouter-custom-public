@@ -1,3 +1,4 @@
+// depositAmount.ts validates deposit amounts against network limits.
 import type { DepositInfo } from '@/api/crypto'
 
 /**

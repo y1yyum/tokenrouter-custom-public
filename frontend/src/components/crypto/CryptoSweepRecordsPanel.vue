@@ -1,3 +1,4 @@
+<!-- CryptoSweepRecordsPanel.vue lists sweep jobs and exposes the actions available for each job. -->
 <template>
   <section class="crypto-sweep-records space-y-3" data-testid="crypto-sweep-records">
     <p
@@ -374,7 +375,7 @@ const tableUi = {
   base: 'border-separate border-spacing-0',
   thead: '[&>tr]:bg-elevated/50 [&>tr]:after:content-none',
   tbody: '[&>tr]:last:[&>td]:border-b-0',
-  th: 'px-2 py-2 first:ps-3 last:pe-3 first:rounded-l-lg last:rounded-r-lg border-y border-default first:border-l last:border-r',
+  th: 'px-2 py-2 first:ps-3 last:pe-3 first:rounded-l-control last:rounded-r-control border-y border-default first:border-l last:border-r',
   td: 'px-2 py-2.5 first:ps-3 last:pe-3 border-b border-default',
   separator: 'h-0',
 }

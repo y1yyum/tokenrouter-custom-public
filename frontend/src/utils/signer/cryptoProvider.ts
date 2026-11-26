@@ -1,3 +1,4 @@
+// cryptoProvider.ts selects the supported cryptography implementation for wallet share operations.
 /**
  * Crypto runtime for the wallet shard flow.
  *

@@ -1,3 +1,4 @@
+<!-- CryptoOwnerCell.vue renders the account associated with a deposit address. -->
 <template>
   <span v-if="!owner" class="text-muted" data-testid="crypto-owner-unknown">—</span>
   <div v-else class="flex max-w-40 min-w-0 flex-col leading-tight" data-testid="crypto-owner">

@@ -1,3 +1,4 @@
+// depositHistoryFilter.ts selects matching rows from the loaded deposit history.
 import type { DepositRecord } from '@/api/crypto'
 
 /**

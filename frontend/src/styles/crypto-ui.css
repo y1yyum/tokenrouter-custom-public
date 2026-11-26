@@ -1,3 +1,4 @@
+/* crypto-ui.css loads the Nuxt UI utilities alongside the host theme. */
 /* Nuxt UI needs Tailwind 4 utilities. The host keeps its Tailwind 3 preflight,
    theme, and layout styles. PostCSS scopes the extra utilities to the crypto UI. */
 @layer theme, base, components, utilities;

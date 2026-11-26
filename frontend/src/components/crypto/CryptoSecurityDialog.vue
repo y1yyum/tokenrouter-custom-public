@@ -1,3 +1,4 @@
+<!-- CryptoSecurityDialog.vue coordinates authenticator enrollment and verification for payment operations. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"
@@ -40,7 +41,7 @@
             :alt="t('admin.crypto.securityQrAlt')"
             width="224"
             height="224"
-            class="mx-auto rounded-md"
+            class="mx-auto rounded-compact"
           />
           <p v-if="qrFailed" role="status" class="text-warning">{{
             t('admin.crypto.securityQrFailed')
@@ -319,14 +320,12 @@ async function setup() {
   errorMessage.value = ''
   const current = generation
   let result: Awaited<ReturnType<typeof setupCryptoSecurity>> | undefined
-  let qrCodeUrl = ''
-  let image = ''
   try {
     result = await setupCryptoSecurity()
     if (current !== generation) return
     secret.value = result.secret
     setupToken.value = result.setup_token
-    qrCodeUrl = result.qr_code_url
+    const qrCodeUrl = result.qr_code_url
     result.secret = ''
     result.setup_token = ''
     result.qr_code_url = ''
@@ -345,7 +344,7 @@ async function setup() {
     // qr_code_url is an otpauth URI, never a remote image or QR service URL.
     try {
       if (!qrCodeUrl.startsWith('otpauth://totp/')) throw new Error('Invalid otpauth URI')
-      image = await QRCode.toDataURL(qrCodeUrl, { width: 224, margin: 2 })
+      const image = await QRCode.toDataURL(qrCodeUrl, { width: 224, margin: 2 })
       if (current === generation && stage.value === 'setup') qrImage.value = image
     } catch {
       if (current === generation) qrFailed.value = true
@@ -358,8 +357,6 @@ async function setup() {
       result.setup_token = ''
       result.qr_code_url = ''
     }
-    qrCodeUrl = ''
-    image = ''
     if (current === generation) busy.value = false
     if (current === generation && stage.value === 'setup') {
       await nextTick()
@@ -373,7 +370,7 @@ async function submitCode() {
     return
   busy.value = true
   errorMessage.value = ''
-  let submittedCode = code.value
+  const submittedCode = code.value
   code.value = ''
   const current = generation
   let operationStarted = false
@@ -434,7 +431,6 @@ async function submitCode() {
       }
     }
   } finally {
-    submittedCode = ''
     code.value = ''
     if (current === generation) busy.value = false
     if (

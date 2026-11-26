@@ -1,3 +1,4 @@
+<!-- CryptoWalletSecurityPanel.vue displays wallet security controls and the signing state. -->
 <template>
   <section class="wallet-security" aria-labelledby="wallet-security-title">
     <UPageCard variant="subtle" :ui="{ container: 'gap-y-3' }">

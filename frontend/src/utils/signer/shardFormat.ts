@@ -1,3 +1,4 @@
+// shardFormat.ts encodes and checks the portable recovery share format.
 /**
  * S2V1 share wire format + GF(256) 2-of-3 Shamir split/combine.
  *

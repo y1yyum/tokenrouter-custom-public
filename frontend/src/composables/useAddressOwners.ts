@@ -1,3 +1,4 @@
+// useAddressOwners.ts resolves account ownership for the displayed wallet addresses.
 import { reactive, watch, type WatchSource } from 'vue'
 import { getAddressOwners, type AddressOwner } from '@/api/admin/crypto'
 

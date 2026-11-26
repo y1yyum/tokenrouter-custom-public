@@ -1,3 +1,4 @@
+<!-- TotpCodeInput.vue collects the authenticator digits and emits a complete code. -->
 <template>
   <div class="totp-code-input relative mx-auto grid w-full max-w-70 grid-cols-6 gap-2" dir="ltr">
     <input
@@ -28,7 +29,7 @@
       v-for="index in 6"
       :key="index"
       aria-hidden="true"
-      class="flex h-12 min-w-0 items-center justify-center rounded-md bg-default text-center text-lg font-semibold text-highlighted tabular-nums ring ring-inset transition-colors"
+      class="flex h-12 min-w-0 items-center justify-center rounded-compact bg-default text-center text-lg font-semibold text-highlighted tabular-nums ring ring-inset transition-colors"
       :class="[
         disabled ? 'opacity-75' : '',
         invalid ? 'ring-error' : 'ring-accented',

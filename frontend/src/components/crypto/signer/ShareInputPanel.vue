@@ -1,3 +1,4 @@
+<!-- ShareInputPanel.vue normalizes entered share text and reports the parsing result. -->
 <template>
   <div class="share-input space-y-2">
     <UFormField :label="labelText" :help="hintText">
@@ -143,7 +144,7 @@ function onInput(value: string): void {
 function applyText(raw: string, status = ''): void {
   touched = true
   statusKey.value = status
-  let normalized = raw
+  let normalized: string
   try {
     normalized = normalizeShareText(raw)
   } catch (error) {

@@ -1,3 +1,4 @@
+// cryptoAccount.ts supplies account messages for key rotation and notifications.
 // Account labels shared by the deposit gate and the Bark settings card.
 export default {
   keyRotationGate: {

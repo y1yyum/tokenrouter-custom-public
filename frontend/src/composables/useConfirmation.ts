@@ -1,3 +1,4 @@
+// useConfirmation.ts coordinates acceptance and cancellation of confirmation dialogs.
 import { reactive, readonly } from 'vue'
 
 /**

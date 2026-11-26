@@ -1,3 +1,4 @@
+// otp.ts handles authenticator codes for payment operations.
 /**
  * One-time-code helpers shared by every segmented code field.
  *

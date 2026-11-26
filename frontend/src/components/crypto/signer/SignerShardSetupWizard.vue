@@ -1,3 +1,4 @@
+<!-- SignerShardSetupWizard.vue guides the operator through creating and verifying wallet shares. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"

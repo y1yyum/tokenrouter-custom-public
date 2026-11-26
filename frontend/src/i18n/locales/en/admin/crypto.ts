@@ -1,3 +1,4 @@
+// crypto.ts supplies labels for the wallet, scanner and sweep administration pages.
 export default {
   crypto: {
     walletSecurityTitle: 'Wallet monitoring and signing lock',

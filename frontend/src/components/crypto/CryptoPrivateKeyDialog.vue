@@ -1,3 +1,4 @@
+<!-- CryptoPrivateKeyDialog.vue requires operator verification before revealing a selected address key. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"
@@ -11,7 +12,7 @@
         <span class="font-medium text-default">{{ t('admin.crypto.address') }}</span>
         <code
           data-testid="private-key-address"
-          class="block rounded-md bg-elevated px-3 py-2 font-mono text-xs break-all text-default"
+          class="block rounded-compact bg-elevated px-3 py-2 font-mono text-xs break-all text-default"
           >{{ displayedAddress?.address }}</code
         >
       </div>
@@ -25,7 +26,7 @@
             ref="privateKeyElement"
             data-testid="private-key-value"
             aria-labelledby="crypto-private-key-label"
-            class="m-0 rounded-md bg-elevated px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-default"
+            class="m-0 rounded-compact bg-elevated px-3 py-2 font-mono text-xs whitespace-pre-wrap break-all text-default"
             >{{ visible ? privateKey : '••••••••••••••••••••••••••••••••' }}</pre>
         </div>
         <div class="flex flex-wrap gap-2">
@@ -203,16 +204,17 @@ async function requestExport(selected: ExportAddress) {
           displayedAddress.value = selected
           startDisplayTimer()
           showResult.value = true
+          return
         } catch (error) {
           // Only a grant rejection may trigger the existing fresh-verification path.
           // Keep API response bodies out of plaintext-export errors and notices.
           if (isCryptoGrantRejected(error)) throw error
           operationFailed = true
-          throw new Error(t('admin.crypto.privateKeyExportFailed'))
         } finally {
           if (result) result.private_key = ''
           if (controller === requestController) controller = undefined
         }
+        throw new Error(t('admin.crypto.privateKeyExportFailed'))
       },
     )
     if (active() && !completed && !showResult.value) {

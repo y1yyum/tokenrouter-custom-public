@@ -1,3 +1,4 @@
+// cryptoSweepView.ts maps sweep state to the operator-facing display.
 import type { AddressOwner, SweepRecord } from '@/api/admin/crypto'
 
 // Pure helpers behind the sweep history panel, kept apart so they can be tested

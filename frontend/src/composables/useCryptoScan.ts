@@ -1,3 +1,4 @@
+// useCryptoScan.ts tracks scan progress and releases polling resources on unmount.
 import { computed, onUnmounted, ref, type InjectionKey } from 'vue'
 import { useI18n } from 'vue-i18n'
 import {

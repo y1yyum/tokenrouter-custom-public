@@ -1,6 +1,7 @@
+<!-- ShardRevealCard.vue presents one recovery share for the operator to retain. -->
 <template>
   <section
-    class="shard-reveal rounded-lg p-4 ring ring-default"
+    class="shard-reveal rounded-control p-4 ring ring-default"
     :class="`shard-reveal--${shardSlot.toLowerCase()}`"
   >
     <div class="flex items-start justify-between gap-3 max-sm:flex-col">
@@ -33,7 +34,7 @@
 
     <div v-else class="mt-3 space-y-3" data-testid="shard-reveal-body">
       <p
-        class="shard-reveal__text rounded-md bg-elevated/60 p-3 font-mono text-sm leading-relaxed break-all text-highlighted"
+        class="shard-reveal__text rounded-compact bg-elevated/60 p-3 font-mono text-sm leading-relaxed break-all text-highlighted"
         >{{ shareText }}</p
       >
 
@@ -76,7 +77,7 @@
         >
       </div>
 
-      <div class="shard-reveal__qr flex flex-col items-center gap-2 rounded-md bg-white p-3">
+      <div class="shard-reveal__qr flex flex-col items-center gap-2 rounded-compact bg-white p-3">
         <img
           v-if="qrDataUrl"
           :src="qrDataUrl"
@@ -85,9 +86,7 @@
           height="208"
           class="size-52"
         />
-        <span class="text-[11px] text-gray-500">{{
-          t('admin.crypto.signer.wizard.revealQrAlt')
-        }}</span>
+        <span class="text-xs text-gray-500">{{ t('admin.crypto.signer.wizard.revealQrAlt') }}</span>
       </div>
 
       <p

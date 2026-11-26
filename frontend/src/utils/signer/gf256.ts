@@ -1,3 +1,4 @@
+// gf256.ts performs finite-field arithmetic for recovery shares.
 /**
  * GF(256) arithmetic for the shamir-gf256 share scheme.
  *

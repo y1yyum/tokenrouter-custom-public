@@ -1,3 +1,4 @@
+// deposit.ts supplies deposit instructions, progress messages and history labels.
 export default {
   deposit: {
     retry: '重新加载',
@@ -9,17 +10,17 @@ export default {
       delayed: '到账延迟',
       paused: '充值暂停',
       stalled: '处理异常',
-      // 没有新鲜证据不等于出问题：只说明还在检测，不吓用户。
+      // Without recent evidence, show that the network is still being checked.
       unknown: '状态检测中',
     },
-    // 徽标上的到账时间。有预估时间时把时间拼进来，别让用户再去别处找。
+    // Include the estimated arrival time in the badge when available.
     networkStatusDetail: {
       availableEta: '可充值 · 约 {time}到账',
       availableInstant: '可充值 · 即时到账',
       slowEta: '网络较慢 · 约 {time}到账',
       delayedEta: '到账延迟 · 预计 {time}',
     },
-    // 时长单位。90 秒以内说秒，超过说分钟，超过 30 分钟不再给精确数字。
+    // Use seconds up to 90 seconds, then minutes, with an open-ended estimate after 30 minutes.
     eta: {
       seconds: '{n} 秒',
       minutes: '{n} 分钟',
@@ -28,7 +29,7 @@ export default {
       cardInstant: '即时到账',
       notice: '预计 {time}到账',
     },
-    // 即时入账的链：先入账、失败回滚。必须让用户知道余额可能被撤回。
+    // Explain that provisional credit can be reversed before finality.
     instantCreditNotice: '检测到转账后立即入账；若交易最终失败会自动回滚，请以完成确认为准。',
     instantCreditRule:
       '即时入账：扫链识别到转账后立即计入余额；若交易最终失败、被重组或回滚，该笔入账会自动撤销。',
@@ -41,7 +42,7 @@ export default {
     },
     refreshNetworkStatus: '刷新网络状态',
     chooseAsset: '选择充值币种',
-    // 金额预检：转账前先输入金额即时校验，避免钱转到不会入账的金额上。
+    // Check the proposed amount before the user transfers funds.
     amountCheckTitle: '到账金额预检',
     amountCheckHint: '选填。输入金额即时校验，超出范围的钱不会入账。',
     amountFieldLabel: '本次转入金额',
@@ -73,7 +74,7 @@ export default {
     balanceUnits: '余额单位',
     minLabel: '最小入账金额',
     maxLabel: '单笔自动入账上限',
-    // 原生币按到账时刻市价结算，没有固定汇率；限额按美元名义价值比较。
+    // Compare native deposits with dollar limits using their value at credit time.
     settlementLabel: '结算方式',
     settlementMarket: '按到账时刻市价结算',
     minLabelUsd: '最小入账金额（按美元计价）',
@@ -87,9 +88,9 @@ export default {
     pendingMore: '另有 {n} 笔，见下方记录',
     confirmProgress: '已扫描到，确认中 {done}/{required}（还差 {remaining} 个区块）',
     confirmProgressDone: '区块数已达标，等待最终校验后入账',
-    // 缺确认数时不编 n/m，只说扫到了、还在确认。
+    // Show detection without a confirmation count when the depth is unknown.
     confirmPending: '已扫描到，确认中',
-    // 临时入账已经先加了余额，确认深度只是在等最终定稿。
+    // Provisional credit has already affected the balance while finality is pending.
     provisionalProgress: '已临时入账，确认中 {done}/{required}',
     provisionalProgressDone: '临时入账的确认已完成，等待最终核验',
     provisionalConfirming: '已临时入账，确认中',
@@ -114,7 +115,7 @@ export default {
       '入账汇率：稳定币按 1 USDT = {rate} 余额单位；ETH、BNB 等原生币按到账时刻市价结算。',
     minNotice: '最小入账金额：稳定币为 {min} USDT；原生币按等值美元（{min} USD）计算。',
     history: '我的充值记录',
-    // 记录行标题：一行只讲「哪类事 + 哪个网络」，金额在右侧单独成列。
+    // Keep the network and event in the title and the balance change in the amount column.
     historyRowDeposit: '链上充值',
     historyRowReversal: '充值回滚',
     amount: '金额',
@@ -134,18 +135,18 @@ export default {
     reasonUnknown: '该地址不是充值地址',
     reasonOther: '未入账（原因码：{code}）',
     reasonRevoked: '临时入账已回滚（原因码：{code}）',
-    // 回滚原因：扫链侧写的是机器码，用户侧必须翻译成人话。
+    // Translate scanner reversal codes into account-facing explanations.
     revokeReasonReorgNoncanonical: '交易所在区块被链上重组，未最终确认',
     revokeReasonReceiptMissing: '交易回执丢失，无法最终确认',
     revokeReasonReceiptReverted: '交易执行失败，已被链上回滚',
     revokeReasonGeneric: '未被最终确认（原因码：{code}）',
     provisionalHint: '已检测到转账并临时入账；最终确认前该笔入账可能被自动回滚。',
-    // 回滚行的后续动作：客服入口复用站点公开的客服联系方式，没配就降级成纯文案。
+    // Offer the configured support contact after a reversal, with text when no action is available.
     revokedHint: '该笔转账未被最终确认，入账已撤销。',
     revokedSupportAction: '联系客服核实这笔转账',
     supportUnavailable: '如已扣款，请通过站点公布的联系方式联系管理员。',
     supportCopied: '客服联系方式已复制',
-    // 充值记录筛选：纯前端本地过滤，不重新请求。
+    // Filter the loaded history locally without another request.
     filterStatusLabel: '状态',
     filterStatusAll: '全部',
     filterStatusCredited: '已到账',
@@ -165,7 +166,7 @@ export default {
     statusCredited: '已入账',
     statusPending: '待确认',
     statusConfirming: '入账中',
-    // 临时入账：余额已先加上，失败会回滚；已回滚：那笔入账已被撤销。
+    // Distinguish pending finality from a credit that has already been reversed.
     statusProvisional: '临时入账',
     statusRevoked: '已回滚',
     statusIgnored: '未入账',

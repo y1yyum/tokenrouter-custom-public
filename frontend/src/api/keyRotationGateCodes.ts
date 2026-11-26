@@ -1,3 +1,4 @@
+// keyRotationGateCodes.ts defines the server error codes shared by the client and rotation gate.
 /**
  * Key-rotation gate constants shared by the HTTP client and the API module.
  *

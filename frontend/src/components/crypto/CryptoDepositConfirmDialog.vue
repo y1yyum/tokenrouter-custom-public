@@ -1,3 +1,4 @@
+<!-- CryptoDepositConfirmDialog.vue collects the chain and transaction details for a deposit review. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"

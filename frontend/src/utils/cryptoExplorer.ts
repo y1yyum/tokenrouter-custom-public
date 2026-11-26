@@ -1,3 +1,4 @@
+// cryptoExplorer.ts builds explorer links for chain addresses and transactions.
 // Keep deposit history and the operator ledger on the same explorer mapping.
 const explorerBases: Readonly<Record<string, string>> = {
   ethereum: 'https://etherscan.io/tx/',

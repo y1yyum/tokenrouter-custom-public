@@ -1,3 +1,4 @@
+// encoding.ts converts signer payloads between bytes and their transport encodings.
 /** Byte helpers shared by the signer modules. No Node/Buffer dependency. */
 
 const BASE64_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'

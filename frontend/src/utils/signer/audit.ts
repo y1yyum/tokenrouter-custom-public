@@ -1,3 +1,4 @@
+// audit.ts summarizes the sweep plan and its execution for the operator.
 /** Audit summary shown after an unlocked sweep, built from the plan + run. */
 
 export interface SweepAuditInfo {

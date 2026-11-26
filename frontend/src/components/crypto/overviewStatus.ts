@@ -1,3 +1,4 @@
+// overviewStatus.ts defines the status segments used by the wallet overview.
 /**
  * Shared shape for the three-segment overview status strip. The page owns the
  * wording (i18n keys) and the entry action; the strip only renders it so the

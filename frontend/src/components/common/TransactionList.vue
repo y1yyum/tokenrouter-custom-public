@@ -1,3 +1,4 @@
+<!-- TransactionList.vue renders transaction rows with amounts, statuses and optional details. -->
 <template>
   <!--
     Bare record list: skeleton → empty → rows. No card chrome, so it can sit

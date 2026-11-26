@@ -1,3 +1,4 @@
+// errors.ts maps signer errors to stable messages for the user.
 /**
  * Map signer failures to i18n keys under `admin.crypto.signer.errors.*`.
  * Kept away from components so the same wording is used everywhere.

@@ -1,3 +1,4 @@
+// crypto.ts supplies labels for the wallet, scanner and sweep administration pages.
 export default {
   crypto: {
     walletSecurityTitle: '钱包安全监控与签名锁',
@@ -288,7 +289,7 @@ export default {
     sweepCompleted: '归集任务处理完成，请查看各笔确认结果',
     sweepStatusUnavailable:
       '暂时无法读取任务进度，任务可能仍在运行。请刷新归集记录核对，不要重复提交。',
-    // 归集可用性由后端 /sweep/readiness 统一判定，前端只负责按原因码给文案。
+    // The readiness endpoint owns eligibility; translate its reason code here.
     sweepGate: {
       blockedTitle: '暂时不能执行归集',
       walletUnavailable: '钱包状态读取失败，暂时不能归集；请刷新或重新登录后再试。',

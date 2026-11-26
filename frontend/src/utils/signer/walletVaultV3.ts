@@ -1,3 +1,4 @@
+// walletVaultV3.ts reads and writes the version-three wallet vault format.
 /**
  * `sub2api-wallet:v3:` envelope, byte-compatible with the Go server.
  *

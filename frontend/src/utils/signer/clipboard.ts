@@ -1,3 +1,4 @@
+// clipboard.ts copies signer data to the clipboard and reports failures to the caller.
 /**
  * Sensitive clipboard handling for one-time shard material.
  *

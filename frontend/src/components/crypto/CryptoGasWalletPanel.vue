@@ -1,3 +1,4 @@
+<!-- CryptoGasWalletPanel.vue shows operator gas wallets and their balances. -->
 <template>
   <section class="gas-wallet" aria-labelledby="gas-wallet-title" data-testid="crypto-gas-wallet">
     <UPageCard
@@ -107,7 +108,7 @@
                 :alt="t('admin.crypto.gasFundingQrAlt', { network: selectedNetwork?.label })"
                 width="184"
                 height="184"
-                class="rounded-md bg-white"
+                class="rounded-compact bg-white"
                 data-testid="crypto-gas-qr"
               />
               <p v-else-if="qrFailed" class="text-sm text-error" role="status">{{

@@ -1,3 +1,4 @@
+// depositRevoke.ts maps deposit reversals to user-facing reasons.
 /**
  * Instant-credit revocation copy for chain deposits.
  *

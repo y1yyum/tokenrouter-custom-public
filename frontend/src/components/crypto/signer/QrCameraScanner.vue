@@ -1,3 +1,4 @@
+<!-- QrCameraScanner.vue captures a QR code from the camera and releases the camera when scanning ends. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"
@@ -8,7 +9,7 @@
   >
     <div class="space-y-3 text-sm">
       <p class="text-muted">{{ t('admin.crypto.signer.shareInput.scanHint') }}</p>
-      <div class="relative aspect-square w-full overflow-hidden rounded-lg bg-black">
+      <div class="relative aspect-square w-full overflow-hidden rounded-control bg-black">
         <video
           ref="video"
           class="h-full w-full object-cover"

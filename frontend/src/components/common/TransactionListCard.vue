@@ -1,3 +1,4 @@
+<!-- TransactionListCard.vue wraps transaction history with its heading, filters and empty state. -->
 <template>
   <!--
     Record-list card: a titled surface around TransactionList.

@@ -1,3 +1,4 @@
+<!-- CryptoChainStatusPanel.vue shows chain health and scan progress for the selected network. -->
 <template>
   <section class="flex flex-col gap-4" data-testid="chain-status-panel">
     <div
@@ -166,7 +167,7 @@
           <button
             v-if="chain.nodes.length"
             type="button"
-            class="-ms-1 flex w-full items-center gap-1.5 rounded-md px-1 py-1.5 text-start text-sm pointer-coarse:min-h-10 hover:bg-elevated/60 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary sm:w-fit"
+            class="-ms-1 flex w-full items-center gap-1.5 rounded-compact px-1 py-1.5 text-start text-sm pointer-coarse:min-h-10 hover:bg-elevated/60 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-primary sm:w-fit"
             :aria-expanded="isNodesOpen(chain.chain)"
             :aria-controls="nodesId(chain.chain)"
             data-testid="chain-nodes-toggle"

@@ -1,8 +1,9 @@
+// download.ts exports a recovery share for download or printing.
 /**
  * One-time share export: a .txt download and an A4 print sheet.
  *
  * iOS turns `<a download>` into a preview instead of a file; the caller always
- * offers "复制" as the fallback, and `downloadTextFile` never throws.
+ * offers the copy action as the fallback, and `downloadTextFile` never throws.
  */
 
 export interface ShareSheetInput {

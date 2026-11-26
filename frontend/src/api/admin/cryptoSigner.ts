@@ -1,3 +1,4 @@
+// cryptoSigner.ts sends signer management requests through the authenticated API client.
 import { apiClient } from '@/api/client'
 import type { CryptoVerification } from '@/api/admin/crypto'
 

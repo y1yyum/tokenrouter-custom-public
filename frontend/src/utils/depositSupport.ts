@@ -1,3 +1,4 @@
+// depositSupport.ts selects a support action from the configured contact details.
 /**
  * Support-contact entry for a rolled-back deposit.
  *

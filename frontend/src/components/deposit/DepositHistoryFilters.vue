@@ -1,3 +1,4 @@
+<!-- DepositHistoryFilters.vue filters loaded deposit records by status and network. -->
 <template>
   <div class="deposit-filters">
     <div class="deposit-filters__group" role="group" :aria-label="t('deposit.filterStatusLabel')">
@@ -100,7 +101,7 @@ const rangeOptions = DEPOSIT_TIME_RANGES.map((value) => ({
   min-height: 1.875rem;
   padding: 0.25rem 0.625rem;
   border: 1px solid var(--ui-border);
-  border-radius: 999px;
+  border-radius: 9999px;
   font-size: 0.75rem;
   transition:
     border-color 0.15s,

@@ -1,3 +1,4 @@
+<!-- SignerShardsPanel.vue shows signing availability and starts setup or unlocking. -->
 <template>
   <UPageCard variant="subtle" :ui="{ container: 'gap-y-3' }" class="signer-shards">
     <div class="min-w-0">
@@ -128,7 +129,7 @@
            warning badges and disabled controls. -->
       <div
         v-if="!status.configured"
-        class="rounded-lg border border-default p-3"
+        class="rounded-control border border-default p-3"
         data-testid="signer-setup-steps"
       >
         <p class="text-sm font-medium text-highlighted">{{
@@ -137,7 +138,7 @@
         <ol class="mt-2 grid gap-1.5 text-sm text-muted">
           <li v-for="(step, index) in setupSteps" :key="step" class="flex gap-2">
             <span
-              class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-[10px] font-semibold text-primary"
+              class="mt-0.5 flex size-4 shrink-0 items-center justify-center rounded-full bg-primary/10 text-xs font-semibold text-primary"
               >{{ index + 1 }}</span
             >
             <span>{{ t(step) }}</span>
@@ -166,7 +167,7 @@
         <template v-else>
           <!-- Locked/expired: unlocking is the primary next step. While a window is
                open the same button is a quiet secondary action, so it never competes
-               with 执行归集 as the page's main action. -->
+               with Run sweep as the page's main action. -->
           <UButton
             :color="effectivelyLocked ? 'warning' : 'neutral'"
             :variant="effectivelyLocked ? 'solid' : 'outline'"

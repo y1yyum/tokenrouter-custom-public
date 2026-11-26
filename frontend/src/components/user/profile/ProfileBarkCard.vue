@@ -1,3 +1,4 @@
+<!-- ProfileBarkCard.vue manages the account's Bark notification settings. -->
 <template>
   <div
     class="overflow-hidden rounded-surface border border-primary-900/10 bg-white dark:border-dark-500 dark:bg-dark-900"

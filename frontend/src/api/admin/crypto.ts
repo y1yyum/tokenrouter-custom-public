@@ -1,3 +1,4 @@
+// crypto.ts provides the crypto payment API contract for its callers.
 import { apiClient } from '@/api/client'
 
 // CryptoGrant carries transient, session-bound proof for payment operations.
@@ -265,7 +266,7 @@ export type SweepGateReason =
 
 /**
  * GET /admin/crypto/sweep/readiness — the single backend judgement of whether
- * 执行归集 may run. `ready` is false when a prerequisite is missing and
+ * Run sweep may run. `ready` is false when a prerequisite is missing and
  * `reason` names the one the operator should fix first.
  */
 export interface SweepGate {

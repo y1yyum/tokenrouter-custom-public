@@ -1,3 +1,4 @@
+// deposit.ts supplies deposit instructions, progress messages and history labels.
 export default {
   deposit: {
     retry: 'Try again',

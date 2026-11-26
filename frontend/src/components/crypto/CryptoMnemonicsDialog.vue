@@ -1,3 +1,4 @@
+<!-- CryptoMnemonicsDialog.vue manages the wallet recovery phrase dialog and its visibility. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"
@@ -103,7 +104,7 @@
           <section
             v-for="(seed, seedIndex) in seeds"
             :key="seed.kind"
-            class="crypto-mnemonics__seed space-y-3 rounded-lg p-4 ring ring-default"
+            class="crypto-mnemonics__seed space-y-3 rounded-control p-4 ring ring-default"
             :class="[
               `crypto-mnemonics__seed--${seed.kind}`,
               { 'crypto-mnemonics__seed--revealed': seed.visible },
@@ -175,7 +176,7 @@
               <section
                 v-for="segment in mnemonicParts(seed.value)"
                 :key="`${seed.kind}-part-${segment.part}`"
-                class="crypto-mnemonics__part space-y-2 rounded-md bg-elevated/50 p-3"
+                class="crypto-mnemonics__part space-y-2 rounded-compact bg-elevated/50 p-3"
                 :class="{ 'crypto-mnemonics__part--copied': isCopied(seed.kind, segment.part) }"
                 :aria-label="partLabel(seed.kind, segment)"
               >
@@ -184,7 +185,7 @@
                     <span class="text-xs font-semibold text-highlighted">{{
                       t('admin.crypto.mnemonicsPart', { part: segment.part })
                     }}</span>
-                    <span class="text-[11px] text-muted tabular-nums">{{
+                    <span class="text-xs text-muted tabular-nums">{{
                       t('admin.crypto.mnemonicsWordRange', {
                         start: wordNumber(segment.start),
                         end: wordNumber(segment.start + segment.words.length - 1),

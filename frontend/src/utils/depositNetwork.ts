@@ -1,3 +1,4 @@
+// depositNetwork.ts maps network status and timing evidence to deposit guidance.
 import type { DepositNetworkState, DepositNetworkStatus } from '@/api/crypto'
 
 // Deposit network status → customer copy.
@@ -50,8 +51,8 @@ export function parseEtaSeconds(value: unknown): number | null {
   return n
 }
 
-// Friendly duration only ("35 秒", "3 分钟", "30+ 分钟"); the surrounding copy
-// adds "约" / "预计". Null means no estimate should be shown at all.
+// Friendly duration only (seconds, minutes or an open-ended duration); the surrounding copy
+// adds the estimate prefix. Null means no estimate should be shown at all.
 export function formatEtaDuration(
   seconds: number | null | undefined,
   t: DepositTranslate,
@@ -145,7 +146,7 @@ function estimatesTransfer(state: DepositNetworkState): boolean {
   return state !== 'unknown' && state !== 'paused' && state !== 'stalled'
 }
 
-// Line under each network card: "预计 35 秒到账", or "即时到账" for a chain that
+// Line under each network card: an estimated arrival time or immediate credit for a chain that
 // credits on detection.
 export function cardEtaText(view: DepositNetworkView, t: DepositTranslate): string | null {
   if (!estimatesTransfer(view.state)) return null

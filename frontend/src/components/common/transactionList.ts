@@ -1,3 +1,4 @@
+// transactionList.ts defines the display model shared by transaction history components.
 /**
  * Shared model for a record / ledger row.
  *

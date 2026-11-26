@@ -1,3 +1,4 @@
+// crypto.ts provides the crypto payment API contract for its callers.
 import { apiClient } from '@/api/client'
 
 // Standalone crypto deposit API (independent of /purchase).

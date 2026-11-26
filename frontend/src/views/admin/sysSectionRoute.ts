@@ -1,3 +1,4 @@
+// sysSectionRoute.ts selects the admin route for a system settings section.
 import { computed, getCurrentInstance, ref, type Ref } from 'vue'
 import type { Router } from 'vue-router'
 

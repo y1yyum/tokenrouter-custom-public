@@ -1,3 +1,4 @@
+// revealActiveNavItem.ts scrolls the selected navigation item into view.
 /**
  * Keeps the current entry of a sideways-scrolling nav strip on screen.
  *

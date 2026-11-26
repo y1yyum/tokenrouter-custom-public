@@ -1,3 +1,4 @@
+// keyRotationGate.ts reads deposit eligibility and records an explicit risk acknowledgment.
 import { apiClient } from '@/api/client'
 import {
   KEY_ROTATION_REQUIRED_CODE,

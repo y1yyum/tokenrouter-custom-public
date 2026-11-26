@@ -1,3 +1,4 @@
+// depositProgress.ts formats confirmation progress for deposit records.
 import type { DepositRecord } from '@/api/crypto'
 
 /**

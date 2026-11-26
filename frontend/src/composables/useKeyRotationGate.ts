@@ -1,3 +1,4 @@
+// useKeyRotationGate.ts refreshes deposit eligibility after credential changes.
 import { computed, onMounted, reactive } from 'vue'
 
 import {

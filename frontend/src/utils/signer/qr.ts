@@ -1,3 +1,4 @@
+// qr.ts encodes recovery data for QR display.
 /**
  * Local QR generation/decoding for one-time shares.
  *

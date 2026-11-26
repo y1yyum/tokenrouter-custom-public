@@ -1,3 +1,4 @@
+// material.ts generates and verifies the recovery shares for a signing key.
 /**
  * High-level signer material: generate the browser-held data key, split it,
  * build the server payload (which only ever contains share A), and recover the

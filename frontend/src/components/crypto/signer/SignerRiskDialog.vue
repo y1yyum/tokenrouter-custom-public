@@ -1,3 +1,4 @@
+<!-- SignerRiskDialog.vue asks the operator to acknowledge the risks of the signing operation. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"
@@ -24,7 +25,7 @@
           <span class="min-w-0 leading-relaxed text-default">{{ point }}</span>
         </li>
       </ol>
-      <div class="rounded-lg bg-elevated/60 p-3">
+      <div class="rounded-control bg-elevated/60 p-3">
         <p class="text-xs text-muted">{{ t('admin.crypto.signer.wizard.riskPhraseLabel') }}</p>
         <p
           class="signer-risk__phrase mt-1 font-mono text-base font-semibold wrap-anywhere text-highlighted"

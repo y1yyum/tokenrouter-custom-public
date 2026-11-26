@@ -1,3 +1,4 @@
+<!-- DepositView.vue shows the selected network, receiving address and deposit history. -->
 <template>
   <CryptoUi>
     <AppLayout>
@@ -14,7 +15,7 @@
         </div>
         <template v-else>
           <KeyRotationRiskAckBanner v-if="riskAckActive" :status="keyRotationStatus" class="mb-4" />
-          <!-- 首屏骨架：地址/二维码和右侧说明的版式先占位，避免白屏后整块跳变。 -->
+          <!-- Reserve space for the address, QR code and instructions during initial loading. -->
           <div
             v-if="loading"
             class="deposit-view__layout"
@@ -25,28 +26,28 @@
           >
             <section class="card deposit-view__funding">
               <div class="mb-4 flex items-center justify-between gap-3">
-                <div class="h-5 w-40 animate-pulse rounded bg-elevated/60"></div>
-                <div class="h-8 w-24 animate-pulse rounded bg-elevated/60"></div>
+                <div class="h-5 w-40 animate-pulse rounded-compact bg-elevated/60"></div>
+                <div class="h-8 w-24 animate-pulse rounded-compact bg-elevated/60"></div>
               </div>
               <div class="grid grid-cols-2 gap-2">
                 <div
                   v-for="i in 4"
                   :key="i"
-                  class="h-14 animate-pulse rounded-md bg-elevated/60"
+                  class="h-14 animate-pulse rounded-compact bg-elevated/60"
                 ></div>
               </div>
-              <div class="mt-5 h-40 animate-pulse rounded-md bg-elevated/60 sm:h-48"></div>
-              <div class="mt-4 h-10 animate-pulse rounded-md bg-elevated/60"></div>
+              <div class="mt-5 h-40 animate-pulse rounded-compact bg-elevated/60 sm:h-48"></div>
+              <div class="mt-4 h-10 animate-pulse rounded-compact bg-elevated/60"></div>
             </section>
             <aside class="card deposit-view__guide">
-              <div class="h-5 w-28 animate-pulse rounded bg-elevated/60"></div>
-              <div class="mt-3 h-4 w-full animate-pulse rounded bg-elevated/60"></div>
-              <div class="mt-2 h-4 w-2/3 animate-pulse rounded bg-elevated/60"></div>
+              <div class="h-5 w-28 animate-pulse rounded-compact bg-elevated/60"></div>
+              <div class="mt-3 h-4 w-full animate-pulse rounded-compact bg-elevated/60"></div>
+              <div class="mt-2 h-4 w-2/3 animate-pulse rounded-compact bg-elevated/60"></div>
               <div class="mt-5 space-y-3">
                 <div
                   v-for="i in 3"
                   :key="i"
-                  class="h-12 animate-pulse rounded-md bg-elevated/60"
+                  class="h-12 animate-pulse rounded-compact bg-elevated/60"
                 ></div>
               </div>
             </aside>
@@ -138,7 +139,7 @@
                   {{ assetLabel(asset) }}
                 </button>
               </div>
-              <!-- 02 金额预检：先让用户报出要转多少，范围外当场拦住，别等钱转出去才发现不入账。 -->
+              <!-- Validate the proposed transfer before handing the address to the wallet. -->
               <div v-if="current" class="deposit-view__amount-check">
                 <div class="deposit-view__section-head deposit-view__section-head--amount">
                   <span class="deposit-view__step">02</span>
@@ -276,9 +277,7 @@
             </aside>
           </div>
 
-          <!-- 记录区：Nuxt UI 的共享 TransactionListCard（收入/支出/回滚语义在组件里统一）。
-             明细（原因、回滚提示、客服入口、确认进度、交易哈希）走 item-details 插槽，
-             临时入账/回滚状态不丢。 -->
+          <!-- Use the shared transaction list for credits, debits and reversals. -->
           <TransactionListCard
             class="deposit-view__history"
             :title="t('deposit.history')"
@@ -323,7 +322,7 @@
               <p v-if="historyError" class="deposit-view__history-error" role="alert">{{
                 t('deposit.historyFailed')
               }}</p>
-              <!-- 本地筛选：只重排已加载的记录，不重新请求、不影响 5 秒自动刷新。 -->
+              <!-- Filtering loaded rows leaves the five-second refresh active. -->
               <DepositHistoryFilters
                 v-if="history.length"
                 v-model:status="statusFilter"
@@ -336,7 +335,7 @@
               >
                 {{ t('deposit.filterResult', { n: displayRows.length, total: history.length }) }}
               </p>
-              <!-- 后端只返回最近 50 条且不分页：筛选范围要说清楚，别让人以为更早的记录没了。 -->
+              <!-- The server returns the latest 50 records without pagination; show that limit beside the filters. -->
               <p
                 v-if="history.length >= HISTORY_PAGE_LIMIT"
                 class="deposit-view__filter-note"
@@ -395,7 +394,7 @@
                 data-testid="deposit-provisional-hint"
                 >{{ t('deposit.provisionalHint') }}</span
               >
-              <!-- 回滚后的下一步：能点就点。地址/邮箱直接开客服，纯文本联系方式就复制，没配就直说。 -->
+              <!-- Open or copy the configured support contact and show a plain message if none is available. -->
               <span v-if="item.row.status === 'revoked'" class="deposit-view__support">
                 <a
                   v-if="supportLink"
@@ -558,7 +557,7 @@ const { t } = useI18n()
 const { copyToClipboard } = useClipboard()
 const appStore = useAppStore()
 const authStore = useAuthStore()
-// 密钥轮换门禁：未完成整改时 USDT/链上充值入口整体替换为整改卡片。
+// Show remediation in place of deposit controls while the key rotation gate is closed.
 const { required: keyRotationRequired, status: keyRotationStatus } = useKeyRotationGate()
 // An explicit denial must survive an older shared status read finishing afterwards.
 const keyRotationDenied = ref(false)
@@ -752,7 +751,7 @@ const referencePrice = computed(() => {
 
 const limitUnit = computed(() => (selectedMarketPriced.value ? 'USD' : rateUnit.value))
 
-// ---- 金额预检 ----
+// Amount validation
 // The user declares what they are about to send so an amount the backend would
 // never credit is caught before the money leaves the wallet. Thresholds come
 // from deposit-info only: a deployment that exposes none performs no check
@@ -816,7 +815,7 @@ const rows = computed<HistoryRow[]>(() =>
 )
 const pendingRows = computed(() => rows.value.filter((item) => item.row.status === 'pending'))
 
-// ---- 充值记录本地筛选 ----
+// Local history filters
 // The history endpoint is not paginated (one page of recent rows), so the
 // filters run in the browser: they never trigger a request and never interrupt
 // the 5s refresh loop. If the list ever becomes paginated this becomes a
@@ -834,10 +833,10 @@ function resetFilters() {
   timeRange.value = 'all'
 }
 
-// ---- 记录列表行 ----
-// 充值记录映射成共享 TransactionListCard 的行模型：右列只放「余额」语义的金额，
-// 收入(绿)/支出(墨色)/回滚(玫红)三色由 tone 决定；待确认或未入账的行不放金额，
-// 只保留状态徽标和明细，避免把「10 USDT」误读成已到账余额。
+// Transaction history rows
+// The amount column represents balance movement.
+// Use the row tone for credits, debits and reversals.
+// Pending transfers have status details but no posted balance change.
 interface DepositHistoryItem extends TransactionItem {
   row: DepositRecord
   progress: ConfirmationProgress | null
@@ -866,7 +865,7 @@ function historyStatus(row: DepositRecord): TransactionStatus | undefined {
 }
 
 function toHistoryItem({ row, progress }: HistoryRow): DepositHistoryItem {
-  // 已回滚的行只有在原始入账金额可信时才显示 -$X；未知就是未知，不编 0。
+  // Only show the reversed amount when the original credit is known.
   const creditedAmount =
     (row.status === 'credited' || row.status === 'provisional' || row.status === 'revoked') &&
     hasKnownCredit(row)
@@ -889,7 +888,7 @@ function toHistoryItem({ row, progress }: HistoryRow): DepositHistoryItem {
 
 const historyItems = computed<DepositHistoryItem[]>(() => displayRows.value.map(toHistoryItem))
 
-// ---- 回滚行的客服入口 ----
+// Support after a reversal
 // Reuse the site's only public contact field (same source as the user menu).
 // A URL/email/Telegram handle becomes a link; free text ("QQ: 123456789")
 // becomes a copy action, so the user always gets the value even without a URL.
@@ -1024,7 +1023,7 @@ function statusText(status: string): string {
 }
 
 async function copyAddress() {
-  // 金额不在入账范围时不放行转账动作：这页「提交」就是把地址交给钱包。
+  // Passing the address to a wallet permits a transfer, so enforce the amount limits first.
   if (
     amountBlocksTransfer.value ||
     depositBlocked.value ||
@@ -1259,7 +1258,7 @@ onUnmounted(() => {
 .deposit-view__guide {
   min-width: 0;
   border: 1px solid var(--ui-border);
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   padding: 1.5rem;
   background: var(--ui-bg);
   box-shadow: 0 1px 2px rgba(10, 10, 10, 0.05);
@@ -1310,7 +1309,7 @@ onUnmounted(() => {
   min-height: 2.5rem;
   padding: 0.55rem 0.875rem;
   border: 1px solid var(--ui-border-accented);
-  border-radius: 6px;
+  border-radius: var(--radius-compact);
   font-size: 0.8125rem;
   transition:
     border-color 0.15s,
@@ -1331,7 +1330,7 @@ onUnmounted(() => {
   flex-wrap: wrap;
   gap: 0.5rem;
 }
-/* 每个网络卡片下的到账预估，跟着徽标一起回答「多久到」。 */
+/* Show the arrival estimate alongside each network badge. */
 .deposit-view__chain-eta {
   color: var(--signal-muted, #8c99a6);
   font-size: 0.6875rem;
@@ -1342,7 +1341,7 @@ onUnmounted(() => {
   width: 0.375rem;
   height: 0.375rem;
   flex-shrink: 0;
-  border-radius: 50%;
+  border-radius: 9999px;
   background: var(--signal-muted, #8c99a6);
 }
 .deposit-view__chain--active .deposit-view__network-dot {
@@ -1355,7 +1354,7 @@ onUnmounted(() => {
   padding: 0.75rem 1rem;
   margin-top: 0.75rem;
   border: 1px solid #0891b233;
-  border-radius: 0.625rem;
+  border-radius: var(--radius-control);
   background: #0891b20a;
   font-size: 0.75rem;
   line-height: 1.7;
@@ -1368,7 +1367,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   margin-top: 0.15rem;
   border: 1px solid #0891b2;
-  border-radius: 50%;
+  border-radius: 9999px;
   color: #0891b2;
   font-size: 0.6875rem;
   font-weight: 700;
@@ -1377,7 +1376,7 @@ onUnmounted(() => {
   margin-top: 0.75rem;
   padding: 0.625rem 0.75rem;
   border: 1px solid #0891b233;
-  border-radius: 0.5rem;
+  border-radius: var(--radius-control);
   background: #0891b208;
   color: var(--signal-muted, #64748b);
   font-size: 0.75rem;
@@ -1396,7 +1395,7 @@ onUnmounted(() => {
   min-height: 2.25rem;
   padding: 0.45rem 0.75rem;
   border: 1px solid var(--ui-border);
-  border-radius: 6px;
+  border-radius: var(--radius-compact);
   font-size: 0.8125rem;
   transition:
     border-color 0.15s,
@@ -1411,7 +1410,7 @@ onUnmounted(() => {
   background: var(--signal-accent-soft, #0891b218);
   font-weight: 600;
 }
-/* 金额预检区：和地址区一样用上分隔线，但排在选币之后、地址之前。 */
+/* Separate amount validation from asset selection and the receiving address. */
 .deposit-view__amount-check {
   margin-top: 1.25rem;
   padding-top: 1.25rem;
@@ -1435,7 +1434,7 @@ onUnmounted(() => {
 }
 .deposit-view__token {
   padding: 0.15rem 0.5rem;
-  border-radius: 0.375rem;
+  border-radius: var(--radius-compact);
   border: 1px solid #10b98145;
   background: #10b98112;
   color: #10b981;
@@ -1457,7 +1456,7 @@ onUnmounted(() => {
   display: grid;
   place-items: center;
   border: 1px solid #e5e5e5;
-  border-radius: 8px;
+  border-radius: var(--radius-control);
   background: white;
   color: #334155;
   overflow: hidden;
@@ -1483,7 +1482,7 @@ onUnmounted(() => {
   padding: 0.875rem;
   min-width: 0;
   border: 1px solid var(--ui-border);
-  border-radius: 6px;
+  border-radius: var(--radius-compact);
   background: #64748b09;
   font-size: 0.8125rem;
   line-height: 1.8;
@@ -1509,7 +1508,7 @@ onUnmounted(() => {
   padding: 0.875rem 1rem;
   margin-top: 1.5rem;
   border: 1px solid #d9770638;
-  border-radius: 0.625rem;
+  border-radius: var(--radius-control);
   background: #d9770609;
   font-size: 0.75rem;
   line-height: 1.7;
@@ -1525,7 +1524,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   margin-top: 0.15rem;
   border: 1px solid #d97706;
-  border-radius: 50%;
+  border-radius: 9999px;
   color: #d97706;
   font-size: 0.6875rem;
   font-weight: 700;
@@ -1568,7 +1567,7 @@ onUnmounted(() => {
   gap: 0.625rem;
   margin-top: 0.5rem;
   padding: 1rem;
-  border-radius: 0.625rem;
+  border-radius: var(--radius-control);
   background: #10b9810a;
 }
 .deposit-view__confirmation-dot {
@@ -1577,7 +1576,7 @@ onUnmounted(() => {
   flex-shrink: 0;
   margin-top: 0.4rem;
   background: #10b981;
-  border-radius: 50%;
+  border-radius: 9999px;
 }
 .deposit-view__confirmation strong {
   font-size: 0.8125rem;
@@ -1592,7 +1591,7 @@ onUnmounted(() => {
 .deposit-view__history {
   margin-top: 1.25rem;
 }
-/* 记录行明细：哈希、原因、进度都挂在共享列表行的 item-details 插槽里。 */
+/* Show transaction hashes, reasons and progress in the shared details slot. */
 .deposit-view__transaction {
   max-width: 24rem;
   margin-top: 0.5rem;
@@ -1635,7 +1634,7 @@ a.deposit-view__hash {
 .deposit-view__reason--revoked {
   color: var(--app-amount-reversal);
 }
-/* 回滚行的客服入口：链接/按钮 + 纯文本联系方式的复制兜底。 */
+/* Provide a contact link or copy action for reversal support. */
 .deposit-view__support {
   display: flex;
   flex-wrap: wrap;
@@ -1700,7 +1699,7 @@ a.deposit-view__hash {
 .deposit-view__progress-track {
   display: block;
   height: 0.25rem;
-  border-radius: 99px;
+  border-radius: 9999px;
   background: #d9770624;
   overflow: hidden;
 }
@@ -1719,7 +1718,7 @@ a.deposit-view__hash {
   margin-bottom: 1rem;
   padding: 0.875rem 1rem;
   border: 1px solid #d9770638;
-  border-radius: 0.625rem;
+  border-radius: var(--radius-control);
   background: #d9770609;
   font-size: 0.8125rem;
   line-height: 1.6;
@@ -1729,7 +1728,7 @@ a.deposit-view__hash {
   height: 0.5rem;
   flex-shrink: 0;
   margin-top: 0.45rem;
-  border-radius: 50%;
+  border-radius: 9999px;
   background: #d97706;
   animation: deposit-view-pulse 1.6s ease-in-out infinite;
 }
@@ -1799,7 +1798,7 @@ a.deposit-view__hash {
   }
 }
 @media (max-width: 640px) {
-  /* 底部安全区：iPhone 上最后一屏内容 / 复制按钮不被 Home 指示条压住。 */
+  /* Keep the final copy action above the mobile safe area. */
   .deposit-view {
     padding: 1rem 0.75rem calc(1rem + env(safe-area-inset-bottom));
   }
@@ -1809,7 +1808,7 @@ a.deposit-view__hash {
   .deposit-view__funding,
   .deposit-view__guide {
     padding: 1.125rem;
-    border-radius: 0.875rem;
+    border-radius: var(--radius-surface);
   }
   .deposit-view__chains {
     display: grid;
@@ -1854,7 +1853,7 @@ a.deposit-view__hash {
     padding: 0.75rem 0.875rem;
   }
 }
-/* 触屏上 :hover 会「粘」在上一次点过的元素上；悬停反馈只在真有指针的设备生效。 */
+/* Limit hover feedback to devices with a pointer. */
 @media (hover: hover) and (pointer: fine) {
   .deposit-view__chain:hover {
     background: var(--signal-accent-soft, #0891b212);

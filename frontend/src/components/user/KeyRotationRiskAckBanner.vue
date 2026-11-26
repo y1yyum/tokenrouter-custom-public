@@ -1,7 +1,8 @@
+<!-- KeyRotationRiskAckBanner.vue shows when the current risk acknowledgment expires. -->
 <template>
   <section
     v-if="expiresLabel"
-    class="flex items-start gap-3 rounded-lg border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-900 dark:border-primary-400/30 dark:bg-primary-400/10 dark:text-primary-100"
+    class="flex items-start gap-3 rounded-control border border-primary-200 bg-primary-50 px-4 py-3 text-sm text-primary-900 dark:border-primary-400/30 dark:bg-primary-400/10 dark:text-primary-100"
     role="status"
     data-testid="key-rotation-risk-ack-banner"
   >
@@ -35,12 +36,7 @@ import { useI18n } from 'vue-i18n'
 import type { KeyRotationGateStatus } from '@/api/keyRotationGate'
 import { KEY_ROTATION_REMEDIATION_PATH } from '@/api/keyRotationGateCodes'
 
-/**
- * 「风险确认仍在有效期内」的提示条。
- *
- * 用户确认风险后门禁会放行充值/兑换，整改卡片随之消失；这条轻提示负责让
- * 用户看到确认的失效时间（如「风险确认有效期至 14:30」），避免误以为永久豁免。
- */
+/* Display the expiry after acknowledgment so the user knows when the temporary exception ends. */
 const props = defineProps<{
   status?: KeyRotationGateStatus | null
 }>()

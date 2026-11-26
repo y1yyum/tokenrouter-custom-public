@@ -1,6 +1,7 @@
+<!-- KeyRotationGateNotice.vue guides a user through the credential checks required for deposits. -->
 <template>
   <section
-    class="rounded-xl border border-amber-300 bg-amber-50 p-5 text-amber-950 shadow-sm sm:p-6 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-50"
+    class="rounded-surface border border-amber-300 bg-amber-50 p-5 text-amber-950 shadow-sm sm:p-6 dark:border-amber-400/40 dark:bg-amber-400/10 dark:text-amber-50"
     role="alert"
     data-testid="key-rotation-gate-notice"
   >
@@ -49,7 +50,7 @@
           >
             {{ t('keyRotationGate.action') }}
           </UButton>
-          <!-- 次级动作：显式风险确认。故意用 ghost/neutral，不做成和整改按钮一样醒目。 -->
+          <!-- Keep risk acknowledgment secondary to rotating the credential. -->
           <UButton
             v-if="riskAckEnabled"
             size="sm"
@@ -103,15 +104,12 @@ const remediationPath = computed(
 const activeCount = computed(() => props.status?.active_key_count ?? -1)
 const pendingCount = computed(() => props.status?.pending_key_count ?? 0)
 
-// 后端开关关闭（security.key_rotation_risk_ack_enabled=false）时不展示次级按钮。
+// Hide acknowledgment when the operator disables it.
 const riskAckEnabled = computed(() => props.status?.risk_ack_enabled === true)
 const submitting = ref(false)
 const riskAckError = ref('')
 
-/**
- * 显式风险确认：先弹一次确认（说明 key 泄漏后他人可直接盗刷余额），
- * 确认后才写确认记录并刷新全局门禁状态，页面随之恢复充值/兑换表单。
- */
+/* Confirm the risk of a leaked key before recording acknowledgment and refreshing the deposit gate. */
 async function acknowledgeRisk(): Promise<void> {
   if (submitting.value) return
   riskAckError.value = ''
@@ -129,7 +127,7 @@ async function acknowledgeRisk(): Promise<void> {
     await keyRotationGateAPI.acknowledgeRisk()
     await ensureKeyRotationGate(true)
   } catch {
-    // 失败（含功能被关闭的 403）保持原拦截状态，并允许用户重试或去整改。
+    // A failed acknowledgment leaves the gate closed so the user can retry or rotate the key.
     riskAckError.value = t('keyRotationGate.riskAckFailed')
   } finally {
     submitting.value = false

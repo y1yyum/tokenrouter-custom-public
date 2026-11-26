@@ -1,3 +1,4 @@
+<!-- CryptoGrantStatus.vue shows the remaining lifetime of the current verification grant. -->
 <template>
   <UBadge
     v-if="remaining > 0"

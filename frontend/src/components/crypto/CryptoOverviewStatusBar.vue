@@ -1,3 +1,4 @@
+<!-- CryptoOverviewStatusBar.vue summarizes monitoring, signing and sweep readiness. -->
 <template>
   <section class="overview-status" :aria-label="t('admin.crypto.overview.statusTitle')">
     <UPageCard variant="subtle" :ui="{ container: 'gap-y-3' }">
@@ -25,7 +26,7 @@
         <div
           v-for="segment in segments"
           :key="segment.id"
-          class="overview-status__segment flex min-w-0 flex-col gap-1 rounded-lg border p-3"
+          class="overview-status__segment flex min-w-0 flex-col gap-1 rounded-control border p-3"
           :class="segment.ok ? 'border-default bg-success/5' : 'border-error/40 bg-error/5'"
           :data-testid="`overview-status-${segment.id}`"
           :data-state="segment.ok ? 'ok' : 'error'"

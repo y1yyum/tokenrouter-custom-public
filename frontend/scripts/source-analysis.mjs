@@ -1,5 +1,5 @@
 import { readdirSync, readFileSync } from 'node:fs'
-import { extname, join, relative } from 'node:path'
+import { extname, join, relative, sep } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import * as vueParser from 'vue-eslint-parser'
 import tseslint from 'typescript-eslint'
@@ -305,7 +305,7 @@ export function runSourceCheck(name, check, paths = collectSourceFiles()) {
   for (const file of paths) {
     try {
       const text = readFileSync(file, 'utf8')
-      for (const issue of check(text, relative(frontendRoot, file))) {
+      for (const issue of check(text, relative(frontendRoot, file).split(sep).join('/'))) {
         violations += 1
         console.error(
           `${relative(frontendRoot, file)}:${issue.line ?? 1}:${issue.column ?? 1} ${issue.message}`,

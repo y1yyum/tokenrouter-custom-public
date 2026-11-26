@@ -1,3 +1,4 @@
+<!-- ShardUnlockDialog.vue collects recovery shares to unlock the signer. -->
 <template>
   <BaseDialog
     :panel-data="{ 'data-crypto-ui': '' }"
