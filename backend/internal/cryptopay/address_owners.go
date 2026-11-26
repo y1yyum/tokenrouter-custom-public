@@ -9,10 +9,26 @@ import (
 	"github.com/lib/pq"
 )
 
-// MaxOwnerLookupAddresses bounds one address-owners request after
-// de-duplication. The pool holds a few thousand rows; this keeps a single
-// request from turning into a bulk export of user identities.
-const MaxOwnerLookupAddresses = 100
+const (
+	// MaxOwnerLookupAddresses bounds one address-owners request after
+	// de-duplication. The pool holds a few thousand rows; this keeps a single
+	// request from turning into a bulk export of user identities.
+	MaxOwnerLookupAddresses = 100
+
+	// The pool stores checksummed addresses while sweep records and deposits keep
+	// them lower-case, so the comparison lower-cases the stored side. The pool is
+	// a few thousand rows; no functional index is warranted for this read.
+	//
+	// LEFT JOIN keeps soft-deleted users (deleted_at is not filtered) and also
+	// rows whose user was hard-deleted; both report deleted = true.
+	addressOwnersQuery = `SELECT lower(p.address), p.assigned_user_id,
+	       COALESCE(u.username, ''), COALESCE(u.email, ''),
+	       (u.id IS NULL OR u.deleted_at IS NOT NULL)
+	  FROM crypto_address_pool p
+	  LEFT JOIN users u ON u.id = p.assigned_user_id
+	 WHERE lower(p.address) = ANY($1) AND p.assigned_user_id IS NOT NULL
+	 ORDER BY p.id`
+)
 
 var (
 	// ErrTooManyOwnerAddresses is returned when more than MaxOwnerLookupAddresses
@@ -22,9 +38,9 @@ var (
 	// failure. database/sql puts the offending column value into its scan
 	// errors and these rows hold user emails, so no cause is ever wrapped.
 	ErrOwnerLookupFailed = errors.New("address owner lookup failed")
-)
 
-var evmAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	evmAddressPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+)
 
 // AddressOwner is the user a deposit address was assigned to. Username and
 // Email are personal data: they belong in admin API responses only, never in
@@ -57,20 +73,6 @@ func normalizeOwnerAddresses(raw []string) []string {
 	}
 	return out
 }
-
-// The pool stores checksummed addresses while sweep records and deposits keep
-// them lower-case, so the comparison lower-cases the stored side. The pool is
-// a few thousand rows; no functional index is warranted for this read.
-//
-// LEFT JOIN keeps soft-deleted users (deleted_at is not filtered) and also
-// rows whose user was hard-deleted; both report deleted = true.
-const addressOwnersQuery = `SELECT lower(p.address), p.assigned_user_id,
-	       COALESCE(u.username, ''), COALESCE(u.email, ''),
-	       (u.id IS NULL OR u.deleted_at IS NOT NULL)
-	  FROM crypto_address_pool p
-	  LEFT JOIN users u ON u.id = p.assigned_user_id
-	 WHERE lower(p.address) = ANY($1) AND p.assigned_user_id IS NOT NULL
-	 ORDER BY p.id`
 
 // LookupAddressOwners maps deposit addresses to their assigned users. The
 // result is keyed by lower-case address; addresses with no owner are absent.

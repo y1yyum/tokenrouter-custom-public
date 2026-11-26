@@ -5,10 +5,8 @@ package architecture
 // these tables so a dependency selected for reviewed instrumentation cannot
 // silently authorize neighboring files or unrelated adapters in another module.
 //
-// Test files in unregistered modules can list their own dependencies while the
-// module stays under the default restrictions. The same retirement rule applies
-// to these test imports and to imports from registered owners, so adapting a
-// fixture to the current host cannot reopen a retired package path.
+// Chain payment adapters declare their package-specific contracts in chain_payments.go.
+// The file permissions below further restrict host storage and configuration access.
 
 // pureStandard permits in-memory parsing, encoding, Unicode validation, and caller-owned
 // streams for pure packages. File and network acquisition require narrower permissions.
@@ -201,7 +199,7 @@ internal/settings/testkit internal/team internal/testutil/assertion internal/tes
 internal/upstream/grok/testkit internal/modelcatalog/provider`},
 		"internal/idempotency": {Production: `internal/idempotency/... internal/identity/httpapi/authctx internal/infra/postgres/...
 internal/infra/telemetry/... internal/pkg/ internal/server/httpx`, Tests: "migrations"},
-		"internal/identity": {Production: `internal/server/adminapi ent/... internal/billing internal/billing/httpapi/dto internal/billing/postgres internal/config
+		"internal/identity": {Production: `internal/cryptopay/mode internal/server/adminapi ent/... internal/billing internal/billing/httpapi/dto internal/billing/postgres internal/config
 internal/gateway/admission internal/idempotency/httpapi internal/identity/...
 internal/infra/httpclient/... internal/infra/postgres/... internal/infra/telemetry/...
 internal/notification internal/notification/contract internal/pkg/ internal/promotion
@@ -301,7 +299,7 @@ internal/routing/httpapi/dto`, Tests: "internal/routing/capability"},
 		"internal/provider/transfer":   {Production: "internal/provider/transfer internal/egress", Tests: ""},
 		"internal/provider/usageview":  {Production: "internal/provider/usageview internal/upstream/usageview", Tests: ""},
 		"internal/apikey/httpapi/dto":  {Production: "internal/apikey internal/apikey/httpapi/dto internal/routing", Tests: "internal/billing"},
-		"internal/app/bootstrap": {Production: `ent ent/securitysecret internal/app/bootstrap internal/config internal/identity
+		"internal/app/bootstrap": {Production: `internal/cryptopay/mode ent ent/securitysecret internal/app/bootstrap internal/config internal/identity
 internal/identity/postgres internal/infra/crypto internal/infra/postgres internal/infra/redis
 internal/infra/telemetry/logging internal/pkg/timezone internal/routing/postgres migrations`, Tests: "ent/enttest ent/group ent/runtime internal/billing internal/routing/capability"},
 		"internal/app/lifecycle":       {Production: "internal/app/lifecycle", Tests: ""},
@@ -405,34 +403,8 @@ internal/upstream/zhipu/...`, Tests: ""},
 		"internal/model/...", "internal/platform/...", "internal/routes/...", "internal/app/legacybridge/...",
 	}
 
-	// unregisteredTestImports adds reviewed imports to individual test files
-	// whose module roles are still unregistered, pending module ownership review.
-	unregisteredTestImports = map[string]dependencies{
-		// The BSC scenario runs payment fulfillment and reversal with real stores
-		// on a migrated database, and serves scanner responses over loopback HTTP.
-		"internal/cryptopay/bsc_deposit_scenario_integration_test.go": {
-			Internal: []string{
-				"ent", "ent/runtime", "internal/billing", "internal/billing/postgres", "internal/config",
-				"internal/cryptopay/addresses", "internal/cryptopay/rpc", "internal/cryptopay/scanner",
-				"internal/identity", "internal/identity/postgres", "internal/payment", "internal/payment/testkit",
-				"internal/settings", "internal/settings/postgres", "internal/testutil/postgrescontainer",
-			},
-			External: []string{"entgo.io/ent/dialect", "entgo.io/ent/dialect/sql", "github.com/stretchr/testify/require"},
-			Standard: []string{"database/sql", "encoding/json", "net/http", "net/http/httptest", "os", "slices", "strconv", "sync", "sync/atomic"},
-		},
-		// Configuration fixtures use the host settings keys and repository contract.
-		"internal/cryptopay/config_cas_test.go":            {Internal: []string{"internal/settings"}},
-		"internal/cryptopay/config_test.go":                {Internal: []string{"internal/settings"}},
-		"internal/cryptopay/readonly_test.go":              {Internal: []string{"internal/settings"}},
-		"internal/cryptopay/service_config_reload_test.go": {Internal: []string{"internal/settings"}},
-		"internal/cryptopay/sweep_destination_test.go":     {Internal: []string{"internal/settings"}},
-		// SQL fixtures read the host's embedded migration scripts to build the schema.
-		"internal/cryptopay/adapters_postgres_integration_test.go":        {Internal: []string{"migrations"}},
-		"internal/cryptopay/deposit_confirm_postgres_integration_test.go": {Internal: []string{"migrations"}},
-		"internal/cryptopay/sweeper/jobs_postgres_integration_test.go":    {Internal: []string{"migrations"}},
-	}
-
 	pureFileStandard = map[string]string{
+		"internal/egress/urlpolicy/public_address.go": "net/netip",
 		// SystemOne parses buffered multipart envelopes without acquiring files or
 		// network connections; only the codec and its fixture builder need MIME helpers.
 		"internal/protocol/systemone/payload.go":      "mime mime/multipart",
@@ -460,6 +432,18 @@ internal/upstream/zhipu/...`, Tests: ""},
 	// File permissions bind imports to reviewed source files; neighboring files
 	// and target subpackages do not inherit these permissions.
 	filePermissions = []filePermission{
+		{Scope: "internal/identity", Imports: "internal/cryptopay/mode", Files: "crypto_security.go"},
+		{Scope: "internal/app/bootstrap", Imports: "internal/cryptopay/mode", Files: "database.go security_secret_bootstrap.go"},
+		{Scope: "internal/cryptopay", Imports: "database/sql/driver", Files: "deposit_confirm.go sweep_failure_notifications_test.go"},
+		{Scope: "internal/cryptopay", Imports: "internal/settings/postgres", Files: "bsc_deposit_scenario_integration_test.go"},
+		// Bind host stores, settings and transaction access to their owning wallet files.
+		{Scope: "internal/cryptopay", Imports: "database/sql", Files: "adapters.go bsc_deposit_scenario_integration_test.go creditor.go creditor_test.go deposit_confirm.go deposit_confirm_integration_test.go deposit_network_status_test.go helpers_test.go security.go service.go setting_store.go sweep_failure_notifications.go sweep_failure_notifications_integration_test.go"},
+		{Scope: "internal/cryptopay", Imports: "github.com/lib/pq", Files: "address_owners.go address_owners_test.go sweep_failure_notifications_integration_test.go"},
+		{Scope: "internal/cryptopay", Imports: "internal/settings", Files: "bsc_deposit_scenario_integration_test.go config.go config_cas.go config_cas_test.go config_test.go readonly_scenario_test.go service_config_reload_scenario_test.go setting_store.go sweep_destination_test.go"},
+		{Scope: "internal/cryptopay", Imports: "internal/payment/postgres", Files: "creditor.go"},
+		{Scope: "internal/cryptopay", Imports: "internal/payment/testkit", Files: "bsc_deposit_scenario_integration_test.go"},
+		{Scope: "internal/cryptopay", Imports: "github.com/TokenFlux/TokenRouter/migrations", Files: "adapters_integration_test.go deposit_address_compat_postgres_scenario_integration_test.go deposit_confirm_integration_test.go"},
+		{Scope: "internal/cryptopay/sweeper", Imports: "github.com/TokenFlux/TokenRouter/migrations", Files: "jobs_integration_test.go"},
 		// Personal marketplace requests read the JWT subject through the shared identity context.
 		{Scope: "internal/routing/httpapi", Imports: "internal/identity/httpapi/authctx", Files: "marketplace.go marketplace_test.go group_handler_test.go"},
 		// The composite-key scenario reads the actual SystemOne envelope after
@@ -551,7 +535,8 @@ internal/upstream/zhipu/...`, Tests: ""},
 	}
 
 	permissionSubscopes = map[string]string{
-		"internal/mcp": "internal/mcp/httpapi internal/mcp/rediscache",
+		"internal/cryptopay": "internal/cryptopay/addresses internal/cryptopay/explorer internal/cryptopay/httpapi internal/cryptopay/ledger internal/cryptopay/mode internal/cryptopay/nativeprice internal/cryptopay/notify internal/cryptopay/rpc internal/cryptopay/scanner internal/cryptopay/sweeper internal/cryptopay/wallet",
+		"internal/mcp":       "internal/mcp/httpapi internal/mcp/rediscache",
 		"internal/provider": `internal/provider/httpapi internal/provider/postgres internal/provider/provider
 internal/provider/rediscache internal/provider/transfer internal/provider/usageview`,
 		"internal/apikey": "internal/apikey/httpapi internal/apikey/postgres internal/apikey/rediscache internal/apikey/testkit",
@@ -577,6 +562,7 @@ internal/routing/testkit`,
 	}
 
 	permissionChildImports = map[string]string{
+		"internal/cryptopay":               "database/sql/driver internal/settings/postgres",
 		"internal/mcp/httpapi":             "ent/runtime entgo.io/ent/dialect/sql",
 		"internal/gateway/provider":        "internal/modelcatalog/provider internal/modelcatalog/testkit",
 		"internal/testutil/rediscontainer": "github.com/testcontainers/testcontainers-go/modules/redis github.com/testcontainers/testcontainers-go/wait",

@@ -5,10 +5,11 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/notify"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/stretchr/testify/require"
 )
 
 // capturingNotifier records events synchronously so tests can assert on what a

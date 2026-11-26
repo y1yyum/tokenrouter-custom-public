@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
@@ -163,9 +164,11 @@ func TestStaleReleaseReasonSurvivesRecordedErrorSanitising(t *testing.T) {
 }
 
 func staleJobForTest(entry PlanEntry, id int64) *sweepJob {
-	return &sweepJob{PlanEntry: entry, ID: id, Version: 1, Revision: 3,
+	return &sweepJob{
+		PlanEntry: entry, ID: id, Version: 1, Revision: 3,
 		Status: "sweep_pending", Confirmations: 2,
-		SweepNonce: "2", SweepRaw: "0xdeadbeef", SweepHash: "0xhash" + string(rune('a'+id%26))}
+		SweepNonce: "2", SweepRaw: "0xdeadbeef", SweepHash: "0xhash" + string(rune('a'+id%26)),
+	}
 }
 
 func expectStaleAge(mock sqlmock.Sqlmock, id, minutes int64) {

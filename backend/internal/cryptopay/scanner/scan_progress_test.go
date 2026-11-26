@@ -5,8 +5,9 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
 func cursorRow(block int64) *sqlmock.Rows {

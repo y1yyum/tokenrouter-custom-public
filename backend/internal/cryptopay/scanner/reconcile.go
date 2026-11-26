@@ -13,22 +13,23 @@ import (
 	"strings"
 	"time"
 
+	"github.com/lib/pq"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
-	"github.com/lib/pq"
 )
 
-const missingReceiptPrefix = "reorg_missing_receipt:"
-const missingReceiptThreshold = 3
-const reconcileRPCBudget = 2 * time.Second
-const reconcilePersistenceReserve = 500 * time.Millisecond
-
-// A pending observation whose chain or token left the configuration can never
-// be verified again: no pool would answer for it and no decimals would make its
-// amount meaningful. Rotating its attempt clock forever hides a real deposit
-// from operators, so it is moved once to the terminal dead_letter status with a
-// durable reason instead of being silently re-queued.
 const (
+	missingReceiptPrefix        = "reorg_missing_receipt:"
+	missingReceiptThreshold     = 3
+	reconcileRPCBudget          = 2 * time.Second
+	reconcilePersistenceReserve = 500 * time.Millisecond
+
+	// A pending observation whose chain or token left the configuration can never
+	// be verified again: no pool would answer for it and no decimals would make its
+	// amount meaningful. Rotating its attempt clock forever hides a real deposit
+	// from operators, so it is moved once to the terminal dead_letter status with a
+	// durable reason instead of being silently re-queued.
 	deadLetterChainRemoved = "dead_letter:chain_no_longer_configured"
 	deadLetterTokenRemoved = "dead_letter:token_no_longer_watched"
 )
@@ -186,9 +187,11 @@ func findReincludedTransfer(receipt *ReceiptCheck, observation depositObservatio
 			!strings.EqualFold(log.BlockHash, receipt.BlockHash) || !strings.EqualFold(log.TxHash, receipt.TxHash) {
 			continue
 		}
-		candidate := Transfer{Chain: observation.chain, TxHash: strings.ToLower(receipt.TxHash), LogIndex: int(index),
+		candidate := Transfer{
+			Chain: observation.chain, TxHash: strings.ToLower(receipt.TxHash), LogIndex: int(index),
 			From: want.From, To: want.To, Token: want.Token, Amount: new(big.Int).Set(want.Amount),
-			BlockNumber: receipt.BlockNumber, BlockHash: receipt.BlockHash}
+			BlockNumber: receipt.BlockNumber, BlockHash: receipt.BlockHash,
+		}
 		if match != nil {
 			return Transfer{}, ErrTransferMismatch
 		}
@@ -274,10 +277,12 @@ func (p depositObservation) transfer(decimals int) (Transfer, error) {
 	if err != nil {
 		return Transfer{}, err
 	}
-	return Transfer{Chain: p.chain, TxHash: p.txHash, LogIndex: p.logIndex,
+	return Transfer{
+		Chain: p.chain, TxHash: p.txHash, LogIndex: p.logIndex,
 		From: p.from, To: p.to, Token: p.token, Amount: raw,
 		Native:      strings.EqualFold(p.token, NativeToken),
-		BlockNumber: p.blockNumber, BlockHash: p.blockHash}, nil
+		BlockNumber: p.blockNumber, BlockHash: p.blockHash,
+	}, nil
 }
 
 func (w *Worker) reconcile(ctx context.Context, observations []depositObservation) error {

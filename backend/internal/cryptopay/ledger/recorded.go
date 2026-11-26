@@ -7,8 +7,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 	"github.com/shopspring/decimal"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 )
 
 // HasRecordedTransfer avoids repeating receipt RPCs for an identical durable

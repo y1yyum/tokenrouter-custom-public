@@ -476,8 +476,10 @@ func writeCryptoDepositCSV(ctx context.Context, output io.Writer, fetch func(con
 		return err
 	}
 	w := csv.NewWriter(output)
-	if err := w.Write([]string{"id", "chain", "tx_hash", "log_index", "from", "to", "token", "amount", "status", "created_at",
-		"provisional", "provisional_amount", "credited_at", "revoked_at", "revoke_reason"}); err != nil {
+	if err := w.Write([]string{
+		"id", "chain", "tx_hash", "log_index", "from", "to", "token", "amount", "status", "created_at",
+		"provisional", "provisional_amount", "credited_at", "revoked_at", "revoke_reason",
+	}); err != nil {
 		return err
 	}
 	const pageSize = 200

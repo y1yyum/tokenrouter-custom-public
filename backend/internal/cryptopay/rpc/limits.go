@@ -5,6 +5,8 @@ import (
 	"sync"
 )
 
+var providerLimits = &limitsRegistry{limits: make(map[string]EndpointLimits)}
+
 // EndpointLimits is what one provider will accept in a single eth_getLogs.
 //
 // Public and paid nodes disagree wildly: measured limits range from 25 blocks
@@ -24,8 +26,6 @@ type limitsRegistry struct {
 	mu     sync.RWMutex
 	limits map[string]EndpointLimits
 }
-
-var providerLimits = &limitsRegistry{limits: make(map[string]EndpointLimits)}
 
 // SetEndpointLimits records what an endpoint accepts. Called from config loading
 // so operators can tune a provider without a rebuild.

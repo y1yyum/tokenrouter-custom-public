@@ -1,7 +1,3 @@
-// RPC endpoint helpers for the admin console: probing one endpoint and
-// pulling candidate endpoints from the public chainlist.org registry.
-//
-// These are read-only and additive: nothing here mutates stored config.
 package cryptopay
 
 import (
@@ -16,23 +12,43 @@ import (
 	"sync"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
-	"github.com/TokenFlux/TokenRouter/internal/egress/urlpolicy"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"golang.org/x/sync/singleflight"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
+	"github.com/TokenFlux/TokenRouter/internal/egress/urlpolicy"
 )
 
-// chainlistIDs maps an internal chain id to the EIP-155 chain id used by
-// chainlist.org. Chains absent here cannot be fetched.
-var chainlistIDs = map[string]int64{
-	ChainEthereum: 1,
-	ChainBSC:      56,
-	ChainPlasma:   9745,
-	ChainPolygon:  137,
-	ChainArbitrum: 42161,
-	ChainBase:     8453,
-	ChainXLayer:   196,
-}
+// rpc_admin.go probes a single endpoint for the admin console and lists
+// candidate endpoints from the public chainlist.org registry.
+//
+// These are read-only and additive: nothing here mutates stored config.
+
+var (
+	// chainlistIDs maps an internal chain id to the EIP-155 chain id used by
+	// chainlist.org. Chains absent here cannot be fetched.
+	chainlistIDs = map[string]int64{
+		ChainEthereum: 1,
+		ChainBSC:      56,
+		ChainPlasma:   9745,
+		ChainPolygon:  137,
+		ChainArbitrum: 42161,
+		ChainBase:     8453,
+		ChainXLayer:   196,
+	}
+
+	// rpcHTTPClient is shared by the probe and the registry fetch. The registry
+	// payload is ~2.3 MB, so the timeout must cover a slow international link.
+	rpcHTTPClient = rpc.NewPublicHTTPClient(20 * time.Second)
+
+	chainlistRegistry struct {
+		sync.Mutex
+		entries     []chainlistRecord
+		expires     time.Time
+		failedUntil time.Time
+		flight      singleflight.Group
+	}
+)
 
 // RPCTestResult reports one endpoint's health for the console.
 type RPCTestResult struct {
@@ -51,9 +67,14 @@ type ChainlistCandidate struct {
 	ChainName string `json:"chain_name"`
 }
 
-// rpcHTTPClient is shared by the probe and the registry fetch. The registry
-// payload is ~2.3 MB, so the timeout must cover a slow international link.
-var rpcHTTPClient = rpc.NewPublicHTTPClient(20 * time.Second)
+type chainlistRecord struct {
+	ChainID int64  `json:"chainId"`
+	Name    string `json:"name"`
+	RPC     []struct {
+		URL      string `json:"url"`
+		Tracking string `json:"tracking"`
+	} `json:"rpc"`
+}
 
 // ProbeRPCEndpoint checks the methods deposits actually need. A node that
 // serves the chain head but rejects logs is not a usable payment scanner.
@@ -142,9 +163,14 @@ func probeDepositCapabilities(ctx context.Context, pool *rpc.Pool, chain string,
 	// customer deposits. Narrowing the recipient avoids large unfiltered logs
 	// while exercising the exact token-array/topic-array filter the scanner uses.
 	block := hexutil.EncodeUint64(head)
-	filter := map[string]any{"fromBlock": block, "toBlock": block, "address": contracts,
-		"topics": []any{[]string{"0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"}, nil,
-			[]string{"0x" + strings.Repeat("0", 24) + strings.TrimPrefix(strings.ToLower(contracts[0]), "0x")}}}
+	filter := map[string]any{
+		"fromBlock": block, "toBlock": block, "address": contracts,
+		"topics": []any{
+			[]string{"0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"},
+			nil,
+			[]string{"0x" + strings.Repeat("0", 24) + strings.TrimPrefix(strings.ToLower(contracts[0]), "0x")},
+		},
+	}
 	logs, err := pool.Call(ctx, "eth_getLogs", []any{filter})
 	if err != nil {
 		return err
@@ -281,23 +307,6 @@ func FetchChainlistCandidates(ctx context.Context, chain string) ([]ChainlistCan
 		return out, nil
 	}
 	return nil, fmt.Errorf("chain %d not present in the registry", chainID)
-}
-
-type chainlistRecord struct {
-	ChainID int64  `json:"chainId"`
-	Name    string `json:"name"`
-	RPC     []struct {
-		URL      string `json:"url"`
-		Tracking string `json:"tracking"`
-	} `json:"rpc"`
-}
-
-var chainlistRegistry struct {
-	sync.Mutex
-	entries     []chainlistRecord
-	expires     time.Time
-	failedUntil time.Time
-	flight      singleflight.Group
 }
 
 func cachedChainlistRegistry(ctx context.Context) ([]chainlistRecord, error) {

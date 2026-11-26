@@ -6,26 +6,65 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"log/slog"
 	"math"
 	"math/big"
 	"strings"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
+)
+
+const (
+	selBalanceOf = "0x70a08231"
+
+	// legacyTransferGasLimit is the limit used by transactions signed before
+	// the 2026-11 incident. Native stablecoin transfers can need roughly
+	// 70-80k when the recipient's balance slot is first initialized, so new
+	// sweeps sign with more headroom while legacy bytes stay verifiable.
+	legacyTransferGasLimit = 65000
+	transferGasLimit       = 90000
+
+	// nativeSweepGasLimit is the exact intrinsic gas of a native value transfer:
+	// no calldata, no contract call. It is also the fee that a native sweep must
+	// pay out of the same balance it is emptying.
+	nativeSweepGasLimit = 21000
+
+	// nativeSweepGasReserveFactor multiplies the intrinsic fee to size the reserve
+	// a native sweep leaves in the address. Two reasons it is not 1:
+	//   - the fee is charged at the effective gas price, which can be higher than
+	//     the quote used to sign (base fee moves every block);
+	//   - a deposit address usually receives ERC-20 tokens as well, and the token
+	//     sweep that follows is funded from this same native balance. Sweeping it
+	//     to zero would force an extra hot-wallet top-up transaction for every
+	//     address, which is exactly the cost this reserve avoids.
+	//
+	// The reserve is dust by design; the credited ledger keeps it as the only
+	// remainder after the sweep and the planner ignores balances at or below it.
+	nativeSweepGasReserveFactor = 2
+
+	// maxConsecutiveStorageFailures bounds how many persisted-state failures a
+	// single run tolerates before giving up: one bad row must not abort the run,
+	// but a broken database must not spin through every address.
+	maxConsecutiveStorageFailures = 5
+
+	// maxSweepAttempts bounds how many times one job may fail and be retried. Every
+	// saveJob bumps revision, so it doubles as an attempt counter without a schema
+	// change. Without a bound a job whose failure is permanent — a token the chain
+	// refuses, an RPC that always rejects the payload — retries on every pass
+	// forever, and because reservedPredicate keeps it reserved it also blocks that
+	// address from ever being planned again. Bounding it moves the row to `failed`
+	// so it leaves the queue and an operator can see it.
+	maxSweepAttempts = 25
 )
 
 var ChainIDs = map[string]int64{
 	"ethereum": 1,
 	"bsc":      56, "polygon": 137, "plasma": 9745,
 	"arbitrum": 42161, "base": 8453, "xlayer": 196,
-}
-
-func isZeroAddress(address string) bool {
-	trimmed := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(address)), "0x")
-	return trimmed != "" && strings.Trim(trimmed, "0") == ""
 }
 
 type TokenSpec struct {
@@ -36,49 +75,6 @@ type TokenSpec struct {
 	// transfer to a token contract.
 	Native bool
 }
-
-const selBalanceOf = "0x70a08231"
-const (
-	// legacyTransferGasLimit is the limit used by transactions signed before
-	// the 2026-11 incident. Native stablecoin transfers can need roughly
-	// 70-80k when the recipient's balance slot is first initialized, so new
-	// sweeps sign with more headroom while legacy bytes stay verifiable.
-	legacyTransferGasLimit = 65000
-	transferGasLimit       = 90000
-)
-
-// nativeSweepGasLimit is the exact intrinsic gas of a native value transfer:
-// no calldata, no contract call. It is also the fee that a native sweep must
-// pay out of the same balance it is emptying.
-const nativeSweepGasLimit = 21000
-
-// nativeSweepGasReserveFactor multiplies the intrinsic fee to size the reserve
-// a native sweep leaves in the address. Two reasons it is not 1:
-//   - the fee is charged at the effective gas price, which can be higher than
-//     the quote used to sign (base fee moves every block);
-//   - a deposit address usually receives ERC-20 tokens as well, and the token
-//     sweep that follows is funded from this same native balance. Sweeping it
-//     to zero would force an extra hot-wallet top-up transaction for every
-//     address, which is exactly the cost this reserve avoids.
-//
-// The reserve is dust by design; the credited ledger keeps it as the only
-// remainder after the sweep and the planner ignores balances at or below it.
-const nativeSweepGasReserveFactor = 2
-
-// nativeSweepGasReserve is the native-coin amount a sweep must leave behind:
-// nativeSweepGasReserveFactor times the intrinsic fee at the signing gas price.
-func nativeSweepGasReserve(gasPrice *big.Int) *big.Int {
-	if gasPrice == nil || gasPrice.Sign() <= 0 {
-		return new(big.Int)
-	}
-	fee := new(big.Int).Mul(gasPrice, big.NewInt(nativeSweepGasLimit))
-	return fee.Mul(fee, big.NewInt(nativeSweepGasReserveFactor))
-}
-
-// maxConsecutiveStorageFailures bounds how many persisted-state failures a
-// single run tolerates before giving up: one bad row must not abort the run,
-// but a broken database must not spin through every address.
-const maxConsecutiveStorageFailures = 5
 
 // Executor owns the database lock and the durable transaction state machine.
 // Signed bytes are committed before broadcast. Unknown outcomes never cause
@@ -102,32 +98,6 @@ type Executor struct {
 	chains []string
 }
 
-// WithChains restricts this executor to the given chains. Empty keeps the
-// global behaviour so existing callers are unaffected.
-func (e *Executor) WithChains(chains []string) *Executor {
-	scoped := *e
-	scoped.chains = normalizeChainScope(chains)
-	return &scoped
-}
-
-func (e *Executor) allowsChain(chain string) bool {
-	if len(e.chains) == 0 {
-		return true
-	}
-	for _, allowed := range e.chains {
-		if allowed == chain {
-			return true
-		}
-	}
-	return false
-}
-
-func NewExecutor(db *sql.DB, pools map[string]*rpc.Pool, wallet TransactionWallet,
-	config Config, tokens map[string]TokenSpec, reader BalanceReader, hotIndex uint32) *Executor {
-	return &Executor{db: db, pools: pools, wallet: wallet, config: config,
-		tokens: tokens, reader: reader, hotIndex: hotIndex}
-}
-
 type Summary struct {
 	DryRun   bool         `json:"dry_run"`
 	Planned  int          `json:"planned"`
@@ -148,6 +118,50 @@ type SweepEntry struct {
 	SweepTxHash string `json:"sweep_tx_hash"`
 	Status      string `json:"status"`
 	Error       string `json:"error,omitempty"`
+}
+
+func isZeroAddress(address string) bool {
+	trimmed := strings.TrimPrefix(strings.ToLower(strings.TrimSpace(address)), "0x")
+	return trimmed != "" && strings.Trim(trimmed, "0") == ""
+}
+
+// nativeSweepGasReserve is the native-coin amount a sweep must leave behind:
+// nativeSweepGasReserveFactor times the intrinsic fee at the signing gas price.
+func nativeSweepGasReserve(gasPrice *big.Int) *big.Int {
+	if gasPrice == nil || gasPrice.Sign() <= 0 {
+		return new(big.Int)
+	}
+	fee := new(big.Int).Mul(gasPrice, big.NewInt(nativeSweepGasLimit))
+	return fee.Mul(fee, big.NewInt(nativeSweepGasReserveFactor))
+}
+
+func NewExecutor(db *sql.DB, pools map[string]*rpc.Pool, wallet TransactionWallet,
+	config Config, tokens map[string]TokenSpec, reader BalanceReader, hotIndex uint32,
+) *Executor {
+	return &Executor{
+		db: db, pools: pools, wallet: wallet, config: config,
+		tokens: tokens, reader: reader, hotIndex: hotIndex,
+	}
+}
+
+// WithChains restricts this executor to the given chains. Empty keeps the
+// global behaviour so existing callers are unaffected.
+func (e *Executor) WithChains(chains []string) *Executor {
+	scoped := *e
+	scoped.chains = normalizeChainScope(chains)
+	return &scoped
+}
+
+func (e *Executor) allowsChain(chain string) bool {
+	if len(e.chains) == 0 {
+		return true
+	}
+	for _, allowed := range e.chains {
+		if allowed == chain {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Summary) add(out SweepEntry) {
@@ -680,15 +694,6 @@ func (e *Executor) finishSweep(ctx context.Context, pool *rpc.Pool, job *sweepJo
 	}
 	return job.outcome(), nil
 }
-
-// maxSweepAttempts bounds how many times one job may fail and be retried. Every
-// saveJob bumps revision, so it doubles as an attempt counter without a schema
-// change. Without a bound a job whose failure is permanent — a token the chain
-// refuses, an RPC that always rejects the payload — retries on every pass
-// forever, and because reservedPredicate keeps it reserved it also blocks that
-// address from ever being planned again. Bounding it moves the row to `failed`
-// so it leaves the queue and an operator can see it.
-const maxSweepAttempts = 25
 
 func (e *Executor) jobError(ctx context.Context, job *sweepJob, cause error) (SweepEntry, error) {
 	if errors.Is(cause, errStaleSweepPlan) {

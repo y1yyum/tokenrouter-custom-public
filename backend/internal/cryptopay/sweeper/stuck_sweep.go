@@ -91,9 +91,11 @@ func (e *Executor) refreshUnderpricedSweep(ctx context.Context, pool *rpc.Pool, 
 	if e.wallet == nil {
 		return nil
 	}
-	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{Index: j.DerivationIndex, Kind: "sweep",
+	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{
+		Index: j.DerivationIndex, Kind: "sweep",
 		ChainID: ChainIDs[j.Chain], Token: j.Token, To: j.Destination, Amount: j.RawAmount.String(),
-		Nonce: nonce, GasPrice: price.String(), GasLimit: gasLimit})
+		Nonce: nonce, GasPrice: price.String(), GasLimit: gasLimit,
+	})
 	if err != nil {
 		return err
 	}

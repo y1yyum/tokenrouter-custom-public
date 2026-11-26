@@ -12,9 +12,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
+
+type provenanceTransport struct {
+	manualCalls    atomic.Int64
+	referenceCalls atomic.Int64
+}
 
 func TestAutomaticRPCReferencesHaveIndependentOperatorDomains(t *testing.T) {
 	for chain, endpoints := range automaticRPCReferences {
@@ -39,11 +45,6 @@ func TestAutomaticRPCReferencesHaveIndependentOperatorDomains(t *testing.T) {
 			}
 		})
 	}
-}
-
-type provenanceTransport struct {
-	manualCalls    atomic.Int64
-	referenceCalls atomic.Int64
 }
 
 func (f *provenanceTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -73,8 +74,10 @@ func (f *provenanceTransport) RoundTrip(req *http.Request) (*http.Response, erro
 	if err != nil {
 		return nil, err
 	}
-	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
-		Body: io.NopCloser(strings.NewReader(string(body))), Request: req}, nil
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: make(http.Header),
+		Body: io.NopCloser(strings.NewReader(string(body))), Request: req,
+	}, nil
 }
 
 func TestRPCConfigReloadKeepsDiscoveryProvenanceAndManualTrustAligned(t *testing.T) {

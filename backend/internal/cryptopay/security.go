@@ -19,6 +19,46 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
 )
 
+const (
+	idleGuardBaseDelay = 5 * time.Second
+	idleGuardMaxDelay  = 5 * time.Minute
+
+	// SettingKeySecurityPauseMarker stores the lock episode that already applied
+	// the automatic channel pause. The security monitor observes a persistent lock
+	// on every tick (5s), so without this marker each observation rewrites
+	// crypto.config.enabled=false and silently undoes an operator's explicit
+	// re-enable within seconds — even after the lock was the only thing stopping
+	// the channel.
+	SettingKeySecurityPauseMarker = "crypto.security.pause.v1"
+)
+
+// idleGuardChainBudget is the slice of one security tick a single idle chain may use.
+// The tick as a whole is bounded (15s); without a per-chain bound a chain that hangs
+// takes all of it, the chains behind it run on an expired context and look failed.
+var idleGuardChainBudget = 10 * time.Second
+
+// idleGuardPacer spaces the guard scan of EACH idle chain after its own
+// consecutive failures.
+//
+// The guard scans every chain that is not scanned for deposits. One of them (an
+// old plasma entry whose three free RPC nodes all answer 403/429) had failed on
+// every tick for sixteen days: ~150 requests each, every five seconds, against
+// providers that were already refusing us, while holding a database session. A
+// failing chain cannot detect anything anyway, so it backs off (5s, 10s, ... up to
+// five minutes) and resumes at full cadence on its first success. The state is per
+// chain: a healthy idle chain keeps its five second cadence however long another
+// one has been dead, because the guard exists to notice an unauthorised outflow
+// from a hot wallet and must not be delayed by somebody else's outage. The zero
+// value is ready to use; it is only ever touched by the security monitor goroutine.
+type idleGuardPacer struct {
+	chains map[string]*idleGuardState
+}
+
+type idleGuardState struct {
+	failures int
+	next     time.Time
+}
+
 // security.go monitors wallet activity and pauses the payment channel when a
 // wallet guard reports an incident. The monitor checks both deposit chains and
 // chains that retain wallet balances after being removed from the deposit
@@ -71,33 +111,6 @@ func newIdleGuardWorker(db *sql.DB, pools map[string]*rpc.Pool, chains []scanner
 	worker.SetScanLockKey(scanner.GuardScanLockKey)
 	return worker
 }
-
-// idleGuardPacer spaces the guard scan of EACH idle chain after its own
-// consecutive failures.
-//
-// The guard scans every chain that is not scanned for deposits. One of them (an
-// old plasma entry whose three free RPC nodes all answer 403/429) had failed on
-// every tick for sixteen days: ~150 requests each, every five seconds, against
-// providers that were already refusing us, while holding a database session. A
-// failing chain cannot detect anything anyway, so it backs off (5s, 10s, ... up to
-// five minutes) and resumes at full cadence on its first success. The state is per
-// chain: a healthy idle chain keeps its five second cadence however long another
-// one has been dead, because the guard exists to notice an unauthorised outflow
-// from a hot wallet and must not be delayed by somebody else's outage. The zero
-// value is ready to use; it is only ever touched by the security monitor goroutine.
-type idleGuardPacer struct {
-	chains map[string]*idleGuardState
-}
-
-type idleGuardState struct {
-	failures int
-	next     time.Time
-}
-
-const (
-	idleGuardBaseDelay = 5 * time.Second
-	idleGuardMaxDelay  = 5 * time.Minute
-)
 
 func (p *idleGuardPacer) due(chain string, now time.Time) bool {
 	st := p.chains[chain]
@@ -213,11 +226,6 @@ func (s *Service) scanIdleWalletSecurity(ctx context.Context, pacer *idleGuardPa
 	return errors.Join(append(guardErrs, nativeErr)...)
 }
 
-// idleGuardChainBudget is the slice of one security tick a single idle chain may use.
-// The tick as a whole is bounded (15s); without a per-chain bound a chain that hangs
-// takes all of it, the chains behind it run on an expired context and look failed.
-var idleGuardChainBudget = 10 * time.Second
-
 // runIdleGuardChains runs scan for every idle chain whose backoff has elapsed and
 // feeds the outcome back to the pacer. A chain gets its own deadline, so one that
 // hangs is cut off and backed off by itself. When the tick's own context has expired
@@ -241,14 +249,6 @@ func runIdleGuardChains(ctx context.Context, pacer *idleGuardPacer, chains []sca
 	}
 	return errs
 }
-
-// SettingKeySecurityPauseMarker stores the lock episode that already applied
-// the automatic channel pause. The security monitor observes a persistent lock
-// on every tick (5s), so without this marker each observation rewrites
-// crypto.config.enabled=false and silently undoes an operator's explicit
-// re-enable within seconds — even after the lock was the only thing stopping
-// the channel.
-const SettingKeySecurityPauseMarker = "crypto.security.pause.v1"
 
 // Atomic field update avoids overwriting a concurrent admin RPC/chain change.
 // Config() and the signer separately fail closed even if this write fails.

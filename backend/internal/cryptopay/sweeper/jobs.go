@@ -13,22 +13,64 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
-type jobDB interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
-	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
-	QueryRowContext(context.Context, string, ...any) *sql.Row
-}
+const (
+	// Shared by every executor instance. Do not acquire this lock in service.
+	sweepLockKey int64 = 0x43525950544f5357
 
-// Shared by every executor instance. Do not acquire this lock in service.
-const sweepLockKey int64 = 0x43525950544f5357
+	// Legacy rows can contain duplicate attempts and inaccurate amounts. They
+	// remain outside the new partial unique index and must never be auto-resigned.
+	// Failed jobs with hashes stay reserved but are excluded from automatic resume
+	// until an operator explicitly reconciles them.
+	unfinishedPredicate = `status NOT IN ('swept','failed') AND job_version = 1
+	OR job_version = 0 AND status <> 'swept' AND
+	(status IN ('manual_review','gas_sent') OR gas_tx_hash <> '' OR sweep_tx_hash <> '')`
 
-func joinErrors(a, b error) error { return errors.Join(a, b) }
+	reservedPredicate = `status NOT IN ('swept','failed') AND job_version = 1
+	OR job_version = 1 AND status = 'failed' AND (gas_tx_hash <> '' OR sweep_tx_hash <> '')
+	   AND COALESCE(error,'') NOT LIKE 'stale pending released:%'
+	   AND COALESCE(error,'') NOT LIKE 'swept rollback released:%'
+	OR job_version = 0 AND status <> 'swept' AND
+	(status IN ('manual_review','gas_sent') OR gas_tx_hash <> '' OR sweep_tx_hash <> '')`
+
+	jobColumns = `id, chain, from_address, to_address, token, raw_amount,
+	token_decimals, derivation_index, status, error, job_version, revision,
+	confirmations_required, gas_payer, gas_amount, gas_nonce, gas_raw_tx,
+	gas_tx_hash, gas_confirmed, sweep_nonce, sweep_raw_tx, sweep_tx_hash`
+)
 
 // errAddressReserved marks a plan entry whose address already holds a durable
 // reservation. The insert guard returns no row in that case, which is normal
 // back-pressure: the address must wait for the existing job to finish or be
 // reconciled. It is emphatically not a database failure.
 var errAddressReserved = errors.New("address is already reserved by another sweep job")
+
+type jobDB interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+type persistenceError struct{ cause error }
+
+type sweepJob struct {
+	PlanEntry
+	ID, Revision  int64
+	Version       int
+	Destination   string
+	Status, Error string
+	Confirmations uint64
+	GasPayer      string
+	GasAmount     string
+	GasNonce      string
+	GasRaw        string
+	GasHash       string
+	GasConfirmed  bool
+	SweepNonce    string
+	SweepRaw      string
+	SweepHash     string
+}
+
+func joinErrors(a, b error) error { return errors.Join(a, b) }
 
 // The connection holds a SESSION lock. All writes on it are autocommitted;
 // holding an uncommitted transaction across broadcasts would lose the job on
@@ -86,8 +128,6 @@ func (e *Executor) lock(ctx context.Context) (*sql.Conn, func() error, error) {
 	return conn, release, nil
 }
 
-type persistenceError struct{ cause error }
-
 func (e *persistenceError) Error() string { return "persist sweep job: " + rpc.SafeError(e.cause) }
 func (e *persistenceError) Unwrap() error { return e.cause }
 
@@ -96,24 +136,6 @@ func (e *Executor) queries() jobDB {
 		return e.store
 	}
 	return e.db
-}
-
-type sweepJob struct {
-	PlanEntry
-	ID, Revision  int64
-	Version       int
-	Destination   string
-	Status, Error string
-	Confirmations uint64
-	GasPayer      string
-	GasAmount     string
-	GasNonce      string
-	GasRaw        string
-	GasHash       string
-	GasConfirmed  bool
-	SweepNonce    string
-	SweepRaw      string
-	SweepHash     string
 }
 
 func (j *sweepJob) outcome() SweepEntry {
@@ -125,29 +147,11 @@ func (j *sweepJob) outcome() SweepEntry {
 	if j.Status == "swept" || j.Status == "manual_review" {
 		status = j.Status
 	}
-	return SweepEntry{JobID: j.ID, Chain: j.Chain, Token: j.Token, Address: j.Address, Amount: amount,
-		GasTxHash: j.GasHash, SweepTxHash: j.SweepHash, Status: status, Error: rpc.SafeRecordedError(j.Error)}
+	return SweepEntry{
+		JobID: j.ID, Chain: j.Chain, Token: j.Token, Address: j.Address, Amount: amount,
+		GasTxHash: j.GasHash, SweepTxHash: j.SweepHash, Status: status, Error: rpc.SafeRecordedError(j.Error),
+	}
 }
-
-// Legacy rows can contain duplicate attempts and inaccurate amounts. They
-// remain outside the new partial unique index and must never be auto-resigned.
-// Failed jobs with hashes stay reserved but are excluded from automatic resume
-// until an operator explicitly reconciles them.
-const unfinishedPredicate = `status NOT IN ('swept','failed') AND job_version = 1
-	OR job_version = 0 AND status <> 'swept' AND
-	(status IN ('manual_review','gas_sent') OR gas_tx_hash <> '' OR sweep_tx_hash <> '')`
-
-const reservedPredicate = `status NOT IN ('swept','failed') AND job_version = 1
-	OR job_version = 1 AND status = 'failed' AND (gas_tx_hash <> '' OR sweep_tx_hash <> '')
-	   AND COALESCE(error,'') NOT LIKE 'stale pending released:%'
-	   AND COALESCE(error,'') NOT LIKE 'swept rollback released:%'
-	OR job_version = 0 AND status <> 'swept' AND
-	(status IN ('manual_review','gas_sent') OR gas_tx_hash <> '' OR sweep_tx_hash <> '')`
-
-const jobColumns = `id, chain, from_address, to_address, token, raw_amount,
-	token_decimals, derivation_index, status, error, job_version, revision,
-	confirmations_required, gas_payer, gas_amount, gas_nonce, gas_raw_tx,
-	gas_tx_hash, gas_confirmed, sweep_nonce, sweep_raw_tx, sweep_tx_hash`
 
 func (e *Executor) loadUnfinished(ctx context.Context) ([]*sweepJob, error) {
 	rows, err := e.queries().QueryContext(ctx, `SELECT `+jobColumns+` FROM sweep_records
@@ -179,8 +183,10 @@ func (e *Executor) loadUnfinished(ctx context.Context) ([]*sweepJob, error) {
 }
 
 func (e *Executor) createJob(ctx context.Context, entry PlanEntry) (*sweepJob, error) {
-	j := &sweepJob{PlanEntry: entry, Version: 1, Destination: e.config.HotWalletEVM,
-		Status: "planned", Confirmations: e.config.Confirmations[entry.Chain]}
+	j := &sweepJob{
+		PlanEntry: entry, Version: 1, Destination: e.config.HotWalletEVM,
+		Status: "planned", Confirmations: e.config.Confirmations[entry.Chain],
+	}
 	// The lock covers planning and this reservation. The unique index is a
 	// second guard; legacy blockers are checked explicitly (no dedup of old rows).
 	err := e.queries().QueryRowContext(ctx, `INSERT INTO sweep_records

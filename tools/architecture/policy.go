@@ -111,7 +111,7 @@ func locate(filename string) location {
 		l.role = "redis"
 	case within(dir, "internal/gateway/ws/httpapi"), len(parts) > 2 && parts[2] == "httpapi", l.module == "internal/server", l.module == "internal/web":
 		l.role = "http"
-	case len(parts) > 2 && parts[2] == "provider", l.module == "internal/config",
+	case l.dir == "internal/notification/bark", len(parts) > 2 && parts[2] == "provider", l.module == "internal/config",
 		within(dir, "internal/gateway/media/provider"), within(dir, "internal/notification/smtp"), within(dir, "internal/site/filesystem"):
 		l.role = "provider"
 	case l.module == "internal/upstream":
@@ -213,24 +213,20 @@ func allowsReqV3(l location) bool {
 // Rules remain conjunctive: allowing one module dependency cannot bypass a
 // storage boundary, a retired namespace, or a core implementation prohibition.
 // Standard-library restrictions separately include permitted golang.org/x imports
-// because arch-go classifies them as standard. An unregistered test can extend
-// the default allowlist through its own catalog entry. The entry applies only
-// to that file, and the retired-package and assembly restrictions still apply.
+// because arch-go classifies them as standard. Chain payment adapters have
+// explicit package contracts for database, chain SDK and host dependencies.
 // @project-doc docs/operations/development_workflow.md#backend_dependency_rules
 func rulesFor(filename, standardLibrary string) []*dependencyRule {
 	l := locate(filename)
+	if boundary, ok := chainPaymentPackages[l.dir]; ok {
+		return chainPaymentRules(boundary, l.test)
+	}
 	if l.role == "" {
 		allowed := dependencies{
 			Internal: closed(nil), External: closed(nil),
 			Standard: expressions(strings.Fields("bytes context errors fmt strings testing"), false),
 		}
 		rules := []*dependencyRule{{ShouldOnlyDependsOn: &allowed}}
-		if imports, ok := unregisteredTestImports[filename]; l.test && ok {
-			allowed.Internal = closed(expressions(imports.Internal, true))
-			allowed.External = closed(expressions(imports.External, false))
-			allowed.Standard = append(allowed.Standard, expressions(imports.Standard, false)...)
-			rules = append(rules, denyProject(retiredPackages), denyProject([]string{"internal/app/..."}))
-		}
 		return rules
 	}
 
@@ -256,7 +252,7 @@ func rulesFor(filename, standardLibrary string) []*dependencyRule {
 	}
 	// The wallet batch adapter sums quantized debits and reads PostgreSQL NUMERIC
 	// balances with the same decimal library used by the billing domain.
-	if filename == "internal/billing/postgres/wallet_batch.go" {
+	if filename == "internal/billing/postgres/wallet_batch.go" || filename == "internal/payment/postgres/provisional_revoke.go" {
 		external = append(external, expression("github.com/shopspring/decimal"))
 	}
 	rules := []*dependencyRule{{ShouldOnlyDependsOn: &dependencies{

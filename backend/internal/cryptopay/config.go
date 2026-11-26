@@ -1,8 +1,3 @@
-// Package cryptopay implements the built-in crypto deposit channel:
-// per-user HD deposit addresses, on-chain scanning, crediting and sweeps.
-//
-// Everything in this package is additive and disabled by default; when
-// CryptoConfig.Enabled is false the process behaves exactly as before.
 package cryptopay
 
 import (
@@ -34,14 +29,12 @@ import (
 // text for comparison, so that separate read and conditional write are handled
 // by config_cas.go.
 
-// Setting keys live under the "crypto." namespace so fork users who never
-// enable the channel are unaffected.
 const (
+	// Setting keys live under the "crypto." namespace so fork users who never
+	// enable the channel are unaffected.
 	SettingKeyCryptoConfig = "crypto.config"
-)
 
-// Chain identifiers supported for deposits. EVM chains share one address.
-const (
+	// Chain identifiers supported for deposits. EVM chains share one address.
 	ChainBSC      = "bsc"
 	ChainEthereum = "ethereum"
 	ChainPolygon  = "polygon"
@@ -50,31 +43,25 @@ const (
 	ChainBase     = "base"
 	ChainXLayer   = "xlayer"
 	ChainSolana   = "solana"
-)
 
-var evmChains = []string{ChainBSC, ChainEthereum, ChainPolygon, ChainPlasma, ChainArbitrum, ChainBase, ChainXLayer}
-
-// IsEVMChain reports whether chain uses the shared EVM address.
-func IsEVMChain(chain string) bool {
-	for _, c := range evmChains {
-		if c == chain {
-			return true
-		}
-	}
-	return false
-}
-
-// KnownChain reports whether chain is supported at all.
-func KnownChain(chain string) bool {
-	return IsEVMChain(chain) || chain == ChainSolana
-}
-
-// RPC protection bounds. These are deliberately conservative: a typo that
-// stalls every call or disables scanning must be rejected, not clamped.
-const (
+	// RPC protection bounds. These are deliberately conservative: a typo that
+	// stalls every call or disables scanning must be rejected, not clamped.
 	maxRPCThrottleMs = 10_000
 	maxRPCBlocks     = 100_000
 	maxRPCAddresses  = 10_000
+
+	// maxNotifyURLBytes bounds the webhook URL so a mistyped config cannot push a
+	// megabytes-long value into the settings row.
+	maxNotifyURLBytes = 2048
+)
+
+var (
+	evmChains = []string{ChainBSC, ChainEthereum, ChainPolygon, ChainPlasma, ChainArbitrum, ChainBase, ChainXLayer}
+
+	// errSweepReadyDestinationMissing / errSweepReadyDestinationInvalid let the
+	// readiness endpoint classify a blocked sweep without matching on message text.
+	errSweepReadyDestinationMissing = errors.New("sweep disabled: set the EVM hot wallet (receiving address) first")
+	errSweepReadyDestinationInvalid = errors.New("sweep disabled: the EVM hot wallet is not a valid 0x-prefixed 20-byte address")
 )
 
 // CryptoConfig is the persisted configuration (JSON in settings).
@@ -200,9 +187,80 @@ type CryptoNotifyConfig struct {
 	Email string `json:"email,omitempty"`
 }
 
-// maxNotifyURLBytes bounds the webhook URL so a mistyped config cannot push a
-// megabytes-long value into the settings row.
-const maxNotifyURLBytes = 2048
+// SettingStore reads and writes raw text for one configuration key.
+type SettingStore interface {
+	// GetCryptoSetting returns the stored text, preserving whitespace and empty
+	// strings. A key without a saved row returns settings.ErrSettingNotFound so
+	// the loader can select the first-run defaults.
+	GetCryptoSetting(ctx context.Context, key string) (string, error)
+	// SetCryptoSetting stores the supplied text for the key. Callers replacing
+	// a previously read snapshot must use the atomic interface so changes made
+	// after that read cannot be lost.
+	SetCryptoSetting(ctx context.Context, key, value string) error
+}
+
+// CryptoConfigPatch is a partial update. Pointer fields distinguish "not
+// sent" (keep the stored value) from "sent as empty" (clear it), so a client
+// that omits keys can never zero the configuration by accident.
+type CryptoConfigPatch struct {
+	Enabled                *bool                         `json:"enabled"`
+	Chains                 *[]string                     `json:"chains"`
+	RPC                    *map[string]string            `json:"rpc"`
+	RPCLimits              *map[string]RPCEndpointLimits `json:"rpc_limits"`
+	RPCThrottleMs          *int                          `json:"rpc_throttle_ms"`
+	SweepGlobalThreshold   *float64                      `json:"sweep_global_threshold"`
+	SweepMinPerAddress     *map[string]float64           `json:"sweep_min_per_address"`
+	GasTopUp               *map[string]float64           `json:"gas_topup"`
+	HotWalletEVM           *string                       `json:"hot_wallet_evm"`
+	HotWalletSolana        *string                       `json:"hot_wallet_solana"`
+	Confirmations          *map[string]int               `json:"confirmations"`
+	InstantCreditEnabled   *bool                         `json:"instant_credit_enabled"`
+	InstantCreditMinAmount *float64                      `json:"instant_credit_min_amount"`
+	ScanRange              *map[string]int               `json:"scan_range"`
+	ScanConcurrency        *map[string]int               `json:"scan_concurrency"`
+	CreditMinAmount        *float64                      `json:"credit_min_amount"`
+	CreditMaxAmount        *float64                      `json:"credit_max_amount"`
+	CreditMultiplier       *float64                      `json:"credit_multiplier"`
+	NativePriceURL         *string                       `json:"native_price_url"`
+	HotIndex               *uint32                       `json:"hot_index"`
+	SweepAuto              *bool                         `json:"sweep_auto"`
+	NativeScan             *string                       `json:"native_scan"`
+	NativePollSeconds      *int                          `json:"native_poll_seconds"`
+	ExplorerAPIKey         *string                       `json:"explorer_api_key"`
+	ExplorerAPIURL         *map[string]string            `json:"explorer_api_url"`
+	// Notify replaces the whole notification channel set when present. The
+	// webhook URL is a bearer secret (it embeds the Bark device key), so the
+	// public config view returns it blank; the console must send only changed
+	// fields, otherwise an empty string disables the webhook.
+	Notify *CryptoNotifyConfig `json:"notify"`
+	// SweepDestinationLock is deliberately absent: callers must not be able to
+	// write the lock through the generic config endpoint.
+}
+
+// RPCEndpointLimits is the per-endpoint eth_getLogs capability an operator can
+// declare so the scanner sizes each query correctly instead of discovering the
+// limit by rejection.
+type RPCEndpointLimits struct {
+	// MaxBlocks caps the block span of one eth_getLogs. 0 = unknown.
+	MaxBlocks uint64 `json:"max_blocks,omitempty"`
+	// MaxAddresses caps how many addresses may appear in the topic filter.
+	MaxAddresses int `json:"max_addresses,omitempty"`
+}
+
+// IsEVMChain reports whether chain uses the shared EVM address.
+func IsEVMChain(chain string) bool {
+	for _, c := range evmChains {
+		if c == chain {
+			return true
+		}
+	}
+	return false
+}
+
+// KnownChain reports whether chain is supported at all.
+func KnownChain(chain string) bool {
+	return IsEVMChain(chain) || chain == ChainSolana
+}
 
 // DefaultCryptoConfig returns the disabled default with sane thresholds.
 func DefaultCryptoConfig() CryptoConfig {
@@ -555,13 +613,6 @@ func (cfg CryptoConfig) ValidateSweepReady() error {
 	return nil
 }
 
-// errSweepReadyDestinationMissing / errSweepReadyDestinationInvalid let the
-// readiness endpoint classify a blocked sweep without matching on message text.
-var (
-	errSweepReadyDestinationMissing = errors.New("sweep disabled: set the EVM hot wallet (receiving address) first")
-	errSweepReadyDestinationInvalid = errors.New("sweep disabled: the EVM hot wallet is not a valid 0x-prefixed 20-byte address")
-)
-
 // isZeroAddress catches the all-zero placeholder: sending funds there burns
 // them, and an unset field often round-trips as 0x000…0 rather than "".
 func isZeroAddress(address string) bool {
@@ -643,18 +694,6 @@ func clampInt(value, low, high int) int {
 	return value
 }
 
-// SettingStore reads and writes raw text for one configuration key.
-type SettingStore interface {
-	// GetCryptoSetting returns the stored text, preserving whitespace and empty
-	// strings. A key without a saved row returns settings.ErrSettingNotFound so
-	// the loader can select the first-run defaults.
-	GetCryptoSetting(ctx context.Context, key string) (string, error)
-	// SetCryptoSetting stores the supplied text for the key. Callers replacing
-	// a previously read snapshot must use the atomic interface so changes made
-	// after that read cannot be lost.
-	SetCryptoSetting(ctx context.Context, key, value string) error
-}
-
 // LoadConfig reads and normalizes the config from settings. A missing key or
 // blank value uses defaults, while an invalid JSON value or operational storage
 // error is reported to the caller.
@@ -691,44 +730,6 @@ func SaveConfig(ctx context.Context, store SettingStore, cfg CryptoConfig) error
 		return err
 	}
 	return store.SetCryptoSetting(ctx, SettingKeyCryptoConfig, string(data))
-}
-
-// CryptoConfigPatch is a partial update. Pointer fields distinguish "not
-// sent" (keep the stored value) from "sent as empty" (clear it), so a client
-// that omits keys can never zero the configuration by accident.
-type CryptoConfigPatch struct {
-	Enabled                *bool                         `json:"enabled"`
-	Chains                 *[]string                     `json:"chains"`
-	RPC                    *map[string]string            `json:"rpc"`
-	RPCLimits              *map[string]RPCEndpointLimits `json:"rpc_limits"`
-	RPCThrottleMs          *int                          `json:"rpc_throttle_ms"`
-	SweepGlobalThreshold   *float64                      `json:"sweep_global_threshold"`
-	SweepMinPerAddress     *map[string]float64           `json:"sweep_min_per_address"`
-	GasTopUp               *map[string]float64           `json:"gas_topup"`
-	HotWalletEVM           *string                       `json:"hot_wallet_evm"`
-	HotWalletSolana        *string                       `json:"hot_wallet_solana"`
-	Confirmations          *map[string]int               `json:"confirmations"`
-	InstantCreditEnabled   *bool                         `json:"instant_credit_enabled"`
-	InstantCreditMinAmount *float64                      `json:"instant_credit_min_amount"`
-	ScanRange              *map[string]int               `json:"scan_range"`
-	ScanConcurrency        *map[string]int               `json:"scan_concurrency"`
-	CreditMinAmount        *float64                      `json:"credit_min_amount"`
-	CreditMaxAmount        *float64                      `json:"credit_max_amount"`
-	CreditMultiplier       *float64                      `json:"credit_multiplier"`
-	NativePriceURL         *string                       `json:"native_price_url"`
-	HotIndex               *uint32                       `json:"hot_index"`
-	SweepAuto              *bool                         `json:"sweep_auto"`
-	NativeScan             *string                       `json:"native_scan"`
-	NativePollSeconds      *int                          `json:"native_poll_seconds"`
-	ExplorerAPIKey         *string                       `json:"explorer_api_key"`
-	ExplorerAPIURL         *map[string]string            `json:"explorer_api_url"`
-	// Notify replaces the whole notification channel set when present. The
-	// webhook URL is a bearer secret (it embeds the Bark device key), so the
-	// public config view returns it blank; the console must send only changed
-	// fields, otherwise an empty string disables the webhook.
-	Notify *CryptoNotifyConfig `json:"notify"`
-	// SweepDestinationLock is deliberately absent: callers must not be able to
-	// write the lock through the generic config endpoint.
 }
 
 // Apply overlays the patch onto base, leaving omitted fields untouched.
@@ -827,14 +828,4 @@ func configFingerprint(cfg CryptoConfig) (string, error) {
 	}
 	sum := sha256.Sum256(data)
 	return hex.EncodeToString(sum[:]), nil
-}
-
-// RPCEndpointLimits is the per-endpoint eth_getLogs capability an operator can
-// declare so the scanner sizes each query correctly instead of discovering the
-// limit by rejection.
-type RPCEndpointLimits struct {
-	// MaxBlocks caps the block span of one eth_getLogs. 0 = unknown.
-	MaxBlocks uint64 `json:"max_blocks,omitempty"`
-	// MaxAddresses caps how many addresses may appear in the topic filter.
-	MaxAddresses int `json:"max_addresses,omitempty"`
 }

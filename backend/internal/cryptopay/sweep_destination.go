@@ -7,8 +7,34 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
+)
+
+var (
+	// ErrSweepDestinationLocked is returned when the generic config API tries to
+	// move a pinned sweep destination. The operator must use the dedicated
+	// endpoint, which verifies a fresh authenticator code and the risk phrase.
+	ErrSweepDestinationLocked = apperror.Conflict(
+		"SWEEP_DESTINATION_LOCKED",
+		"归集目标地址已锁定，如需变更请走 /api/v1/admin/crypto/signer/sweep-destination 并验证 2FA + 风险短语",
+	)
+
+	// errSweepDestinationRequired rejects an update that would leave no destination.
+	errSweepDestinationRequired = apperror.BadRequest(
+		"SWEEP_DESTINATION_REQUIRED",
+		"至少需要提供一个归集目标地址（hot_wallet_evm 或 hot_wallet_solana）",
+	)
+
+	// errSweepDestinationInvalid rejects a malformed destination before it can be
+	// persisted. EVM input that mixes letter case must also pass the EIP-55
+	// checksum: a typo in a sweep destination sends funds to an unrecoverable
+	// address, and the checksum is the only cheap defense we have.
+	errSweepDestinationInvalid = apperror.BadRequest(
+		"SWEEP_DESTINATION_INVALID",
+		"归集目标地址格式无效",
+	)
 )
 
 // sweep_destination.go validates and pins the addresses that receive sweeps.
@@ -45,6 +71,43 @@ type SweepDestination struct {
 	Solana string
 }
 
+// SweepDestinationUpdate is one verified operator request to change (or confirm)
+// the sweep destination. A nil field keeps the currently stored value.
+type SweepDestinationUpdate struct {
+	HotWalletEVM    *string
+	HotWalletSolana *string
+	ActorUserID     int64
+	Now             time.Time
+}
+
+// SweepDestinationChange is the outcome of SweepDestinationUpdate.
+type SweepDestinationChange struct {
+	// Changed reports whether the hot-wallet settings row changed.
+	Changed bool
+	// Locked reports whether the lock timestamp/owner was (re)written.
+	Locked bool
+	// LockCreated reports whether this call created the lock for the first time.
+	LockCreated bool
+	Previous    SweepDestination
+	Current     SweepDestination
+	Lock        *SweepDestinationLock
+}
+
+type sweepDestinationChangeJSON struct {
+	Saved       bool                  `json:"saved"`
+	Changed     bool                  `json:"changed"`
+	Locked      bool                  `json:"locked"`
+	LockCreated bool                  `json:"lock_created"`
+	Previous    sweepDestinationJSON  `json:"previous"`
+	Current     sweepDestinationJSON  `json:"current"`
+	Lock        *SweepDestinationLock `json:"sweep_destination_lock,omitempty"`
+}
+
+type sweepDestinationJSON struct {
+	HotWalletEVM    string `json:"hot_wallet_evm"`
+	HotWalletSolana string `json:"hot_wallet_solana"`
+}
+
 // Empty reports whether no destination is configured at all.
 func (d SweepDestination) Empty() bool {
 	return d.EVM == "" && d.Solana == ""
@@ -79,29 +142,6 @@ func (cfg CryptoConfig) SweepDestination() SweepDestination {
 		Solana: strings.TrimSpace(cfg.HotWalletSolana),
 	}
 }
-
-// ErrSweepDestinationLocked is returned when the generic config API tries to
-// move a pinned sweep destination. The operator must use the dedicated
-// endpoint, which verifies a fresh authenticator code and the risk phrase.
-var ErrSweepDestinationLocked = apperror.Conflict(
-	"SWEEP_DESTINATION_LOCKED",
-	"归集目标地址已锁定，如需变更请走 /api/v1/admin/crypto/signer/sweep-destination 并验证 2FA + 风险短语",
-)
-
-// errSweepDestinationRequired rejects an update that would leave no destination.
-var errSweepDestinationRequired = apperror.BadRequest(
-	"SWEEP_DESTINATION_REQUIRED",
-	"至少需要提供一个归集目标地址（hot_wallet_evm 或 hot_wallet_solana）",
-)
-
-// errSweepDestinationInvalid rejects a malformed destination before it can be
-// persisted. EVM input that mixes letter case must also pass the EIP-55
-// checksum: a typo in a sweep destination sends funds to an unrecoverable
-// address, and the checksum is the only cheap defense we have.
-var errSweepDestinationInvalid = apperror.BadRequest(
-	"SWEEP_DESTINATION_INVALID",
-	"归集目标地址格式无效",
-)
 
 // EnforceSweepDestinationLock reports ErrSweepDestinationLocked when cfg would
 // not persist the pinned destination. It is called on the normal config save
@@ -227,43 +267,6 @@ func ValidateSweepDestinationInput(destination SweepDestination) error {
 		return errSweepDestinationInvalid
 	}
 	return nil
-}
-
-// SweepDestinationUpdate is one verified operator request to change (or confirm)
-// the sweep destination. A nil field keeps the currently stored value.
-type SweepDestinationUpdate struct {
-	HotWalletEVM    *string
-	HotWalletSolana *string
-	ActorUserID     int64
-	Now             time.Time
-}
-
-// SweepDestinationChange is the outcome of SweepDestinationUpdate.
-type SweepDestinationChange struct {
-	// Changed reports whether the hot-wallet settings row changed.
-	Changed bool
-	// Locked reports whether the lock timestamp/owner was (re)written.
-	Locked bool
-	// LockCreated reports whether this call created the lock for the first time.
-	LockCreated bool
-	Previous    SweepDestination
-	Current     SweepDestination
-	Lock        *SweepDestinationLock
-}
-
-type sweepDestinationChangeJSON struct {
-	Saved       bool                  `json:"saved"`
-	Changed     bool                  `json:"changed"`
-	Locked      bool                  `json:"locked"`
-	LockCreated bool                  `json:"lock_created"`
-	Previous    sweepDestinationJSON  `json:"previous"`
-	Current     sweepDestinationJSON  `json:"current"`
-	Lock        *SweepDestinationLock `json:"sweep_destination_lock,omitempty"`
-}
-
-type sweepDestinationJSON struct {
-	HotWalletEVM    string `json:"hot_wallet_evm"`
-	HotWalletSolana string `json:"hot_wallet_solana"`
 }
 
 // JSON renders the admin response body. Callers wrap it under "data".

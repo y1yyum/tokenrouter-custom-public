@@ -9,14 +9,17 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gagliardetto/solana-go"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 )
 
-const exportTestAddressID int64 = 37
-const exportTestUserID int64 = 83
+const (
+	exportTestAddressID int64 = 37
+	exportTestUserID    int64 = 83
+)
 
 func exportTestAddress(t *testing.T, mnemonic, family string, index uint32) string {
 	t.Helper()

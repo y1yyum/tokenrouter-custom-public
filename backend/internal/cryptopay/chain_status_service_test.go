@@ -5,8 +5,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
 // The BSC incident: RPC nodes configured, the chain missing from

@@ -19,6 +19,10 @@ const (
 	ReconcileObserved  = "observed"
 )
 
+// ErrLegacySweepRecord marks a record written before the current job format (or
+// handled by hand). It cannot be updated by the sweeper, so it cannot be reconciled.
+var ErrLegacySweepRecord = errors.New("legacy sweep record cannot be reconciled")
+
 // ReconcileResult reports the on-chain truth for one job.
 type ReconcileResult struct {
 	JobID   int64  `json:"job_id"`
@@ -26,6 +30,17 @@ type ReconcileResult struct {
 	Status  string `json:"status"`
 	Action  string `json:"action"`
 	Message string `json:"message"`
+}
+
+// BlockedJob explains why an address cannot be swept yet.
+type BlockedJob struct {
+	JobID      int64  `json:"job_id"`
+	Chain      string `json:"chain"`
+	Address    string `json:"address"`
+	Status     string `json:"status"`
+	Error      string `json:"error"`
+	AgeMin     int64  `json:"age_minutes"`
+	CanResolve bool   `json:"can_reconcile"`
 }
 
 // Reconcile inspects a stuck job against the chain and moves it forward
@@ -192,7 +207,8 @@ func (e *Executor) Reconcile(ctx context.Context, jobID int64) (*ReconcileResult
 }
 
 func (e *Executor) finishReconcile(ctx context.Context, job *sweepJob, out *ReconcileResult,
-	status, jobErr, action, message string) (*ReconcileResult, error) {
+	status, jobErr, action, message string,
+) (*ReconcileResult, error) {
 	job.Status, job.Error = status, jobErr
 	if err := e.saveJob(ctx, job); err != nil {
 		return nil, err
@@ -211,7 +227,8 @@ func (e *Executor) finishReconcile(ctx context.Context, job *sweepJob, out *Reco
 // anything else leaves the row exactly as it is, because re-reserving it would
 // collide with any newer job for the same address.
 func (e *Executor) observeReleased(ctx context.Context, pool *rpc.Pool, job *sweepJob,
-	out *ReconcileResult, required uint64) (*ReconcileResult, error) {
+	out *ReconcileResult, required uint64,
+) (*ReconcileResult, error) {
 	hash := job.SweepHash
 	if hash == "" {
 		// A confirmed gas top-up does not re-open a released record either: the
@@ -238,7 +255,8 @@ func (e *Executor) observeReleased(ctx context.Context, pool *rpc.Pool, job *swe
 // see a receipt. It retains immutable signed bytes for v1 jobs; old or
 // incomplete jobs require manual review and stay blocked.
 func (e *Executor) retainUnconfirmed(ctx context.Context, job *sweepJob, out *ReconcileResult,
-	gas bool, message string) (*ReconcileResult, error) {
+	gas bool, message string,
+) (*ReconcileResult, error) {
 	if job.Version != 1 || (gas && job.GasRaw == "") || (!gas && job.SweepRaw == "") {
 		return e.finishReconcile(ctx, job, out, "manual_review",
 			"legacy or ambiguous transaction; reconcile hashes manually before releasing address",
@@ -256,21 +274,6 @@ func (e *Executor) retainUnconfirmed(ctx context.Context, job *sweepJob, out *Re
 	out.Action, out.Status = ReconcileObserved, job.Status
 	out.Message = message + "; address remains reserved and the existing signed transaction will be resumed without creating a new signature"
 	return out, nil
-}
-
-// ErrLegacySweepRecord marks a record written before the current job format (or
-// handled by hand). It cannot be updated by the sweeper, so it cannot be reconciled.
-var ErrLegacySweepRecord = errors.New("legacy sweep record cannot be reconciled")
-
-// BlockedJob explains why an address cannot be swept yet.
-type BlockedJob struct {
-	JobID      int64  `json:"job_id"`
-	Chain      string `json:"chain"`
-	Address    string `json:"address"`
-	Status     string `json:"status"`
-	Error      string `json:"error"`
-	AgeMin     int64  `json:"age_minutes"`
-	CanResolve bool   `json:"can_reconcile"`
 }
 
 // ListBlocked returns unfinished jobs that hold a reserved transaction, i.e.

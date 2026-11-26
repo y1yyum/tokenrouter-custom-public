@@ -133,9 +133,13 @@ func TestDependencyBoundaries(t *testing.T) {
 		{"internal/cryptopay/new_test.go", modulePath + "/internal/settings", false},
 		{"internal/cryptopay/config_test.go", modulePath + "/internal/settings", true},
 		{"internal/cryptopay/config_test.go", modulePath + "/internal/service", false},
-		{"internal/cryptopay/config.go", modulePath + "/internal/settings", false},
-		{"internal/cryptopay/sweeper/jobs_postgres_integration_test.go", modulePath + "/migrations", true},
+		{"internal/cryptopay/config.go", modulePath + "/internal/settings", true},
+		{"internal/cryptopay/sweeper/jobs_integration_test.go", modulePath + "/migrations", true},
 		{"internal/cryptopay/sweeper/new_test.go", modulePath + "/migrations", false},
+		{"internal/cryptopay/wallet/shards/shards.go", "database/sql", false},
+		{"internal/cryptopay/wallet/shards/shards.go", modulePath + "/internal/payment/postgres", false},
+		{"internal/cryptopay/scanner/worker.go", modulePath + "/internal/cryptopay/wallet", false},
+		{"internal/cryptopay/unregistered/client.go", "net/http", false},
 		{"internal/newmodule/new.go", modulePath + "/internal/provider", false},
 		{"internal/provider/new.go", modulePath + "-other/internal/billing", false},
 	}
@@ -243,20 +247,28 @@ func TestFilePermissionsHaveConsumers(t *testing.T) {
 			}
 		}
 	}
-	for file, allowed := range unregisteredTestImports {
-		location := locate(file)
-		if !location.test || location.role != "" {
-			t.Errorf("测试许可要求未登记角色的测试文件：%s", file)
-		}
-		for _, target := range allowed.Internal {
-			if !imports[file][modulePath+"/"+target] {
-				t.Errorf("测试许可缺少实际消费者：%s -> %s", file, target)
+	for dir, boundary := range chainPaymentPackages {
+		for _, test := range []bool{false, true} {
+			used := make(map[string]bool)
+			for _, src := range sources {
+				if filepath.ToSlash(filepath.Dir(src.Path)) != dir || strings.HasSuffix(src.Path, "_test.go") != test {
+					continue
+				}
+				for _, imp := range src.Imports {
+					used[imp.Path] = true
+				}
 			}
-		}
-		for _, targets := range [][]string{allowed.Standard, allowed.External} {
-			for _, target := range targets {
-				if !imports[file][target] {
-					t.Errorf("测试许可缺少实际消费者：%s -> %s", file, target)
+			list := boundary.Production
+			if test {
+				list = boundary.Tests
+			}
+			for _, name := range strings.Fields(list) {
+				target := importName(name)
+				if name == "migrations" {
+					target = modulePath + "/migrations"
+				}
+				if !used[target] {
+					t.Errorf("unused chain payment dependency: %s -> %s", dir, target)
 				}
 			}
 		}

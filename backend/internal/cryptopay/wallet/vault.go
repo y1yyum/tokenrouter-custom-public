@@ -11,16 +11,25 @@ import (
 	"strings"
 )
 
-// Seeds use an application-managed, domain-separated encryption key derived
-// from the installation's persistent master key. No operator password, signing
-// lock, separate key file or unlock request is part of normal wallet operation.
-const managedVaultPrefix = "sub2api-wallet:v2:"
-const walletKeyContext = "sub2api/crypto-wallet/seed-encryption/v2"
+const (
+	// Seeds use an application-managed, domain-separated encryption key derived
+	// from the installation's persistent master key. No operator password, signing
+	// lock, separate key file or unlock request is part of normal wallet operation.
+	managedVaultPrefix = "sub2api-wallet:v2:"
 
-// managedVaultPrefixV3 marks a vault sealed with the browser-generated data
-// key DK instead of the installation key. The AAD is deliberately the whole
-// prefix so a v2 ciphertext can never be replayed as v3 (and vice versa).
-const managedVaultPrefixV3 = "sub2api-wallet:v3:"
+	walletKeyContext = "sub2api/crypto-wallet/seed-encryption/v2"
+
+	// managedVaultPrefixV3 marks a vault sealed with the browser-generated data
+	// key DK instead of the installation key. The AAD is deliberately the whole
+	// prefix so a v2 ciphertext can never be replayed as v3 (and vice versa).
+	managedVaultPrefixV3 = "sub2api-wallet:v3:"
+)
+
+type vaultContents struct {
+	Deposit         string `json:"deposit"`
+	Hot             string `json:"hot"`
+	SecurityVersion int    `json:"security_version,omitempty"`
+}
 
 // vaultVersion reports the ciphertext generation, or 0 for unknown data.
 func vaultVersion(raw string) int {
@@ -82,12 +91,6 @@ func openVaultContentsV3(dataKey []byte, raw string) (*vaultContents, error) {
 		return nil, ErrVaultUnavailable
 	}
 	return &contents, nil
-}
-
-type vaultContents struct {
-	Deposit         string `json:"deposit"`
-	Hot             string `json:"hot"`
-	SecurityVersion int    `json:"security_version,omitempty"`
 }
 
 func newSeedCipher(masterHex string) cipher.AEAD {

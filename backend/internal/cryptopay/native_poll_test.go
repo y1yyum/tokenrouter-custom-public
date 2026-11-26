@@ -36,17 +36,23 @@ type fakeLister struct {
 	calls []listCall
 }
 
+type memCursor struct {
+	values map[string]uint64
+	saves  int
+}
+
+type fakeSink struct {
+	deposits []scanner.Transfer
+	outflows []scanner.Transfer
+	err      error
+}
+
 func (f *fakeLister) TxList(_ context.Context, chain, address string, start, end uint64) ([]explorer.Tx, error) {
 	f.calls = append(f.calls, listCall{chain: chain, address: address, start: start, end: end})
 	if f.err != nil {
 		return nil, f.err
 	}
 	return f.rows[strings.ToLower(address)], nil
-}
-
-type memCursor struct {
-	values map[string]uint64
-	saves  int
 }
 
 func (m *memCursor) Load(_ context.Context, key string) (uint64, error) {
@@ -60,12 +66,6 @@ func (m *memCursor) Save(_ context.Context, key string, lastBlock uint64) error 
 	m.values[key] = lastBlock
 	m.saves++
 	return nil
-}
-
-type fakeSink struct {
-	deposits []scanner.Transfer
-	outflows []scanner.Transfer
-	err      error
 }
 
 func (f *fakeSink) ProcessNativeDeposit(_ context.Context, _ scanner.ChainConfig, t scanner.Transfer) error {

@@ -12,6 +12,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+const ownersQueryPattern = `(?s)SELECT lower\(p\.address\), p\.assigned_user_id,\s+COALESCE\(u\.username, ''\), COALESCE\(u\.email, ''\),\s+\(u\.id IS NULL OR u\.deleted_at IS NOT NULL\)\s+FROM crypto_address_pool p\s+LEFT JOIN users u ON u\.id = p\.assigned_user_id\s+WHERE lower\(p\.address\) = ANY\(\$1\) AND p\.assigned_user_id IS NOT NULL\s+ORDER BY p\.id`
+
+var ownerColumns = []string{"lower", "assigned_user_id", "username", "email", "deleted"}
+
 // Every value below is a made-up fixture. Addresses are built from a digit so
 // two of them never collide by accident.
 func fixtureAddress(digit byte) string {
@@ -27,10 +31,6 @@ func mixedCase(address string) string {
 	}
 	return string(out)
 }
-
-var ownerColumns = []string{"lower", "assigned_user_id", "username", "email", "deleted"}
-
-const ownersQueryPattern = `(?s)SELECT lower\(p\.address\), p\.assigned_user_id,\s+COALESCE\(u\.username, ''\), COALESCE\(u\.email, ''\),\s+\(u\.id IS NULL OR u\.deleted_at IS NOT NULL\)\s+FROM crypto_address_pool p\s+LEFT JOIN users u ON u\.id = p\.assigned_user_id\s+WHERE lower\(p\.address\) = ANY\(\$1\) AND p\.assigned_user_id IS NOT NULL\s+ORDER BY p\.id`
 
 func newOwnersService(t *testing.T) (*Service, sqlmock.Sqlmock) {
 	t.Helper()

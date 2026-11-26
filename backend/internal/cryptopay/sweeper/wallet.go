@@ -13,9 +13,11 @@ type TransactionWallet interface {
 	HotAddresses(context.Context) (*HotAddress, error)
 }
 
-type EVMSignRequest = wallet.EVMSignRequest
-type HotAddress = wallet.HotAddress
-type MnemonicExport = wallet.MnemonicExport
+type (
+	EVMSignRequest = wallet.EVMSignRequest
+	HotAddress     = wallet.HotAddress
+	MnemonicExport = wallet.MnemonicExport
+)
 
 // Record is one sweep_records row.
 type Record struct {

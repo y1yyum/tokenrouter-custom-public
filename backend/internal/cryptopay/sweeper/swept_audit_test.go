@@ -5,12 +5,15 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
 func sweptAuditRows(id int64, entry PlanEntry) *sqlmock.Rows {
-	return sqlmock.NewRows([]string{"id", "chain", "from_address", "to_address", "token",
-		"raw_amount", "token_decimals", "sweep_tx_hash"}).
+	return sqlmock.NewRows([]string{
+		"id", "chain", "from_address", "to_address", "token",
+		"raw_amount", "token_decimals", "sweep_tx_hash",
+	}).
 		AddRow(id, entry.Chain, entry.Address, testDestination, entry.Token,
 			entry.RawAmount.String(), entry.Decimals, "0xhash")
 }

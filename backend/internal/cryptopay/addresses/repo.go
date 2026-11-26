@@ -1,8 +1,3 @@
-// Package addresses manages the HD-derived deposit address pool and the
-// per-user assignment of addresses.
-//
-// Assignments are stored per chain FAMILY ("evm" | "solana"): one EVM
-// address serves bsc/polygon/plasma, one Solana address serves solana.
 package addresses
 
 import (
@@ -21,16 +16,17 @@ const (
 	FamilySolana = "solana"
 )
 
-// FamilyForChain maps a chain id to its family.
-func FamilyForChain(chain string) (string, error) {
-	switch chain {
-	case "bsc", "ethereum", "polygon", "plasma", "arbitrum", "base", "xlayer":
-		return FamilyEVM, nil
-	case "solana":
-		return FamilySolana, nil
-	default:
-		return "", fmt.Errorf("unsupported chain %q", chain)
-	}
+// AdminList returns a page of addresses with aggregated credited/swept
+// totals. Filters are optional; totals come from the ledger tables so the
+// list never touches the chain.
+// adminSortColumns whitelists ORDER BY targets: sortBy reaches SQL, so it
+// must never be interpolated from raw user input.
+var adminSortColumns = map[string]string{
+	"id":             "a.id",
+	"user_id":        "a.user_id",
+	"credited_total": "COALESCE(d.credited, 0)",
+	"swept_total":    "COALESCE(s.swept, 0)",
+	"deposit_count":  "COALESCE(d.cnt, 0)",
 }
 
 // Assignment is one row of deposit_addresses.
@@ -53,6 +49,38 @@ type Derived struct {
 // Repo provides pool and assignment persistence.
 type Repo struct {
 	db *sql.DB
+}
+
+// AdminRow is one address with its aggregated activity, for the admin list.
+type AdminRow struct {
+	ID            int64   `json:"id"`
+	UserID        int64   `json:"user_id"`
+	Family        string  `json:"family"`
+	Address       string  `json:"address"`
+	Status        string  `json:"status"`
+	CreditedTotal float64 `json:"credited_total"`
+	SweptTotal    float64 `json:"swept_total"`
+	DepositCount  int64   `json:"deposit_count"`
+}
+
+// AdminSummary aggregates the whole filtered set, not just the current page.
+type AdminSummary struct {
+	AddressCount  int64   `json:"address_count"`
+	DepositCount  int64   `json:"deposit_count"`
+	CreditedTotal float64 `json:"credited_total"`
+	SweptTotal    float64 `json:"swept_total"`
+}
+
+// FamilyForChain maps a chain id to its family.
+func FamilyForChain(chain string) (string, error) {
+	switch chain {
+	case "bsc", "ethereum", "polygon", "plasma", "arbitrum", "base", "xlayer":
+		return FamilyEVM, nil
+	case "solana":
+		return FamilySolana, nil
+	default:
+		return "", fmt.Errorf("unsupported chain %q", chain)
+	}
 }
 
 func NewRepo(db *sql.DB) *Repo {
@@ -115,7 +143,8 @@ func (r *Repo) ExistingAssignment(ctx context.Context, userID int64, family stri
 
 func lookupAssignment(ctx context.Context, db interface {
 	QueryRowContext(context.Context, string, ...any) *sql.Row
-}, userID int64, family string) (*Assignment, error) {
+}, userID int64, family string,
+) (*Assignment, error) {
 	row := db.QueryRowContext(ctx,
 		`SELECT id, user_id, chain, address, derivation_index, status
 		   FROM deposit_addresses WHERE user_id = $1 AND chain = $2
@@ -327,39 +356,6 @@ func (r *Repo) LookupByFamily(ctx context.Context, family, address string) (*Ass
 		ID: poolID, UserID: 0, Family: family,
 		Address: address, Status: "pool",
 	}, nil
-}
-
-// AdminRow is one address with its aggregated activity, for the admin list.
-type AdminRow struct {
-	ID            int64   `json:"id"`
-	UserID        int64   `json:"user_id"`
-	Family        string  `json:"family"`
-	Address       string  `json:"address"`
-	Status        string  `json:"status"`
-	CreditedTotal float64 `json:"credited_total"`
-	SweptTotal    float64 `json:"swept_total"`
-	DepositCount  int64   `json:"deposit_count"`
-}
-
-// AdminList returns a page of addresses with aggregated credited/swept
-// totals. Filters are optional; totals come from the ledger tables so the
-// list never touches the chain.
-// adminSortColumns whitelists ORDER BY targets: sortBy reaches SQL, so it
-// must never be interpolated from raw user input.
-var adminSortColumns = map[string]string{
-	"id":             "a.id",
-	"user_id":        "a.user_id",
-	"credited_total": "COALESCE(d.credited, 0)",
-	"swept_total":    "COALESCE(s.swept, 0)",
-	"deposit_count":  "COALESCE(d.cnt, 0)",
-}
-
-// AdminSummary aggregates the whole filtered set, not just the current page.
-type AdminSummary struct {
-	AddressCount  int64   `json:"address_count"`
-	DepositCount  int64   `json:"deposit_count"`
-	CreditedTotal float64 `json:"credited_total"`
-	SweptTotal    float64 `json:"swept_total"`
 }
 
 func (r *Repo) AdminList(ctx context.Context, userID int64, family string, limit, offset int, sortBy, sortDir string) ([]AdminRow, int64, error) {

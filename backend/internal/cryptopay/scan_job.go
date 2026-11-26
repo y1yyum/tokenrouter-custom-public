@@ -10,30 +10,29 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
-	"github.com/google/uuid"
 )
-
-// ScanRunStatus is the lifecycle state of one asynchronous catch-up scan.
-type ScanRunStatus string
 
 const (
 	ScanRunRunning   ScanRunStatus = "running"
 	ScanRunCompleted ScanRunStatus = "completed"
 	ScanRunFailed    ScanRunStatus = "failed"
 	ScanRunCancelled ScanRunStatus = "cancelled"
-)
 
-// Stop reasons are fixed codes the UI localises. They never carry free text.
-const (
+	// Stop reasons are fixed codes the UI localises. They never carry free text.
 	ScanStopCaughtUp  = "caught_up"
 	ScanStopStalled   = "stalled"
 	ScanStopDeadline  = "deadline"
 	ScanStopCancelled = "cancelled"
 	ScanStopError     = "error"
 	ScanStopInternal  = "internal"
+
+	// scanRunRetention bounds how many finished runs stay queryable.
+	scanRunRetention = 20
 )
 
 var (
@@ -46,7 +45,14 @@ var (
 	ErrScanRunFinished = errors.New("scan run already finished")
 
 	errScanCancelled = errors.New("scan cancelled by operator")
+
+	// scanJobs is process-wide on purpose: the scan lock it guards is process-wide
+	// (and cluster-wide through the advisory lock), not per Service value.
+	scanJobs = &scanRegistry{jobs: map[string]*scanJob{}}
 )
+
+// ScanRunStatus is the lifecycle state of one asynchronous catch-up scan.
+type ScanRunStatus string
 
 // ScanChainState is one chain's catch-up position as shown to the operator.
 type ScanChainState struct {
@@ -79,17 +85,6 @@ type ScanRunState struct {
 	seq uint64
 }
 
-func (s *ScanRunState) clone() *ScanRunState {
-	out := *s
-	out.ChainScope = append([]string{}, s.ChainScope...)
-	out.Chains = append([]ScanChainState{}, s.Chains...)
-	if s.FinishedAt != nil {
-		finished := *s.FinishedAt
-		out.FinishedAt = &finished
-	}
-	return &out
-}
-
 // scanRunner is the small seam the catch-up loop depends on, so the loop can
 // be exercised without a database or RPC node.
 type scanRunner interface {
@@ -113,18 +108,6 @@ type scanLoopConfig struct {
 	MaxStalled int // consecutive rounds without cursor movement before giving up
 }
 
-func defaultScanLoopConfig() scanLoopConfig {
-	return scanLoopConfig{
-		Deadline: 2 * time.Hour, Pause: time.Second,
-		BusyMin: time.Second, BusyMax: 10 * time.Second,
-		ErrorMin: 2 * time.Second, ErrorMax: 15 * time.Second,
-		MaxStalled: 5,
-	}
-}
-
-// scanRunRetention bounds how many finished runs stay queryable.
-const scanRunRetention = 20
-
 type scanJob struct {
 	state  *ScanRunState
 	cancel context.CancelCauseFunc
@@ -139,9 +122,53 @@ type scanRegistry struct {
 	seq    uint64
 }
 
-// scanJobs is process-wide on purpose: the scan lock it guards is process-wide
-// (and cluster-wide through the advisory lock), not per Service value.
-var scanJobs = &scanRegistry{jobs: map[string]*scanJob{}}
+// scanLoop is the catch-up loop of one run. It is the only writer of the run's
+// terminal state, so every exit ends in exactly one registry.finish.
+type scanLoop struct {
+	reg    *scanRegistry
+	job    *scanJob
+	runner scanRunner
+	cfg    scanLoopConfig
+	id     string
+	// nextFrom is the rewind for the next executed round. Only the first
+	// executed round may carry the operator's from_block; passing it again
+	// would rewind the cursor every round and the scan could never finish.
+	nextFrom uint64
+	rounds   int
+	stalled  int
+	busy     *backoff
+	failing  *backoff
+}
+
+// backoff doubles from lo up to hi. It is only touched by the run goroutine.
+type backoff struct{ lo, hi, cur time.Duration }
+
+// serviceScanRunner adapts Service to the loop. It re-resolves the worker on
+// every call because a config save replaces the worker mid-run.
+type serviceScanRunner struct {
+	s      *Service
+	chains []string
+}
+
+func (s *ScanRunState) clone() *ScanRunState {
+	out := *s
+	out.ChainScope = append([]string{}, s.ChainScope...)
+	out.Chains = append([]ScanChainState{}, s.Chains...)
+	if s.FinishedAt != nil {
+		finished := *s.FinishedAt
+		out.FinishedAt = &finished
+	}
+	return &out
+}
+
+func defaultScanLoopConfig() scanLoopConfig {
+	return scanLoopConfig{
+		Deadline: 2 * time.Hour, Pause: time.Second,
+		BusyMin: time.Second, BusyMax: 10 * time.Second,
+		ErrorMin: 2 * time.Second, ErrorMax: 15 * time.Second,
+		MaxStalled: 5,
+	}
+}
 
 // start launches the loop in the background and returns a snapshot of the new
 // run. parent only supplies values (trace ids); cancellation of the request
@@ -277,24 +304,6 @@ func (r *scanRegistry) cancel(id string) (*ScanRunState, error) {
 	return job.state.clone(), nil
 }
 
-// scanLoop is the catch-up loop of one run. It is the only writer of the run's
-// terminal state, so every exit ends in exactly one registry.finish.
-type scanLoop struct {
-	reg    *scanRegistry
-	job    *scanJob
-	runner scanRunner
-	cfg    scanLoopConfig
-	id     string
-	// nextFrom is the rewind for the next executed round. Only the first
-	// executed round may carry the operator's from_block; passing it again
-	// would rewind the cursor every round and the scan could never finish.
-	nextFrom uint64
-	rounds   int
-	stalled  int
-	busy     *backoff
-	failing  *backoff
-}
-
 func (r *scanRegistry) run(ctx context.Context, job *scanJob, runner scanRunner, cfg scanLoopConfig) {
 	l := &scanLoop{
 		reg: r, job: job, runner: runner, cfg: cfg, id: job.state.ID,
@@ -419,9 +428,6 @@ func (l *scanLoop) record(after []scanner.ChainScanProgress, afterErr, roundErr 
 	})
 }
 
-// backoff doubles from lo up to hi. It is only touched by the run goroutine.
-type backoff struct{ lo, hi, cur time.Duration }
-
 func newBackoff(lo, hi time.Duration) *backoff { return &backoff{lo: lo, hi: hi, cur: lo} }
 
 func (b *backoff) next() time.Duration {
@@ -532,13 +538,6 @@ func (s *Service) scanWorker() (*scanner.Worker, error) {
 		return nil, ErrScanUnavailable
 	}
 	return worker, nil
-}
-
-// serviceScanRunner adapts Service to the loop. It re-resolves the worker on
-// every call because a config save replaces the worker mid-run.
-type serviceScanRunner struct {
-	s      *Service
-	chains []string
 }
 
 func (r serviceScanRunner) Round(ctx context.Context, fromBlock uint64) error {

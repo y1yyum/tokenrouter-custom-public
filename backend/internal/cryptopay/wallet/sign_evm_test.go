@@ -19,8 +19,10 @@ import (
 )
 
 func sweepRequest() EVMSignRequest {
-	return EVMSignRequest{Index: 0, Kind: "sweep", ChainID: 56, Token: testToken, To: testDestination,
-		Amount: "1000000", Nonce: 7, GasPrice: "1000000000", GasLimit: 65000}
+	return EVMSignRequest{
+		Index: 0, Kind: "sweep", ChainID: 56, Token: testToken, To: testDestination,
+		Amount: "1000000", Nonce: 7, GasPrice: "1000000000", GasLimit: 65000,
+	}
 }
 
 func signExpectation(mock sqlmock.Sqlmock, raw string, req EVMSignRequest) {

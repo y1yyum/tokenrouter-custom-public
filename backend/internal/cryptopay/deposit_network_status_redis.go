@@ -10,10 +10,6 @@ import (
 
 const depositNetworkStatusKey = "crypto:deposit-network-status:v1:"
 
-type redisNetworkStatusStore struct {
-	rdb *redis.Client
-}
-
 // Writes are dispatched while the scan holds the lock, but Redis may finish
 // after another owner publishes. Never let that delayed write replace a newer
 // observation. Each canonical network has its own expiring key.
@@ -27,6 +23,10 @@ if old then
 end
 return redis.call('PSETEX', KEYS[1], ARGV[2], ARGV[3])
 `)
+
+type redisNetworkStatusStore struct {
+	rdb *redis.Client
+}
 
 func (s redisNetworkStatusStore) save(ctx context.Context, chain string, sample networkStatusSnapshot, ttl time.Duration) error {
 	encoded, err := json.Marshal(sample)

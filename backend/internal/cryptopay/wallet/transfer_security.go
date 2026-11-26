@@ -11,9 +11,10 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 )
 
 // Only this exact signed transaction is authorized. Neither the configured

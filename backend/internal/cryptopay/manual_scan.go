@@ -9,10 +9,12 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 )
 
-var ErrScanBusy = scanner.ErrScanBusy
+var (
+	ErrScanBusy = scanner.ErrScanBusy
 
-// ErrInvalidScanChain means a requested chain is not enabled for EVM scanning.
-var ErrInvalidScanChain = scanner.ErrInvalidScanChain
+	// ErrInvalidScanChain means a requested chain is not enabled for EVM scanning.
+	ErrInvalidScanChain = scanner.ErrInvalidScanChain
+)
 
 // RunScan leaves all background maintenance disabled. The local guard pins the
 // config against reload/sweep; the worker's session lock protects all instances.

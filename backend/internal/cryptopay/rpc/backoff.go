@@ -8,12 +8,12 @@ import (
 	"time"
 )
 
-// Public RPC providers rate-limit and time out under the scanner's batch load.
-// The pool therefore remembers recent endpoint failures: a node that just
-// failed is skipped for a short cooldown, and a transient failure of the whole
-// rotation is retried with exponential backoff instead of failing the batch
-// immediately (which used to happen on every scan cycle).
 const (
+	// Public RPC providers rate-limit and time out under the scanner's batch load.
+	// The pool therefore remembers recent endpoint failures: a node that just
+	// failed is skipped for a short cooldown, and a transient failure of the whole
+	// rotation is retried with exponential backoff instead of failing the batch
+	// immediately (which used to happen on every scan cycle).
 	transientEndpointCooldown = 3 * time.Second
 	authEndpointCooldown      = 5 * time.Minute
 	maxEndpointCooldown       = 2 * time.Minute
@@ -23,6 +23,11 @@ const (
 	// that still work behind a wall of identical refusals.
 	quotaEndpointCooldown = 15 * time.Minute
 	maxCallRounds         = 3
+
+	// learnedSpanTTL bounds how long a node's stated block-range limit is trusted.
+	// Operators upgrade plans, so a limit must expire rather than pin a node to a
+	// narrow window forever.
+	learnedSpanTTL = 30 * time.Minute
 )
 
 var (
@@ -41,11 +46,6 @@ type endpointHealth struct {
 	maxSpan   uint64
 	spanUntil time.Time
 }
-
-// learnedSpanTTL bounds how long a node's stated block-range limit is trusted.
-// Operators upgrade plans, so a limit must expire rather than pin a node to a
-// narrow window forever.
-const learnedSpanTTL = 30 * time.Minute
 
 type endpointHealthTracker struct {
 	mu     sync.Mutex

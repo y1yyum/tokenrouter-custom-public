@@ -1,4 +1,3 @@
-// Package scanner watches configured chains for incoming deposits.
 package scanner
 
 import (
@@ -15,6 +14,77 @@ import (
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
+)
+
+const (
+	// ERC20 Transfer(address,address,uint256) topic0.
+	transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+
+	// batchSize bounds how many addresses go into one eth_getLogs filter.
+	batchSize = 200
+
+	// maxBatchRetryRounds is how many extra rounds one scanRange spends re-running
+	// ONLY the address batches that failed on a transient error.
+	//
+	// A range is complete only when every one of its address batches succeeded, and a
+	// chain with a few thousand watched addresses has a dozen of them. Public nodes
+	// answer a burst of simultaneous getLogs calls with 429 for a few of them; with no
+	// retry one rejected batch failed the whole range, the next pass redid ALL the
+	// batches in the same burst, and a chain could go hours without finishing a range
+	// (Polygon on 2026-11-24: success per range = (1-p)^13). Re-running just the
+	// failed batches after a short wait, with fewer in flight each round, turns that
+	// into a handful of extra requests.
+	//
+	// Retries happen only when part of the range succeeded: that is the evidence the
+	// pool is answering and merely throttling the burst. A range where every batch
+	// failed means an outage or an exhausted allowance; waiting inside the call would
+	// only lengthen the pass (which holds the scan lock) and spend more requests, so
+	// the next pass and the chain's own backoff handle it.
+	maxBatchRetryRounds = 3
+
+	// evmFirstRunLookback is how far back the first scan reaches so deposits
+	// landing just before boot are still caught. Bounded: full-history backfill
+	// is the reconciliation job's concern, not the live scanner's.
+	evmFirstRunLookback = 200
+
+	// maxGetLogsSplitRequests caps the extra eth_getLogs requests one scanRange may
+	// spend subdividing failed queries. Public BSC nodes time out or answer "query
+	// exceeds max results" on dense ranges; halving recovers those, while the cap
+	// keeps a node that rejects everything from being hammered every pass.
+	maxGetLogsSplitRequests = 64
+
+	// minSplitAddresses stops halving the address filter. A single-block query with
+	// this few topics that still fails is an endpoint problem, not query size.
+	minSplitAddresses = 25
+)
+
+var (
+	// scanBatchConcurrency bounds how many address batches of one scanRange have an
+	// eth_getLogs request in flight at once. A pool of thousands of addresses is
+	// dozens of batches, and issuing them one after another made a single 2000
+	// block range take most of maxScanTimePerChain. The value is a small ceiling,
+	// not a throughput target: per-endpoint pacing (rpc.EndpointThrottle) still
+	// spaces request starts, and a var only so tests can pin it.
+	scanBatchConcurrency = 8
+
+	// scanBatchesPerEndpoint caps the in-flight requests per node the pool can rotate
+	// over. A chain served by a single public node must not get eight simultaneous
+	// getLogs calls: a rate limit there fails the batch, the cursor stays put, and the
+	// next pass repeats the same burst. Chains with several nodes still run at
+	// scanBatchConcurrency.
+	scanBatchesPerEndpoint = 4
+
+	// batchRetryDelay is the wait before retry round `round` (0-based): about 0.5s,
+	// 1s, 2s, jittered. A var so tests do not sleep.
+	batchRetryDelay = func(round int) time.Duration {
+		delay := (500 * time.Millisecond) << round
+		return delay/2 + time.Duration(rand.Int63n(int64(delay/2)+1))
+	}
+
+	// errBatchNotScanned marks a batch that never ran although ctx reported no
+	// error. runBatches cannot produce that; it exists so an unscanned batch can
+	// never be mistaken for a scanned one.
+	errBatchNotScanned = errors.New("address batch was not scanned")
 )
 
 // Transfer is one observed token transfer.
@@ -35,51 +105,75 @@ type Transfer struct {
 	BlockHash   string
 }
 
-// ERC20 Transfer(address,address,uint256) topic0.
-const transferTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
+// EVMScanner scans ERC20 transfers for a set of watched addresses.
+type EVMScanner struct {
+	pool        *rpc.Pool
+	concurrency int
+}
 
-// batchSize bounds how many addresses go into one eth_getLogs filter.
-const batchSize = 200
+type getLogsParams struct {
+	FromBlock string   `json:"fromBlock"`
+	ToBlock   string   `json:"toBlock"`
+	Address   []string `json:"address"` // token contracts
+	Topics    [][]any  `json:"topics"`
+}
 
-// scanBatchConcurrency bounds how many address batches of one scanRange have an
-// eth_getLogs request in flight at once. A pool of thousands of addresses is
-// dozens of batches, and issuing them one after another made a single 2000
-// block range take most of maxScanTimePerChain. The value is a small ceiling,
-// not a throughput target: per-endpoint pacing (rpc.EndpointThrottle) still
-// spaces request starts, and a var only so tests can pin it.
-var scanBatchConcurrency = 8
+type evmLog struct {
+	Address     string   `json:"address"`
+	Topics      []string `json:"topics"`
+	Data        string   `json:"data"`
+	BlockNumber string   `json:"blockNumber"`
+	TxHash      string   `json:"transactionHash"`
+	LogIndex    string   `json:"logIndex"`
+	BlockHash   string   `json:"blockHash"`
+	Removed     bool     `json:"removed"`
+}
 
-// scanBatchesPerEndpoint caps the in-flight requests per node the pool can rotate
-// over. A chain served by a single public node must not get eight simultaneous
-// getLogs calls: a rate limit there fails the batch, the cursor stays put, and the
-// next pass repeats the same burst. Chains with several nodes still run at
-// scanBatchConcurrency.
-var scanBatchesPerEndpoint = 4
+// batchResult is the outcome of one address batch. Each slot is written only by
+// the goroutine that ran that batch and read only after every worker returned.
+// done stays false for a batch that never started.
+type batchResult struct {
+	done      bool
+	transfers []Transfer
+	err       error
+}
 
-// maxBatchRetryRounds is how many extra rounds one scanRange spends re-running
-// ONLY the address batches that failed on a transient error.
-//
-// A range is complete only when every one of its address batches succeeded, and a
-// chain with a few thousand watched addresses has a dozen of them. Public nodes
-// answer a burst of simultaneous getLogs calls with 429 for a few of them; with no
-// retry one rejected batch failed the whole range, the next pass redid ALL the
-// batches in the same burst, and a chain could go hours without finishing a range
-// (Polygon on 2026-11-24: success per range = (1-p)^13). Re-running just the
-// failed batches after a short wait, with fewer in flight each round, turns that
-// into a handful of extra requests.
-//
-// Retries happen only when part of the range succeeded: that is the evidence the
-// pool is answering and merely throttling the burst. A range where every batch
-// failed means an outage or an exhausted allowance; waiting inside the call would
-// only lengthen the pass (which holds the scan lock) and spend more requests, so
-// the next pass and the chain's own backoff handle it.
-const maxBatchRetryRounds = 3
+// batchPanic carries a worker's panic and its original stack to the goroutine
+// that called runBatches, where the stack would otherwise be lost.
+type batchPanic struct {
+	value any
+	stack []byte
+}
 
-// batchRetryDelay is the wait before retry round `round` (0-based): about 0.5s,
-// 1s, 2s, jittered. A var so tests do not sleep.
-var batchRetryDelay = func(round int) time.Duration {
-	delay := (500 * time.Millisecond) << round
-	return delay/2 + time.Duration(rand.Int63n(int64(delay/2)+1))
+// getLogsBudget is the shared allowance of extra eth_getLogs requests. Batches
+// run concurrently, so a plain counter would let two of them both pass the
+// check and then both spend, driving it negative and exceeding the cap.
+type getLogsBudget struct {
+	remaining atomic.Int64
+}
+
+// LogsError locates the eth_getLogs query that still failed after adaptive
+// splitting. Every field is numeric or a configured chain name and the wrapped
+// cause comes from rpc.Pool, so it never adds an endpoint or node-supplied text.
+type LogsError struct {
+	Chain              string
+	FromBlock, ToBlock uint64
+	Batch              int // index of the address batch (batchSize each) in the scanned list
+	Addresses          int // addresses in the failing, possibly halved, filter
+	Err                error
+}
+
+// syncWitness proves, once per scanRange, that the node which answered an
+// eth_getLogs query had already reached the range's last block. An endpoint
+// behind the tip answers only for the blocks it has, and that empty answer is
+// indistinguishable from a complete range without transfers. Heads only grow,
+// so a head observed during this range stays a valid lower bound for every
+// later requirement in it; one observation per endpoint keeps the proof from
+// costing more than the scan itself.
+type syncWitness struct {
+	pool  *rpc.Pool
+	mu    sync.Mutex
+	heads map[string]uint64
 }
 
 // retryableBatchFailure reports whether a failed batch is worth asking again right
@@ -109,6 +203,10 @@ func sleepOrDone(ctx context.Context, d time.Duration) bool {
 	}
 }
 
+func NewEVMScanner(pool *rpc.Pool) *EVMScanner {
+	return &EVMScanner{pool: pool}
+}
+
 // scanWorkers is how many address batches of one scanRange may be in flight.
 func (s *EVMScanner) scanWorkers() int {
 	if s.concurrency != 0 {
@@ -123,43 +221,10 @@ func (s *EVMScanner) scanWorkers() int {
 	return max(workers, 1)
 }
 
-// evmFirstRunLookback is how far back the first scan reaches so deposits
-// landing just before boot are still caught. Bounded: full-history backfill
-// is the reconciliation job's concern, not the live scanner's.
-const evmFirstRunLookback = 200
-
-// EVMScanner scans ERC20 transfers for a set of watched addresses.
-type EVMScanner struct {
-	pool        *rpc.Pool
-	concurrency int
-}
-
 // evmScanner carries the same per-chain override into security, observation and
 // durable scans, including both logs and native blocks.
 func (c ChainConfig) evmScanner(pool *rpc.Pool) *EVMScanner {
 	return &EVMScanner{pool: pool, concurrency: c.ScanConcurrency}
-}
-
-func NewEVMScanner(pool *rpc.Pool) *EVMScanner {
-	return &EVMScanner{pool: pool}
-}
-
-type getLogsParams struct {
-	FromBlock string   `json:"fromBlock"`
-	ToBlock   string   `json:"toBlock"`
-	Address   []string `json:"address"` // token contracts
-	Topics    [][]any  `json:"topics"`
-}
-
-type evmLog struct {
-	Address     string   `json:"address"`
-	Topics      []string `json:"topics"`
-	Data        string   `json:"data"`
-	BlockNumber string   `json:"blockNumber"`
-	TxHash      string   `json:"transactionHash"`
-	LogIndex    string   `json:"logIndex"`
-	BlockHash   string   `json:"blockHash"`
-	Removed     bool     `json:"removed"`
 }
 
 // ScanRange fetches transfers in [fromBlock, toBlock] for the given token
@@ -255,15 +320,6 @@ func (s *EVMScanner) scanRange(ctx context.Context, chain string, fromBlock, toB
 	return out, errors.Join(scanErrs...)
 }
 
-// batchResult is the outcome of one address batch. Each slot is written only by
-// the goroutine that ran that batch and read only after every worker returned.
-// done stays false for a batch that never started.
-type batchResult struct {
-	done      bool
-	transfers []Transfer
-	err       error
-}
-
 // runBatches calls run(0) through run(n-1) with at most workers calls active.
 // Indexes start in ascending order and none starts once ctx is done, so the
 // batches that never ran are always a suffix. A started batch always runs to
@@ -305,21 +361,9 @@ func runBatches(ctx context.Context, n, workers int, run func(index int)) {
 	}
 }
 
-// batchPanic carries a worker's panic and its original stack to the goroutine
-// that called runBatches, where the stack would otherwise be lost.
-type batchPanic struct {
-	value any
-	stack []byte
-}
-
 func (p *batchPanic) Error() string {
 	return fmt.Sprintf("panic in getLogs batch worker: %v\n%s", p.value, p.stack)
 }
-
-// errBatchNotScanned marks a batch that never ran although ctx reported no
-// error. runBatches cannot produce that; it exists so an unscanned batch can
-// never be mistaken for a scanned one.
-var errBatchNotScanned = errors.New("address batch was not scanned")
 
 // unscannedBatchError reports the first batch that never started. The cause is
 // shaped like the transport failure an interrupted request would have produced,
@@ -330,8 +374,10 @@ func unscannedBatchError(ctx context.Context, chain string, from, to uint64, bat
 	if ctxErr := ctx.Err(); ctxErr != nil {
 		cause = rpc.NewTransportFailure(ctxErr)
 	}
-	return &LogsError{Chain: chain, FromBlock: from, ToBlock: to, Batch: batch,
-		Addresses: min(batchSize, recipients-batch*batchSize), Err: cause}
+	return &LogsError{
+		Chain: chain, FromBlock: from, ToBlock: to, Batch: batch,
+		Addresses: min(batchSize, recipients-batch*batchSize), Err: cause,
+	}
 }
 
 // logsToTransfers turns one batch's logs into transfers, in log order. It keeps
@@ -373,19 +419,6 @@ func logsToTransfers(chain string, logs []evmLog, watchedSet map[string]struct{}
 	return out
 }
 
-// maxGetLogsSplitRequests caps the extra eth_getLogs requests one scanRange may
-// spend subdividing failed queries. Public BSC nodes time out or answer "query
-// exceeds max results" on dense ranges; halving recovers those, while the cap
-// keeps a node that rejects everything from being hammered every pass.
-const maxGetLogsSplitRequests = 64
-
-// getLogsBudget is the shared allowance of extra eth_getLogs requests. Batches
-// run concurrently, so a plain counter would let two of them both pass the
-// check and then both spend, driving it negative and exceeding the cap.
-type getLogsBudget struct {
-	remaining atomic.Int64
-}
-
 func newGetLogsBudget(requests int) *getLogsBudget {
 	budget := &getLogsBudget{}
 	budget.remaining.Store(int64(requests))
@@ -406,39 +439,11 @@ func (b *getLogsBudget) reserve(n int64) bool {
 	}
 }
 
-// minSplitAddresses stops halving the address filter. A single-block query with
-// this few topics that still fails is an endpoint problem, not query size.
-const minSplitAddresses = 25
-
-// LogsError locates the eth_getLogs query that still failed after adaptive
-// splitting. Every field is numeric or a configured chain name and the wrapped
-// cause comes from rpc.Pool, so it never adds an endpoint or node-supplied text.
-type LogsError struct {
-	Chain              string
-	FromBlock, ToBlock uint64
-	Batch              int // index of the address batch (batchSize each) in the scanned list
-	Addresses          int // addresses in the failing, possibly halved, filter
-	Err                error
-}
-
 func (e *LogsError) Error() string {
 	return fmt.Sprintf("getLogs %s %d-%d batch %d (%d addresses): %v", e.Chain, e.FromBlock, e.ToBlock, e.Batch, e.Addresses, e.Err)
 }
 
 func (e *LogsError) Unwrap() error { return e.Err }
-
-// syncWitness proves, once per scanRange, that the node which answered an
-// eth_getLogs query had already reached the range's last block. An endpoint
-// behind the tip answers only for the blocks it has, and that empty answer is
-// indistinguishable from a complete range without transfers. Heads only grow,
-// so a head observed during this range stays a valid lower bound for every
-// later requirement in it; one observation per endpoint keeps the proof from
-// costing more than the scan itself.
-type syncWitness struct {
-	pool  *rpc.Pool
-	mu    sync.Mutex
-	heads map[string]uint64
-}
 
 func newSyncWitness(pool *rpc.Pool) *syncWitness {
 	return &syncWitness{pool: pool, heads: make(map[string]uint64)}

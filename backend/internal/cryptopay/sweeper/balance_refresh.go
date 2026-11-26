@@ -10,6 +10,18 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
+var (
+	// errNativeSweepBelowGasReserve means the address holds no native coin beyond
+	// the fee reserve a native sweep must leave behind, so there is nothing that can
+	// be sent. It is a wait-for-funds state, never a failed payment.
+	errNativeSweepBelowGasReserve = errors.New("native balance does not exceed the sweep gas reserve; nothing sweepable yet")
+
+	// errStaleSweepPlan means the job no longer matches the credited ledger or the
+	// address assignment. It is released rather than retried, so the planner can
+	// create a fresh job from the current balance in the same run.
+	errStaleSweepPlan = errors.New("stale sweep plan")
+)
+
 // Only the token transaction freezes the token amount. An old preview or a
 // previously signed gas payment must not omit deposits credited before execution.
 func (e *Executor) refreshUnsignedAmount(ctx context.Context, job *sweepJob) error {
@@ -89,11 +101,6 @@ func (e *Executor) checkCurrentSweepBalance(ctx context.Context, pool *rpc.Pool,
 	return nil
 }
 
-// errNativeSweepBelowGasReserve means the address holds no native coin beyond
-// the fee reserve a native sweep must leave behind, so there is nothing that can
-// be sent. It is a wait-for-funds state, never a failed payment.
-var errNativeSweepBelowGasReserve = errors.New("native balance does not exceed the sweep gas reserve; nothing sweepable yet")
-
 // capNativeSweepAmount lowers an unsigned native sweep to what the address can
 // actually send while keeping nativeSweepGasReserve behind.
 //
@@ -134,8 +141,3 @@ func (e *Executor) capNativeSweepAmount(ctx context.Context, pool *rpc.Pool, job
 	job.Revision++
 	return nil
 }
-
-// errStaleSweepPlan means the job no longer matches the credited ledger or the
-// address assignment. It is released rather than retried, so the planner can
-// create a fresh job from the current balance in the same run.
-var errStaleSweepPlan = errors.New("stale sweep plan")

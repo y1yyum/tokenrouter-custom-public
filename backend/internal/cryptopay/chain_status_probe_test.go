@@ -7,8 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
 func TestProbeNodeClassifiesEachFailureAndLeaksNothing(t *testing.T) {

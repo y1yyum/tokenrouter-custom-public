@@ -12,32 +12,32 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
-// NativeToken is the pseudo-contract that identifies a chain's native mainnet
-// coin: ETH on Ethereum, BNB on BSC. It is deliberately not a hex address.
-//
-// The whole deposit pipeline keys on one opaque token string: the scanner's
-// allowlist (ChainConfig.Native + Decimals), the ledger identity
-// (chain, tx_hash, log_index), the sweep token map and the balance reader's
-// "chain|token" lookup. Reusing that string as the native asset identifier is
-// what lets native-coin deposits share the existing idempotency, confirmation
-// and crediting path instead of growing a second ledger.
-const NativeToken = "native"
-
-// NativeLogIndex is the synthetic log index persisted for a native-coin
-// deposit. A native transfer emits no log, so there is no log index to reuse,
-// yet uq_deposit_tx_chain_hash_log is (chain, tx_hash, log_index) and the row
-// needs an identity. A transaction carries at most one native value transfer
-// (one `to`/`value` pair), and no real log index reaches this value, so a
-// native deposit and a token deposit mined in the same transaction stay
-// distinct rows.
-const NativeLogIndex = 2_000_000_000
-
-// Native discovery sources. TxList polls an Etherscan-compatible account API
-// once per watched address per interval; Blocks reads every block with full
-// transactions (one request per block: 28800/day on BSC). Blocks is the default
-// and the zero value, so an unset source keeps the existing block behaviour;
-// TxList is an explicit operator choice.
 const (
+	// NativeToken is the pseudo-contract that identifies a chain's native mainnet
+	// coin: ETH on Ethereum, BNB on BSC. It is deliberately not a hex address.
+	//
+	// The whole deposit pipeline keys on one opaque token string: the scanner's
+	// allowlist (ChainConfig.Native + Decimals), the ledger identity
+	// (chain, tx_hash, log_index), the sweep token map and the balance reader's
+	// "chain|token" lookup. Reusing that string as the native asset identifier is
+	// what lets native-coin deposits share the existing idempotency, confirmation
+	// and crediting path instead of growing a second ledger.
+	NativeToken = "native"
+
+	// NativeLogIndex is the synthetic log index persisted for a native-coin
+	// deposit. A native transfer emits no log, so there is no log index to reuse,
+	// yet uq_deposit_tx_chain_hash_log is (chain, tx_hash, log_index) and the row
+	// needs an identity. A transaction carries at most one native value transfer
+	// (one `to`/`value` pair), and no real log index reaches this value, so a
+	// native deposit and a token deposit mined in the same transaction stay
+	// distinct rows.
+	NativeLogIndex = 2_000_000_000
+
+	// Native discovery sources. TxList polls an Etherscan-compatible account API
+	// once per watched address per interval; Blocks reads every block with full
+	// transactions (one request per block: 28800/day on BSC). Blocks is the default
+	// and the zero value, so an unset source keeps the existing block behaviour;
+	// TxList is an explicit operator choice.
 	NativeScanTxList = "txlist"
 	NativeScanBlocks = "blocks"
 )

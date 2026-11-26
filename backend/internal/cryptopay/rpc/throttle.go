@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+var endpointThrottles = &throttleRegistry{perHost: make(map[string]*EndpointThrottle)}
+
 // EndpointThrottle spaces calls to one endpoint.
 //
 // Public providers rate-limit per endpoint, and the scanner is bursty: one pass
@@ -22,6 +24,13 @@ type EndpointThrottle struct {
 	mu       sync.Mutex
 	next     time.Time
 	interval time.Duration
+}
+
+type throttleRegistry struct {
+	mu         sync.Mutex
+	perHost    map[string]*EndpointThrottle
+	interval   time.Duration
+	generation uint64
 }
 
 // NewEndpointThrottle builds a throttle with the given minimum spacing.
@@ -57,15 +66,6 @@ func (t *EndpointThrottle) Wait(ctx context.Context) error {
 		return nil
 	}
 }
-
-type throttleRegistry struct {
-	mu         sync.Mutex
-	perHost    map[string]*EndpointThrottle
-	interval   time.Duration
-	generation uint64
-}
-
-var endpointThrottles = &throttleRegistry{perHost: make(map[string]*EndpointThrottle)}
 
 // SetEndpointThrottleInterval applies one interval to every endpoint. Existing
 // throttles are replaced so a config change takes effect without a restart;

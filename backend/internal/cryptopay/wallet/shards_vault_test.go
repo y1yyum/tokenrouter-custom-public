@@ -11,11 +11,14 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet/shards"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet/shards"
 )
 
 const settingsValueQuery = `SELECT value FROM settings WHERE key = \$1`
+
+var _ = sql.ErrNoRows
 
 type shardFixture struct {
 	dataKey  []byte
@@ -341,5 +344,3 @@ func TestVerifyInstallationKeyUnsealsServerHeldShare(t *testing.T) {
 	expectSettingValue(emptyMock, "")
 	require.ErrorIs(t, empty.VerifyInstallationKey(context.Background()), ErrShardsNotConfigured)
 }
-
-var _ = sql.ErrNoRows

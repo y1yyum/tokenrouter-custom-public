@@ -2,8 +2,15 @@ package cryptopay
 
 import (
 	"context"
+	"encoding/json"
+	"math"
+	"reflect"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/TokenFlux/TokenRouter/internal/settings"
 )
 
@@ -356,5 +363,371 @@ func TestLoadConfigMissingKeyYieldsDefaultsWithoutWrite(t *testing.T) {
 	}
 	if store.writes != 0 {
 		t.Fatalf("first-run load persisted defaults (%d writes)", store.writes)
+	}
+}
+
+func fingerprintForTest(t *testing.T, cfg CryptoConfig) string {
+	t.Helper()
+	fingerprint, err := configFingerprint(cfg)
+	require.NoError(t, err)
+	return fingerprint
+}
+
+// Equal configs must not restart workers just because map iteration differs.
+// All persisted fields, including crediting and sweep settings, affect reloads.
+func TestConfigFingerprintCoversEveryExportedField(t *testing.T) {
+	// No exclusions: CryptoConfig has no timestamps, nonces or display-only fields.
+	excluded := map[string]string{}
+	base := DefaultCryptoConfig()
+	configType := reflect.TypeOf(base)
+	for i := 0; i < configType.NumField(); i++ {
+		field := configType.Field(i)
+		if !field.IsExported() {
+			continue
+		}
+		t.Run(field.Name, func(t *testing.T) {
+			changed := DefaultCryptoConfig()
+			mutateFingerprintField(t, reflect.ValueOf(&changed).Elem().FieldByIndex(field.Index))
+			if reason, ok := excluded[field.Name]; ok {
+				require.NotEmpty(t, reason)
+				require.True(t, fingerprintForTest(t, base) == fingerprintForTest(t, changed), reason)
+				return
+			}
+			require.True(t, fingerprintForTest(t, base) != fingerprintForTest(t, changed), "field must participate in reload detection")
+		})
+	}
+}
+
+func mutateFingerprintField(t *testing.T, value reflect.Value) {
+	t.Helper()
+	switch value.Kind() {
+	case reflect.Bool:
+		value.SetBool(!value.Bool())
+	case reflect.String:
+		value.SetString(value.String() + "changed")
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		value.SetInt(value.Int() + 1)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		value.SetUint(value.Uint() + 1)
+	case reflect.Float32, reflect.Float64:
+		value.SetFloat(value.Float() + 1)
+	case reflect.Slice:
+		value.Set(reflect.Append(value, reflect.Zero(value.Type().Elem())))
+	case reflect.Map:
+		if value.IsNil() {
+			value.Set(reflect.MakeMap(value.Type()))
+		}
+		entry := reflect.New(value.Type().Elem()).Elem()
+		mutateFingerprintField(t, entry)
+		value.SetMapIndex(reflect.ValueOf("changed").Convert(value.Type().Key()), entry)
+	case reflect.Struct:
+		mutateFingerprintField(t, value.Field(0))
+	case reflect.Pointer:
+		// Tri-state config switches (e.g. instant_credit_enabled) are pointers
+		// so "absent" stays distinguishable from an explicit false.
+		if value.IsNil() {
+			value.Set(reflect.New(value.Type().Elem()))
+		}
+		mutateFingerprintField(t, value.Elem())
+	default:
+		t.Fatalf("add a fingerprint mutation for %s", value.Type())
+	}
+}
+
+func TestConfigFingerprintNormalizationIsIdempotent(t *testing.T) {
+	for _, cfg := range []CryptoConfig{
+		{},
+		DefaultCryptoConfig(),
+		{
+			Chains: []string{ChainBSC, ChainBSC}, RPCThrottleMs: 25,
+			RPCLimits:  map[string]RPCEndpointLimits{" https://rpc.example.test ": {MaxBlocks: 100}},
+			NativeScan: " BLOCKS ", NativePriceURL: " https://price.example.test ",
+			ScanRange: map[string]int{ChainBSC: -1}, ScanConcurrency: map[string]int{ChainBSC: 1000},
+			ExplorerAPIURL: map[string]string{ChainBSC: " https://explorer.example.test/api/ "},
+		},
+	} {
+		first, err := NormalizeConfig(cfg)
+		require.NoError(t, err)
+		raw, err := json.Marshal(first)
+		require.NoError(t, err)
+		var readBack CryptoConfig
+		require.NoError(t, json.Unmarshal(raw, &readBack))
+		second, err := NormalizeConfig(readBack)
+		require.NoError(t, err)
+		require.True(t, fingerprintForTest(t, first) == fingerprintForTest(t, second), "normalizing a stored snapshot again must not trigger reload")
+	}
+}
+
+func TestConfigFingerprintRejectsNonSerializableValues(t *testing.T) {
+	for _, value := range []float64{math.NaN(), math.Inf(1), math.Inf(-1)} {
+		cfg := DefaultCryptoConfig()
+		cfg.CreditMultiplier = value
+		fingerprint, err := configFingerprint(cfg)
+		require.Error(t, err)
+		require.Empty(t, fingerprint, "a serialization error must not look like an applied config")
+	}
+}
+
+func TestConfigFingerprintTracksReloadRelevantFields(t *testing.T) {
+	base := CryptoConfig{
+		Enabled:       true,
+		Chains:        []string{"bsc", "ethereum"},
+		RPC:           map[string]string{"bsc": "https://a", "ethereum": "https://b"},
+		ScanRange:     map[string]int{"bsc": 500, "ethereum": 2000},
+		Confirmations: map[string]int{"bsc": 3, "ethereum": 64},
+	}
+	same := base
+	same.RPC = map[string]string{"bsc": "https://a", "ethereum": "https://b"}
+	same.ScanRange = map[string]int{"bsc": 500, "ethereum": 2000}
+	same.Confirmations = map[string]int{"bsc": 3, "ethereum": 64}
+
+	require.Equal(t, fingerprintForTest(t, base), fingerprintForTest(t, same),
+		"an equal config must not look changed")
+
+	t.Run("rpc endpoint changed", func(t *testing.T) {
+		mutated := base
+		mutated.RPC = map[string]string{"bsc": "https://new", "ethereum": "https://b"}
+		require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, mutated))
+	})
+
+	t.Run("rpc limits changed", func(t *testing.T) {
+		mutated := base
+		mutated.RPCLimits = map[string]RPCEndpointLimits{"https://a": {MaxBlocks: 100, MaxAddresses: 20}}
+		require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, mutated))
+	})
+
+	t.Run("rpc throttle changed", func(t *testing.T) {
+		mutated := base
+		mutated.RPCThrottleMs = 250
+		require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, mutated))
+	})
+
+	t.Run("scan range changed", func(t *testing.T) {
+		mutated := base
+		mutated.ScanRange = map[string]int{"bsc": 250, "ethereum": 2000}
+		require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, mutated))
+	})
+
+	t.Run("confirmations changed", func(t *testing.T) {
+		mutated := base
+		mutated.Confirmations = map[string]int{"bsc": 5, "ethereum": 64}
+		require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, mutated))
+	})
+
+	t.Run("chain removed", func(t *testing.T) {
+		mutated := base
+		mutated.Chains = []string{"bsc"}
+		require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, mutated))
+	})
+
+	t.Run("enabled toggled", func(t *testing.T) {
+		mutated := base
+		mutated.Enabled = false
+		require.NotEqual(t, fingerprintForTest(t, base), fingerprintForTest(t, mutated))
+	})
+
+	t.Run("map order does not matter", func(t *testing.T) {
+		a := base
+		a.RPC = map[string]string{"bsc": "https://a", "ethereum": "https://b"}
+		b := base
+		b.RPC = map[string]string{"ethereum": "https://b", "bsc": "https://a"}
+		require.Equal(t, fingerprintForTest(t, a), fingerprintForTest(t, b),
+			"map iteration order must not cause a spurious reload")
+	})
+}
+
+// A config stored before the instant-credit switch existed has no key. It must
+// load as ON (the shipped default), never as an accidental OFF.
+func TestInstantCreditDefaultsOnForLegacyConfig(t *testing.T) {
+	for _, raw := range []string{`{}`, `{"enabled":true}`, `{"enabled":true,"confirmations":{"bsc":3}}`} {
+		var cfg CryptoConfig
+		require.NoError(t, json.Unmarshal([]byte(raw), &cfg))
+		normalized, err := NormalizeConfig(cfg)
+		require.NoError(t, err)
+		require.True(t, normalized.InstantCreditOn(), "legacy config %s must default to instant credit", raw)
+		data, err := json.Marshal(normalized)
+		require.NoError(t, err)
+		var fields map[string]any
+		require.NoError(t, json.Unmarshal(data, &fields))
+		require.Equal(t, true, fields["instant_credit_enabled"])
+	}
+}
+
+// The switch is an operator kill switch: one config write must restore the old
+// confirmation-gated behaviour.
+func TestInstantCreditPatchCanDisableAndSetFloor(t *testing.T) {
+	base := DefaultCryptoConfig()
+	off := false
+	cfg := CryptoConfigPatch{InstantCreditEnabled: &off, InstantCreditMinAmount: floatPtr(5)}.Apply(base)
+	normalized, err := NormalizeConfig(cfg)
+	require.NoError(t, err)
+	require.False(t, normalized.InstantCreditOn())
+	require.Equal(t, 5.0, normalized.InstantCreditMinAmount)
+
+	on := true
+	patched := CryptoConfigPatch{InstantCreditEnabled: &on}.Apply(normalized)
+	normalized, err = NormalizeConfig(patched)
+	require.NoError(t, err)
+	require.True(t, normalized.InstantCreditOn())
+	require.Equal(t, 5.0, normalized.InstantCreditMinAmount, "omitted floor must be preserved")
+
+	// An empty patch never changes the switch.
+	normalized, err = NormalizeConfig(CryptoConfigPatch{}.Apply(base))
+	require.NoError(t, err)
+	require.True(t, normalized.InstantCreditOn())
+}
+
+func TestInstantCreditNegativeFloorIsSanitized(t *testing.T) {
+	base := DefaultCryptoConfig()
+	cfg := CryptoConfigPatch{InstantCreditMinAmount: floatPtr(-3)}.Apply(base)
+	normalized, err := NormalizeConfig(cfg)
+	require.NoError(t, err)
+	require.Zero(t, normalized.InstantCreditMinAmount, "a negative floor must not exclude every deposit")
+}
+
+// The deposit page must declare the instant-credit state per network.
+func TestDepositInfoDeclaresInstantCredit(t *testing.T) {
+	cfg := depositInfoConfig()
+	info := buildDepositInfo(cfg, depositInfoAssigned())
+	require.NotEmpty(t, info.Chains)
+	for _, chain := range info.Chains {
+		require.True(t, chain.InstantCredit, "chain %s", chain.Chain)
+		require.Nil(t, chain.EtaSeconds, "no measurement yet must serialize as null")
+	}
+
+	off := false
+	cfg.InstantCreditEnabled = &off
+	info = buildDepositInfo(cfg, depositInfoAssigned())
+	for _, chain := range info.Chains {
+		require.False(t, chain.InstantCredit, "chain %s", chain.Chain)
+	}
+}
+
+func floatPtr(v float64) *float64 { return &v }
+
+// A payload that omits keys must keep the stored values: an older console or
+// a scripted PUT previously wiped rpc/other keys to zero values, which
+// crashed the admin page on the next load.
+func TestCryptoConfigPatchKeepsOmittedFields(t *testing.T) {
+	base := CryptoConfig{
+		Enabled:       true,
+		Chains:        []string{ChainBSC, ChainPolygon},
+		RPC:           map[string]string{ChainBSC: "https://rpc.example"},
+		RPCLimits:     map[string]RPCEndpointLimits{"https://rpc.example": {MaxBlocks: 100, MaxAddresses: 20}},
+		RPCThrottleMs: 250,
+		HotWalletEVM:  "0x1111111111111111111111111111111111111111",
+		SweepAuto:     true,
+		HotIndex:      3,
+	}
+	// Patch only the EVM hot wallet, as the console does when clearing it.
+	empty := ""
+	merged := CryptoConfigPatch{HotWalletEVM: &empty}.Apply(base)
+
+	if merged.HotWalletEVM != "" {
+		t.Fatalf("hot wallet = %q, want cleared", merged.HotWalletEVM)
+	}
+	if len(merged.Chains) != 2 {
+		t.Fatalf("chains = %v, want them preserved", merged.Chains)
+	}
+	if merged.RPC[ChainBSC] != "https://rpc.example" {
+		t.Fatalf("rpc = %v, want it preserved", merged.RPC)
+	}
+	if merged.RPCThrottleMs != 250 || merged.RPCLimits["https://rpc.example"].MaxBlocks != 100 {
+		t.Fatalf("rpc protection fields not preserved: %+v", merged)
+	}
+	if !merged.SweepAuto || merged.HotIndex != 3 {
+		t.Fatalf("sweep_auto/hot_index not preserved: %+v", merged)
+	}
+}
+
+func TestCryptoConfigPatchAppliesRPCProtectionFields(t *testing.T) {
+	base := CryptoConfig{RPC: map[string]string{ChainBSC: "https://rpc.example"}}
+	limits := map[string]RPCEndpointLimits{
+		"https://rpc.example": {MaxBlocks: 100, MaxAddresses: 20},
+	}
+	throttle := 250
+	merged := CryptoConfigPatch{RPCLimits: &limits, RPCThrottleMs: &throttle}.Apply(base)
+	if merged.RPCThrottleMs != 250 {
+		t.Fatalf("rpc_throttle_ms = %d, want 250", merged.RPCThrottleMs)
+	}
+	if got := merged.RPCLimits["https://rpc.example"]; got.MaxBlocks != 100 || got.MaxAddresses != 20 {
+		t.Fatalf("rpc_limits = %+v, want the patch value", got)
+	}
+
+	empty := map[string]RPCEndpointLimits{}
+	cleared := CryptoConfigPatch{RPCLimits: &empty}.Apply(merged)
+	if len(cleared.RPCLimits) != 0 {
+		t.Fatalf("rpc_limits = %+v, want cleared", cleared.RPCLimits)
+	}
+}
+
+// An empty patch changes nothing.
+func TestCryptoConfigPatchEmptyIsIdentity(t *testing.T) {
+	base := CryptoConfig{Enabled: true, Chains: []string{ChainBSC}}
+	merged := CryptoConfigPatch{}.Apply(base)
+	if merged.Enabled != base.Enabled || len(merged.Chains) != 1 {
+		t.Fatalf("empty patch changed the config: %+v", merged)
+	}
+}
+
+// TestDefaultGasBudgetsCoverEveryChainFloor pins the relationship the deferral
+// rule depends on: one transfer at a chain's minimum gas price must fit inside
+// that chain's default native budget. When it does not, every sweep job on the
+// chain defers with "gas quote above the configured budget" on every run and
+// nothing says the budget itself is wrong.
+func TestDefaultGasBudgetsCoverEveryChainFloor(t *testing.T) {
+	cfg := DefaultCryptoConfig()
+	config := sweeper.Config{GasTopUp: cfg.GasTopUp}
+	for _, chain := range evmChains {
+		id, ok := chainlistIDs[chain]
+		if !ok || id <= 0 {
+			t.Fatalf("chain %s has no EIP-155 id, so it has no gas price floor", chain)
+		}
+		if floor := rpc.GasPriceFloor(uint64(id)); floor.Sign() <= 0 {
+			t.Fatalf("chain %s has no positive gas price floor", chain)
+		}
+		if _, ok := cfg.GasTopUp[chain]; !ok {
+			t.Fatalf("chain %s has no default gas_topup to check", chain)
+		}
+		if err := sweeper.GasBudgetCoversGasFloor(config, chain); err != nil {
+			t.Errorf("%s: %v", chain, err)
+		}
+	}
+}
+
+// TestDefaultNativeScanUsesBlocksEveryTenSeconds pins the operator-chosen
+// defaults: the per-block scan is the default native source and the native poll
+// interval is ten seconds. The address-based txlist path stays selectable.
+func TestDefaultNativeScanUsesBlocksEveryTenSeconds(t *testing.T) {
+	cfg := DefaultCryptoConfig()
+	if cfg.NativeScan != NativeScanBlocks {
+		t.Fatalf("default native_scan = %q, want %q", cfg.NativeScan, NativeScanBlocks)
+	}
+	if cfg.NativePollSeconds != 10 || DefaultNativePollSeconds != 10 {
+		t.Fatalf("default native poll = %d (const %d), want 10", cfg.NativePollSeconds, DefaultNativePollSeconds)
+	}
+
+	// A config stored before this field existed has neither key: normalization
+	// must land on the same defaults instead of keeping the old txlist/30 pair.
+	stored, err := NormalizeConfig(CryptoConfig{Chains: []string{ChainBSC}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stored.NativeScan != NativeScanBlocks || stored.NativePollSeconds != 10 {
+		t.Fatalf("normalized legacy config = %q/%d, want %q/10",
+			stored.NativeScan, stored.NativePollSeconds, NativeScanBlocks)
+	}
+
+	// txlist is still an accepted operator choice with an explicit interval.
+	optIn := DefaultCryptoConfig()
+	optIn.NativeScan = NativeScanTxList
+	optIn.NativePollSeconds = 30
+	normalized, err := NormalizeConfig(optIn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if normalized.NativeScan != NativeScanTxList || normalized.NativePollSeconds != 30 {
+		t.Fatalf("txlist opt-in = %q/%d, want %q/30",
+			normalized.NativeScan, normalized.NativePollSeconds, NativeScanTxList)
 	}
 }

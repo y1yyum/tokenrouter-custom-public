@@ -14,10 +14,12 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
-const recentReplayPrefix = "recent-replay:"
-const recentReplayBudget = 5 * time.Second
-const recentReplayBatchBlocks = uint64(50)
-const recentReplayTransfersPerPass = 64
+const (
+	recentReplayPrefix           = "recent-replay:"
+	recentReplayBudget           = 5 * time.Second
+	recentReplayBatchBlocks      = uint64(50)
+	recentReplayTransfersPerPass = 64
+)
 
 // Both the fixed upper boundary and the intra-block checkpoint survive worker
 // replacement. Reuse the existing namespaced cursor row; no schema or balance

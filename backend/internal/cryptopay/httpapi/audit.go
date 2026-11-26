@@ -3,12 +3,12 @@ package httpapi
 import (
 	"context"
 
+	"github.com/gin-gonic/gin"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
 	identityhttp "github.com/TokenFlux/TokenRouter/internal/identity/httpapi"
 	"github.com/TokenFlux/TokenRouter/internal/identity/httpapi/authctx"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry"
-
-	"github.com/gin-gonic/gin"
 )
 
 // audit.go attaches request provenance to wallet security events. The wallet

@@ -1,7 +1,3 @@
-// Package sweeper plans and (later) executes address sweeps.
-//
-// Phase 4 scope: threshold evaluation and plan generation. Execution and
-// gas top-up are handled by the durable executor.
 package sweeper
 
 import (
@@ -16,6 +12,11 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
+
+// NativeToken is the asset identifier for a chain's mainnet coin (ETH/BNB).
+// It mirrors scanner.NativeToken; the two packages are kept independent (the
+// sweeper never imports the scanner) so a test asserts they stay equal.
+const NativeToken = "native"
 
 // Config carries the sweep thresholds (admin-configurable).
 type Config struct {
@@ -55,24 +56,6 @@ type Plan struct {
 	DryRun   bool
 }
 
-// NativeToken is the asset identifier for a chain's mainnet coin (ETH/BNB).
-// It mirrors scanner.NativeToken; the two packages are kept independent (the
-// sweeper never imports the scanner) so a test asserts they stay equal.
-const NativeToken = "native"
-
-// isNativeToken reports whether an asset identifier names the mainnet coin.
-func isNativeToken(token string) bool { return strings.EqualFold(token, NativeToken) }
-
-// sortNativeLast moves mainnet-coin entries to the end of a plan, keeping every
-// other entry in its original order. A native sweep pays its own fee out of the
-// balance it empties, so doing it first would starve the token transfers that
-// share the address of the gas they need in the same run.
-func sortNativeLast(entries []PlanEntry) {
-	sort.SliceStable(entries, func(i, j int) bool {
-		return !isNativeToken(entries[i].Token) && isNativeToken(entries[j].Token)
-	})
-}
-
 // AddressBalance is one (address, token) balance snapshot.
 type AddressBalance struct {
 	Chain           string
@@ -108,6 +91,27 @@ type Planner struct {
 	// existing callers keep the global behaviour. An operator sweeping one chain
 	// sets it: a bug there must not be able to move funds on another chain.
 	chains []string
+}
+
+// isNativeToken reports whether an asset identifier names the mainnet coin.
+func isNativeToken(token string) bool { return strings.EqualFold(token, NativeToken) }
+
+// sortNativeLast moves mainnet-coin entries to the end of a plan, keeping every
+// other entry in its original order. A native sweep pays its own fee out of the
+// balance it empties, so doing it first would starve the token transfers that
+// share the address of the gas they need in the same run.
+func sortNativeLast(entries []PlanEntry) {
+	sort.SliceStable(entries, func(i, j int) bool {
+		return !isNativeToken(entries[i].Token) && isNativeToken(entries[j].Token)
+	})
+}
+
+func NewPlanner(db *sql.DB, reader BalanceReader, config Config, pools map[string]*rpc.Pool) *Planner {
+	readers := make(map[string]nodeReader, len(pools))
+	for chain, pool := range pools {
+		readers[chain] = pool
+	}
+	return &Planner{db: db, reader: reader, config: config, pools: readers}
 }
 
 // WithChains restricts this planner to the given chains. Unknown or empty
@@ -151,14 +155,6 @@ func (p *Planner) allowsChain(chain string) bool {
 		}
 	}
 	return false
-}
-
-func NewPlanner(db *sql.DB, reader BalanceReader, config Config, pools map[string]*rpc.Pool) *Planner {
-	readers := make(map[string]nodeReader, len(pools))
-	for chain, pool := range pools {
-		readers[chain] = pool
-	}
-	return &Planner{db: db, reader: reader, config: config, pools: readers}
 }
 
 // BuildManualPlan previews an operator-requested sweep. The global threshold

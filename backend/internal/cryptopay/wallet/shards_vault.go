@@ -111,6 +111,10 @@ type hotAddressRecord struct {
 	Solana string `json:"solana"`
 }
 
+type settingWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
 func readSetting(ctx context.Context, r vaultReader, key string) (string, error) {
 	var value string
 	err := r.QueryRowContext(ctx, `SELECT value FROM settings WHERE key = $1`, key).Scan(&value)
@@ -121,10 +125,6 @@ func readSetting(ctx context.Context, r vaultReader, key string) (string, error)
 		return "", ErrVaultUnavailable
 	}
 	return value, nil
-}
-
-type settingWriter interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
 func writeSetting(ctx context.Context, w settingWriter, key, value string) error {

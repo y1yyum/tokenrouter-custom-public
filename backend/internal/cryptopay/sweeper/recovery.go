@@ -10,35 +10,35 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
-// A sweep record is a cache of a chain fact, and it can be stale in the safe
-// direction: the transaction is mined and buried, but the row never advanced.
-// The 2026-11-13 BSC incident is exactly that shape - sweep_records.id=560 held
-// a successful 6000 USDT BSC transfer, finality included, for five hours while
-// the record said sweep_pending.
-//
-// The sweep ticker already resumes unfinished rows, but a resumed row passes
-// through the stale-release and underpriced-replacement checks before settle()
-// observes it. Those checks exist to prove a transaction can never be mined;
-// running them first on a row whose transaction is already mined is wasted work
-// and, with an inconsistent endpoint, a chance to release a live payment. This
-// pass instead proves the mined fact first, read-only, and writes the one
-// transition it justifies. No operator action, no manual SQL.
 const (
+	// A sweep record is a cache of a chain fact, and it can be stale in the safe
+	// direction: the transaction is mined and buried, but the row never advanced.
+	// The 2026-11-13 BSC incident is exactly that shape - sweep_records.id=560 held
+	// a successful 6000 USDT BSC transfer, finality included, for five hours while
+	// the record said sweep_pending.
+	//
+	// The sweep ticker already resumes unfinished rows, but a resumed row passes
+	// through the stale-release and underpriced-replacement checks before settle()
+	// observes it. Those checks exist to prove a transaction can never be mined;
+	// running them first on a row whose transaction is already mined is wasted work
+	// and, with an inconsistent endpoint, a chance to release a live payment. This
+	// pass instead proves the mined fact first, read-only, and writes the one
+	// transition it justifies. No operator action, no manual SQL.
 	// defaultMinedRecoveryAge keeps the pass away from a transaction that was
 	// broadcast moments ago: a row this young is still the normal settle path's
 	// business.
 	defaultMinedRecoveryAge = 10 * time.Minute
 	// minedRecoveryLimit bounds one run's extra RPC work.
 	minedRecoveryLimit = 20
-)
 
-// minedRecoveryQuery lists records that may be mined but unrecorded, oldest
-// first. Only rows with a persisted sweep hash are eligible: without one there
-// is nothing to look up.
-const minedRecoveryQuery = `SELECT id FROM sweep_records
+	// minedRecoveryQuery lists records that may be mined but unrecorded, oldest
+	// first. Only rows with a persisted sweep hash are eligible: without one there
+	// is nothing to look up.
+	minedRecoveryQuery = `SELECT id FROM sweep_records
 	WHERE job_version = 1 AND status = 'sweep_pending' AND sweep_tx_hash <> ''
 	  AND updated_at < NOW() - ($1 * INTERVAL '1 second')
 	ORDER BY updated_at ASC LIMIT $2`
+)
 
 // recoverMinedSweeps promotes records whose signed sweep transaction already
 // satisfies the configured depth (and the chain's finality tag when it serves

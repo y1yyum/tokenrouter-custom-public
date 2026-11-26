@@ -4,29 +4,39 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"strings"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 )
 
-const settingVault = "crypto.signer.vault"
+const (
+	settingVault = "crypto.signer.vault"
 
-// Conflicts with the sweeper's session advisory lock as well as other wallet
-// transactions. Transaction-scoped ownership cannot leak back into the pool.
-const vaultSweepLockKey int64 = 0x43525950544f5357
+	// Conflicts with the sweeper's session advisory lock as well as other wallet
+	// transactions. Transaction-scoped ownership cannot leak back into the pool.
+	vaultSweepLockKey int64 = 0x43525950544f5357
 
-// Keep identical to sweeper's reservedPredicate, including failed signed and ambiguous v0 jobs.
-const unfinishedSweepPredicate = `status NOT IN ('swept','failed') AND job_version = 1
+	// Keep identical to sweeper's reservedPredicate, including failed signed and ambiguous v0 jobs.
+	unfinishedSweepPredicate = `status NOT IN ('swept','failed') AND job_version = 1
 	OR job_version = 1 AND status = 'failed' AND (gas_tx_hash <> '' OR sweep_tx_hash <> '')
 	OR job_version = 0 AND status <> 'swept' AND
 	(status IN ('manual_review','gas_sent') OR gas_tx_hash <> '' OR sweep_tx_hash <> '')`
 
-const auditSQL = `INSERT INTO crypto_signer_audit
+	auditSQL = `INSERT INTO crypto_signer_audit
 	(op, kind, derivation_index, chain_id, to_address, token, amount, result, reason,
 	 actor_user_id, actor_email, client_ip, user_agent, request_id, auth_method)
 	VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)`
+
+	// Bounds for operator provenance. The columns are TEXT so the database cannot
+	// constrain them; truncating here keeps a forged header from bloating a row.
+	maxAuditActorEmail = 255
+	maxAuditClientIP   = 64
+	maxAuditUserAgent  = 512
+	maxAuditRequestID  = 128
+	maxAuditAuthMethod = 64
+)
 
 type auditEntry struct {
 	op, kind                          string
@@ -34,16 +44,6 @@ type auditEntry struct {
 	chainID                           int64
 	to, token, amount, result, reason string
 }
-
-// Bounds for operator provenance. The columns are TEXT so the database cannot
-// constrain them; truncating here keeps a forged header from bloating a row.
-const (
-	maxAuditActorEmail = 255
-	maxAuditClientIP   = 64
-	maxAuditUserAgent  = 512
-	maxAuditRequestID  = 128
-	maxAuditAuthMethod = 64
-)
 
 // AuditActor is the authenticated operator plus request provenance attached to
 // an audit row. Every field is optional: when identity cannot be resolved the
@@ -58,6 +58,14 @@ type AuditActor struct {
 }
 
 type auditActorContextKey struct{}
+
+type auditWriter interface {
+	ExecContext(context.Context, string, ...any) (sql.Result, error)
+}
+
+type vaultReader interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
 
 // WithAuditActor attaches operator attribution to ctx. Callers that cannot
 // resolve an identity skip this helper entirely and the write stores NULLs.
@@ -113,10 +121,6 @@ func auditNullable(value string) any {
 		return nil
 	}
 	return value
-}
-
-type auditWriter interface {
-	ExecContext(context.Context, string, ...any) (sql.Result, error)
 }
 
 func writeAudit(ctx context.Context, w auditWriter, e auditEntry) error {
@@ -178,10 +182,6 @@ func (m *Manager) beginVaultTx(ctx context.Context) (*sql.Tx, error) {
 		return nil, ErrSweepBusy
 	}
 	return tx, nil
-}
-
-type vaultReader interface {
-	QueryRowContext(context.Context, string, ...any) *sql.Row
 }
 
 func readVault(ctx context.Context, r vaultReader, forUpdate bool) (string, error) {

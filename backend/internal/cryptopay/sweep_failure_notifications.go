@@ -138,8 +138,10 @@ func (s *Service) queueSweepFailureAlerts(ctx context.Context, events []sweepFai
 	}
 	items := make([]item, 0, len(byKey))
 	for _, event := range byKey {
-		items = append(items, item{Key: event.key, Value: sweepFailureAlert{Version: 1,
-			Fingerprint: event.fingerprint, Body: event.body, Pending: true}})
+		items = append(items, item{Key: event.key, Value: sweepFailureAlert{
+			Version:     1,
+			Fingerprint: event.fingerprint, Body: event.body, Pending: true,
+		}})
 	}
 	sort.Slice(items, func(i, j int) bool { return items[i].Key < items[j].Key })
 	encoded, err := json.Marshal(items)

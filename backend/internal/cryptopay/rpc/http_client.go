@@ -12,8 +12,10 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/egress/urlpolicy"
 )
 
-type lookupIPAddrFunc func(context.Context, string) ([]net.IPAddr, error)
-type dialContextFunc func(context.Context, string, string) (net.Conn, error)
+type (
+	lookupIPAddrFunc func(context.Context, string) ([]net.IPAddr, error)
+	dialContextFunc  func(context.Context, string, string) (net.Conn, error)
+)
 
 type publicRPCNetwork struct {
 	lookup lookupIPAddrFunc

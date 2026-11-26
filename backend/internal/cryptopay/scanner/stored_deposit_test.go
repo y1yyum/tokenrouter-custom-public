@@ -9,8 +9,10 @@ import (
 )
 
 func storedFor(tr Transfer, amount string) StoredDeposit {
-	return StoredDeposit{Chain: tr.Chain, TxHash: tr.TxHash, LogIndex: tr.LogIndex, From: tr.From, To: tr.To,
-		Token: tr.Token, Amount: amount, BlockNumber: tr.BlockNumber, BlockHash: tr.BlockHash}
+	return StoredDeposit{
+		Chain: tr.Chain, TxHash: tr.TxHash, LogIndex: tr.LogIndex, From: tr.From, To: tr.To,
+		Token: tr.Token, Amount: amount, BlockNumber: tr.BlockNumber, BlockHash: tr.BlockHash,
+	}
 }
 
 // verifyStored binds the fixture pool to the chain first, exactly like the

@@ -1,13 +1,3 @@
-// Package explorer talks to Etherscan-compatible account APIs (Etherscan v2,
-// BscScan v2, and any host exposing the same module/action contract).
-//
-// It exists because a native-coin (ETH/BNB) transfer is only visible in a
-// transaction, never in a log. Reading every block with full transaction bodies
-// costs one request per block — 28800 a day on BSC — which is what a provider
-// package counts. One txlist call per address returns every ordinary
-// transaction that touched that address, so the request count scales with the
-// number of watched addresses and the polling interval instead of with the
-// chain's block rate.
 package explorer
 
 import (
@@ -22,6 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"time"
+)
+
+// Errors callers distinguish: a missing key must never be retried forever, and
+// it must never be treated as "no deposits".
+var (
+	ErrNoAPIKey     = errors.New("explorer: no API key configured")
+	ErrNoEndpoint   = errors.New("explorer: no endpoint configured for chain")
+	ErrUnauthorized = errors.New("explorer: API key rejected")
 )
 
 // Tx is one ordinary transaction as the account API reports it. Value is the
@@ -57,24 +55,12 @@ type Config struct {
 	Sleep func(context.Context, time.Duration) error
 }
 
-// Errors callers distinguish: a missing key must never be retried forever, and
-// it must never be treated as "no deposits".
-var (
-	ErrNoAPIKey     = errors.New("explorer: no API key configured")
-	ErrNoEndpoint   = errors.New("explorer: no endpoint configured for chain")
-	ErrUnauthorized = errors.New("explorer: API key rejected")
-)
-
 // APIError is a provider answer that is not a transaction list.
 type APIError struct {
 	Message string
 	Detail  string
 	// Retryable marks a transient provider/transport failure.
 	Retryable bool
-}
-
-func (e *APIError) Error() string {
-	return fmt.Sprintf("explorer: %s: %s", e.Message, e.Detail)
 }
 
 // Client is safe for concurrent use.
@@ -85,6 +71,10 @@ type Client struct {
 	retries   int
 	backoff   time.Duration
 	sleep     func(context.Context, time.Duration) error
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("explorer: %s: %s", e.Message, e.Detail)
 }
 
 // NewClient validates the configuration. An empty API key is allowed so the

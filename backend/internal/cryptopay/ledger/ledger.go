@@ -1,9 +1,3 @@
-// Package ledger turns observed on-chain transfers into credited balances.
-//
-// Safety rails:
-//   - unique (chain, tx_hash, log_index) makes crediting idempotent;
-//   - transfers FROM our own addresses (sweeps, gas top-ups) are excluded so
-//     the system never credits itself.
 package ledger
 
 import (
@@ -17,17 +11,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/shopspring/decimal"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/nativeprice"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
-	"github.com/shopspring/decimal"
 )
-
-// ErrCreditEvidence requires manual reconciliation of an existing grant.
-var ErrCreditEvidence = errors.New("deposit credit evidence requires review")
-
-// creditAdmission records which observation authorizes the wallet grant.
-type creditAdmission int
 
 const (
 	// Scanner finality, automatic instant credit and operator receipt
@@ -35,7 +24,26 @@ const (
 	finalCredit creditAdmission = iota
 	instantCredit
 	operatorCredit
+
+	// balanceScale is the internal balance precision (payment orders and the
+	// fulfillment pipeline round to 3 decimals). Native credits truncate to it so
+	// a fractional unit is never rounded up into free balance; stablecoins keep
+	// their existing rounding path untouched.
+	balanceScale = 3
+
+	// Reason codes stored on ignored rows and echoed to the depositor, so a
+	// rejected transfer never looks like a random failure.
+	ReasonBelowMin       = "below_min"
+	ReasonAboveMax       = "above_max"
+	ReasonUnassigned     = "address_unassigned"
+	ReasonUnknownAddress = "address_unknown"
 )
+
+// ErrCreditEvidence requires manual reconciliation of an existing grant.
+var ErrCreditEvidence = errors.New("deposit credit evidence requires review")
+
+// creditAdmission records which observation authorizes the wallet grant.
+type creditAdmission int
 
 // Creditor is the fulfillment surface the ledger needs. Implemented by an
 // adapter over the existing payment service; tests substitute a fake.
@@ -113,20 +121,15 @@ type Ledger struct {
 	onUnmatched func(ctx context.Context, t scanner.Transfer, reason string)
 }
 
-// balanceScale is the internal balance precision (payment orders and the
-// fulfillment pipeline round to 3 decimals). Native credits truncate to it so
-// a fractional unit is never rounded up into free balance; stablecoins keep
-// their existing rounding path untouched.
-const balanceScale = 3
-
-// Reason codes stored on ignored rows and echoed to the depositor, so a
-// rejected transfer never looks like a random failure.
-const (
-	ReasonBelowMin       = "below_min"
-	ReasonAboveMax       = "above_max"
-	ReasonUnassigned     = "address_unassigned"
-	ReasonUnknownAddress = "address_unknown"
-)
+type depositState struct {
+	status          string
+	grantRecorded   bool // wallet evidence includes a timestamp or provisional marker
+	orderID, userID sql.NullInt64
+	credit          sql.NullFloat64
+	priceUSD        sql.NullString
+	priceAt         sql.NullTime
+	priceSource     sql.NullString
+}
 
 // ReasonText renders a stored reason code for the user-facing history.
 func ReasonText(code string, minAmount, maxAmount float64) string {
@@ -534,16 +537,6 @@ func (l *Ledger) touchPending(ctx context.Context, t scanner.Transfer) {
 		slog.Warn("[cryptopay] failed to rotate native deposit retry clock",
 			"chain", t.Chain, "tx", t.TxHash, "log_index", t.LogIndex, "error", err)
 	}
-}
-
-type depositState struct {
-	status          string
-	grantRecorded   bool // wallet evidence includes a timestamp or provisional marker
-	orderID, userID sql.NullInt64
-	credit          sql.NullFloat64
-	priceUSD        sql.NullString
-	priceAt         sql.NullTime
-	priceSource     sql.NullString
 }
 
 func (l *Ledger) existingDeposit(ctx context.Context, t scanner.Transfer) (depositState, error) {

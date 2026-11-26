@@ -12,9 +12,41 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
+)
+
+const (
+	receiptAbsent receiptState = iota
+	receiptWaiting
+	receiptConfirmed
+	receiptReverted
+
+	// Receipt observation reasons. This is the complete diagnostic vocabulary for
+	// "why did a mined sweep not advance": the durable payment record is redacted
+	// (rpc.SafeRecordedError collapses anything it cannot classify into one
+	// sentence), so the only place the real cause can survive is a structured log
+	// with a fixed reason. Keep every value short, stable and free of node text.
+	reasonReceiptConfirmed  = "receipt_confirmed"
+	reasonReceiptAbsent     = "receipt_absent"
+	reasonReceiptIncomplete = "receipt_incomplete"
+	reasonReceiptReverted   = "receipt_reverted"
+	reasonCanonicalMismatch = "canonical_mismatch"
+	reasonCanonicalUnread   = "canonical_unreadable"
+	reasonDepthShort        = "depth_insufficient"
+	reasonFinalityPending   = "finality_pending"
+	reasonFinalityMissing   = "finality_unavailable"
+	reasonRPCFailure        = "rpc_failure"
+
+	// maxObservationAttempts bounds how many endpoints one positive-evidence search
+	// may ask. A negative answer is only believed after every allowed attempt, so
+	// one endpoint that lags, prunes or lies cannot veto a receipt another endpoint
+	// already has. Three is enough to survive one lagging and one failing node
+	// without turning every poll into a pool-wide scan; rotation advances the start
+	// index on each call, so consecutive attempts land on different endpoints.
+	maxObservationAttempts = 3
 )
 
 var (
@@ -32,7 +64,34 @@ var (
 	errGasPayerUnderfunded = errors.New("gas wallet native balance cannot cover another top-up; fund the gas wallet and the sweep will resume")
 	// errGasQuoteExceedsBudget is a temporary market condition, not a failure.
 	errGasQuoteExceedsBudget = errors.New("RPC gas quote exceeds the configured native funding budget")
+
+	// Durable phrases for an observation that is not (yet) a confirmation. Both are
+	// recognised by rpc.SafeRecordedError, so a payment record keeps the reason
+	// instead of collapsing it into the generic operation sentence.
+	errReceiptIncomplete = errors.New("incomplete or mismatched receipt")
+	errNotCanonical      = errors.New("receipt block is no longer canonical")
 )
+
+type receiptState int
+
+// receiptFields is the part of a receipt that decides confirmation.
+type receiptFields struct {
+	Status      string
+	BlockNumber string
+	BlockHash   string
+}
+
+// finalityOutcome is the result of asking the chain where its finality tag is.
+// Available is false when no configured endpoint serves any tag for this chain:
+// the caller then keeps the configured depth rule, which is the policy that
+// governed confirmation before the tag check existed. Reason is the fixed
+// diagnostic phrase to log, never node text.
+type finalityOutcome struct {
+	Final     bool
+	Available bool
+	Tag       string
+	Height    uint64
+}
 
 func (e *Executor) prepareGas(ctx context.Context, pool *rpc.Pool, j *sweepJob, amount, price *big.Int) error {
 	// A zero (or negative) top-up cannot help the child and would only produce a
@@ -77,9 +136,11 @@ func (e *Executor) prepareGas(ctx context.Context, pool *rpc.Pool, j *sweepJob, 
 		return err
 	}
 	idx := j.DerivationIndex
-	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{Index: hot.Index, Kind: "gas", GasIndex: &idx,
+	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{
+		Index: hot.Index, Kind: "gas", GasIndex: &idx,
 		ChainID: ChainIDs[j.Chain], Token: "native", To: j.Address, Amount: amount.String(),
-		Nonce: nonce, GasPrice: price.String(), GasLimit: 21000})
+		Nonce: nonce, GasPrice: price.String(), GasLimit: 21000,
+	})
 	if err != nil {
 		return err
 	}
@@ -103,9 +164,11 @@ func (e *Executor) prepareSweep(ctx context.Context, pool *rpc.Pool, j *sweepJob
 	// A native coin sweep is a plain value transfer: intrinsic gas only, no
 	// calldata. An ERC-20 sweep needs the larger contract-call budget.
 	gasLimit := e.sweepGasLimitFor(j.Chain, j.Token)
-	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{Index: j.DerivationIndex, Kind: "sweep",
+	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{
+		Index: j.DerivationIndex, Kind: "sweep",
 		ChainID: ChainIDs[j.Chain], Token: j.Token, To: j.Destination, Amount: j.RawAmount.String(),
-		Nonce: nonce, GasPrice: price.String(), GasLimit: gasLimit})
+		Nonce: nonce, GasPrice: price.String(), GasLimit: gasLimit,
+	})
 	if err != nil {
 		return err
 	}
@@ -163,33 +226,6 @@ func validateSigned(raw, chain, from, to, token string, amount *big.Int, nonce, 
 	return tx.Hash().Hex(), nil
 }
 
-type receiptState int
-
-const (
-	receiptAbsent receiptState = iota
-	receiptWaiting
-	receiptConfirmed
-	receiptReverted
-)
-
-// Receipt observation reasons. This is the complete diagnostic vocabulary for
-// "why did a mined sweep not advance": the durable payment record is redacted
-// (rpc.SafeRecordedError collapses anything it cannot classify into one
-// sentence), so the only place the real cause can survive is a structured log
-// with a fixed reason. Keep every value short, stable and free of node text.
-const (
-	reasonReceiptConfirmed  = "receipt_confirmed"
-	reasonReceiptAbsent     = "receipt_absent"
-	reasonReceiptIncomplete = "receipt_incomplete"
-	reasonReceiptReverted   = "receipt_reverted"
-	reasonCanonicalMismatch = "canonical_mismatch"
-	reasonCanonicalUnread   = "canonical_unreadable"
-	reasonDepthShort        = "depth_insufficient"
-	reasonFinalityPending   = "finality_pending"
-	reasonFinalityMissing   = "finality_unavailable"
-	reasonRPCFailure        = "rpc_failure"
-)
-
 // observeTransaction logs one receipt observation. It never receives an
 // endpoint URL, a credential or raw node text: rpc.HostOf keeps only the
 // hostname and rpc.DetailOf sanitises the node's own words before they are
@@ -209,14 +245,6 @@ func logRPCFailure(chain, hash, reason string, err error) {
 		"detail", rpc.DetailOf(err), "error", rpc.SafeError(err))
 }
 
-// maxObservationAttempts bounds how many endpoints one positive-evidence search
-// may ask. A negative answer is only believed after every allowed attempt, so
-// one endpoint that lags, prunes or lies cannot veto a receipt another endpoint
-// already has. Three is enough to survive one lagging and one failing node
-// without turning every poll into a pool-wide scan; rotation advances the start
-// index on each call, so consecutive attempts land on different endpoints.
-const maxObservationAttempts = 3
-
 func observationAttempts(pool *rpc.Pool) int {
 	n := len(pool.Endpoints())
 	switch {
@@ -226,21 +254,6 @@ func observationAttempts(pool *rpc.Pool) int {
 		return maxObservationAttempts
 	}
 	return n
-}
-
-// Durable phrases for an observation that is not (yet) a confirmation. Both are
-// recognised by rpc.SafeRecordedError, so a payment record keeps the reason
-// instead of collapsing it into the generic operation sentence.
-var (
-	errReceiptIncomplete = errors.New("incomplete or mismatched receipt")
-	errNotCanonical      = errors.New("receipt block is no longer canonical")
-)
-
-// receiptFields is the part of a receipt that decides confirmation.
-type receiptFields struct {
-	Status      string
-	BlockNumber string
-	BlockHash   string
 }
 
 // readReceipt asks the pool for the receipt until an endpoint returns a usable
@@ -405,18 +418,6 @@ func finalityTags(chain string) []string {
 		return []string{"finalized"}
 	}
 	return []string{"finalized", "safe"}
-}
-
-// finalityOutcome is the result of asking the chain where its finality tag is.
-// Available is false when no configured endpoint serves any tag for this chain:
-// the caller then keeps the configured depth rule, which is the policy that
-// governed confirmation before the tag check existed. Reason is the fixed
-// diagnostic phrase to log, never node text.
-type finalityOutcome struct {
-	Final     bool
-	Available bool
-	Tag       string
-	Height    uint64
 }
 
 // blockIsFinal reports whether the chain considers a block final.

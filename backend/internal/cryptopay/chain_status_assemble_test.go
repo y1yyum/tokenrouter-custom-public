@@ -11,8 +11,10 @@ var assembleNow = time.Unix(1_700_000_000, 0)
 
 func baseAssemble() chainAssembleInput {
 	return chainAssembleInput{
-		Plan: chainPlan{Chain: ChainBSC, Enabled: true, Confirmations: 3, ScanRange: 2000,
-			Endpoints: []string{"https://rpc.ankr.com/x", "https://bsc.drpc.org/y"}},
+		Plan: chainPlan{
+			Chain: ChainBSC, Enabled: true, Confirmations: 3, ScanRange: 2000,
+			Endpoints: []string{"https://rpc.ankr.com/x", "https://bsc.drpc.org/y"},
+		},
 		Probes:    []nodeProbe{okProbe(1000, 50*time.Millisecond), okProbe(998, 60*time.Millisecond)},
 		SlowAfter: nodeSlowAfter,
 		Cursor:    &chainCursor{Block: 990, UpdatedAt: assembleNow.Add(-20 * time.Second)},

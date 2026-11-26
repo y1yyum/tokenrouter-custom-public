@@ -3,6 +3,7 @@ package cryptopay
 import (
 	"context"
 	"errors"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 )
 

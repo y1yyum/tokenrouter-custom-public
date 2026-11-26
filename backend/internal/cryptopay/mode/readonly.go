@@ -1,4 +1,3 @@
-// Package mode holds the local shared-database review safety gate.
 package mode
 
 import (

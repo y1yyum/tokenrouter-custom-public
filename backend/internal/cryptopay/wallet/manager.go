@@ -7,14 +7,15 @@ import (
 	"database/sql"
 	"encoding/hex"
 	"errors"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	"github.com/ethereum/go-ethereum/common"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 )
 
 // Manager owns seed residency and serializes every operation that uses seeds.

@@ -10,13 +10,17 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
+
+type denySigningWallet struct{ *fixtureWallet }
 
 // expectGasRewrite expects the write that stores re-signed gas bytes: still
 // gas_pending at nonce 7, with raw bytes that differ from the earlier ones.
 func expectGasRewrite(m sqlmock.Sqlmock, oldRaw string, rewritten *atomic.Bool) {
-	args := []driver.Value{int64(1), "gas_pending", sqlmock.AnyArg(), "2", sqlmock.AnyArg(), sqlmock.AnyArg(), "7",
+	args := []driver.Value{
+		int64(1), "gas_pending", sqlmock.AnyArg(), "2", sqlmock.AnyArg(), sqlmock.AnyArg(), "7",
 		captureArg{func(v driver.Value) bool {
 			raw, ok := v.(string)
 			if ok && strings.HasPrefix(raw, "0x02") && raw != oldRaw {
@@ -24,7 +28,8 @@ func expectGasRewrite(m sqlmock.Sqlmock, oldRaw string, rewritten *atomic.Bool) 
 				return true
 			}
 			return false
-		}}}
+		}},
+	}
 	for i := 8; i < 14; i++ {
 		args = append(args, sqlmock.AnyArg())
 	}
@@ -135,8 +140,6 @@ func TestStuckGasTopUpIsNotReplacedWithoutAuthorization(t *testing.T) {
 	}
 }
 
-type denySigningWallet struct{ *fixtureWallet }
-
 func (denySigningWallet) SignEVM(context.Context, EVMSignRequest) (string, error) {
 	return "", errors.New("wallet signing is disabled; no new broadcast was sent")
 }
@@ -176,8 +179,10 @@ func TestARealRejectionKeepsItsReason(t *testing.T) {
 func TestGivingUpKeepsTheRealReason(t *testing.T) {
 	e, m, c, entry := setupExecutor(t)
 	c.live = 9_000_000 // less than the planned 10_000_000
-	j := &sweepJob{PlanEntry: entry, ID: 1, Version: 1, Revision: maxSweepAttempts,
-		Destination: testDestination, Status: "planned", Confirmations: 2}
+	j := &sweepJob{
+		PlanEntry: entry, ID: 1, Version: 1, Revision: maxSweepAttempts,
+		Destination: testDestination, Status: "planned", Confirmations: 2,
+	}
 	expectRunStart(m, j)
 	want := "live balance 9000000 is below planned amount 10000000 (gave up after 25 attempts)"
 	args := []driver.Value{int64(1), "failed", want, "2"}

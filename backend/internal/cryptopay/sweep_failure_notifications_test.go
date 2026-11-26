@@ -11,9 +11,25 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 )
+
+type sweepAlertStateArgument struct {
+	check func(sweepFailureAlert) bool
+}
+
+type sweepAlertBatchArgument struct {
+	check func([]struct {
+		Key   string            `json:"key"`
+		Value sweepFailureAlert `json:"value"`
+	}) bool
+}
+
+type cancelCallerPush struct{ cancel context.CancelFunc }
+
+type waitingSweepPush struct{ calls int }
 
 func TestSweepFailureAlertsCoverFailedPendingAndManualReviewWithoutReportingNormalWaits(t *testing.T) {
 	for _, test := range []struct {
@@ -57,10 +73,6 @@ func TestSweepFailureAlertsSeparateTasksAndNeverExposeSecrets(t *testing.T) {
 	require.NotContains(t, unknown[0].body, "fixture-")
 }
 
-type sweepAlertStateArgument struct {
-	check func(sweepFailureAlert) bool
-}
-
 func (arg sweepAlertStateArgument) Match(value driver.Value) bool {
 	raw, ok := value.(string)
 	if !ok || strings.Contains(raw, "fixture-secret") {
@@ -75,13 +87,6 @@ func encodeSweepAlert(t *testing.T, state sweepFailureAlert) string {
 	encoded, err := json.Marshal(state)
 	require.NoError(t, err)
 	return string(encoded)
-}
-
-type sweepAlertBatchArgument struct {
-	check func([]struct {
-		Key   string            `json:"key"`
-		Value sweepFailureAlert `json:"value"`
-	}) bool
 }
 
 func (arg sweepAlertBatchArgument) Match(value driver.Value) bool {
@@ -109,7 +114,8 @@ func TestSweepFailureBatchPersistsAllDistinctTasksInOneOrderedStatement(t *testi
 	mock.ExpectExec("INSERT INTO settings").WithArgs(sweepAlertBatchArgument{check: func(items []struct {
 		Key   string            `json:"key"`
 		Value sweepFailureAlert `json:"value"`
-	}) bool {
+	},
+	) bool {
 		if len(items) != 200 {
 			return false
 		}
@@ -157,8 +163,6 @@ func TestSweepFailurePushFailureRemainsPendingAndSuccessfulRetryAcknowledges(t *
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-type cancelCallerPush struct{ cancel context.CancelFunc }
-
 func (p cancelCallerPush) PushToAdmins(ctx context.Context, _, _, _ string) error {
 	p.cancel()
 	return nil // the remote accepted the push just before the caller disconnected
@@ -183,8 +187,6 @@ func TestSweepFailureDeliveryAcknowledgmentSurvivesCallerCancellation(t *testing
 	require.ErrorIs(t, ctx.Err(), context.Canceled)
 	require.NoError(t, mock.ExpectationsWereMet())
 }
-
-type waitingSweepPush struct{ calls int }
 
 func (push *waitingSweepPush) PushToAdmins(ctx context.Context, _, _, _ string) error {
 	push.calls++

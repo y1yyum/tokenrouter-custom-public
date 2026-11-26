@@ -1,6 +1,3 @@
-// Package rpc provides a rotating JSON-RPC client pool for the deposit
-// scanners. Endpoints come from admin settings; the pool never hardcodes
-// any provider.
 package rpc
 
 import (
@@ -21,6 +18,11 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
+// CallEndpoint is Call plus the endpoint that supplied the result. A caller
+// that must not trust an answer from a node that has not caught up can then ask
+// that exact node instead of guessing which member of the rotation replied.
+const perEndpointCallTimeout = 15 * time.Second
+
 // Pool rotates through a chain's endpoints, preferring the last healthy one.
 type Pool struct {
 	mu           sync.RWMutex
@@ -38,6 +40,21 @@ type Pool struct {
 	gasMu    sync.Mutex
 	gasAt    time.Time
 	gasValue *big.Int
+}
+
+type rpcRequest struct {
+	JSONRPC string `json:"jsonrpc"`
+	ID      int    `json:"id"`
+	Method  string `json:"method"`
+	Params  any    `json:"params,omitempty"`
+}
+
+type rpcResponse struct {
+	Result json.RawMessage `json:"result"`
+	Error  *struct {
+		Code    int    `json:"code"`
+		Message string `json:"message"`
+	} `json:"error"`
 }
 
 // NewPool builds a pool from a comma-separated endpoint list.
@@ -249,11 +266,6 @@ func (p *Pool) Call(ctx context.Context, method string, params any) (json.RawMes
 	return result, err
 }
 
-// CallEndpoint is Call plus the endpoint that supplied the result. A caller
-// that must not trust an answer from a node that has not caught up can then ask
-// that exact node instead of guessing which member of the rotation replied.
-const perEndpointCallTimeout = 15 * time.Second
-
 func (p *Pool) CallEndpoint(ctx context.Context, method string, params any) (json.RawMessage, string, error) {
 	p.mu.RLock()
 	endpoints := append([]string(nil), p.endpoints...)
@@ -433,21 +445,6 @@ func (p *Pool) RequireSyncedTo(ctx context.Context, endpoint string, height uint
 	return head, nil
 }
 
-type rpcRequest struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      int    `json:"id"`
-	Method  string `json:"method"`
-	Params  any    `json:"params,omitempty"`
-}
-
-type rpcResponse struct {
-	Result json.RawMessage `json:"result"`
-	Error  *struct {
-		Code    int    `json:"code"`
-		Message string `json:"message"`
-	} `json:"error"`
-}
-
 func (p *Pool) callOne(ctx context.Context, endpoint, method string, params any) (json.RawMessage, error) {
 	// Every caller (rotation, EndpointHead, ConfirmedNonce, GasPrice, receipts)
 	// must be bounded: a node that accepts the connection but never answers
@@ -507,8 +504,10 @@ func (p *Pool) callOne(ctx context.Context, endpoint, method string, params any)
 		// The node controls this text: bound it before anything runs over it.
 		message := truncateNodeMessage(decoded.Error.Message)
 		reason, limit := classifyRemoteDetail(message)
-		return nil, &Failure{Kind: "remote", RPCCode: decoded.Error.Code,
-			Reason: reason, Message: message, Host: host, SpanLimit: limit}
+		return nil, &Failure{
+			Kind: "remote", RPCCode: decoded.Error.Code,
+			Reason: reason, Message: message, Host: host, SpanLimit: limit,
+		}
 	}
 	if method == "eth_getLogs" && !validLogsResult(decoded.Result) {
 		return nil, &Failure{Kind: "response", Host: host}

@@ -95,6 +95,7 @@ docker compose -f deploy/docker-compose.dev.yml up --build
 | `identity`、`team`、`apikey` | 仅测试使用的私有转接放进匹配标签的 `_test.go`，生产代码不保留算法副本 |
 | `usage`、`audit`、`ops` | 用户、Key、团队用量 SQL 参与函数复用调用方连接（禁逐条查或分页后排序）；核心不依赖旧实体、Gin 或具体存储；`querycache` 与 `logevent` 按纯包约束；历史许可精确到文件与 import |
 | `upstream` | 具体平台互不导入，不接收旧 Provider、Gin 或完整 config；共享 Google 认证在 `upstream/internal/googleauth`，纯报文转换在 `protocol`，授权会话与凭据持久化在 `provider`，重试时机由 `gateway` 决策 |
+| `cryptopay` | 按扫描、账本、钱包、归集和 HTTP 适配包分别登记生产与测试依赖。密钥分片编解码不访问数据库；宿主资金存储、设置与迁移夹具限于各自的接入文件。新增子包须单独登记。 |
 | `notification`、`site`、`moderation`、`search` | 邮件凭据归 `identity`，阈值归 `billing`，审核跨身份事务复用 SQL 连接，文件读取归 `site/filesystem`，搜索 HTTP 与 Redis 分离；适配层不复制核心状态或算法 |
 | `gateway` | `gateway/execution` 叶子包定义请求值与 `Execute`，禁反导根执行器、`text` 或适配层；提供商循环、同提供商恢复与协议转换各保唯一实现；执行适配层仅负责单步调用与数据整理 |
 | `scheduler` | 评分、排序、会话与等待不依赖旧实体、Gin 或存储客户端；`scheduler/rediscache/codec` 维护缓存编解码格式，详见[提供商调度与缓存一致性](../architecture/provider_scheduling_and_cache.md) |

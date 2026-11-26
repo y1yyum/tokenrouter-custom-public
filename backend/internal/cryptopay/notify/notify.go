@@ -1,10 +1,3 @@
-// Package notify delivers crypto wallet operation events to the operator's
-// channels: a generic JSON webhook (Bark-compatible) and email.
-//
-// Delivery is strictly best effort. A crypto signature, sweep or configuration
-// change must never fail or stall because a phone or a mail server is down, so
-// events are handed to a bounded queue and delivered by a background worker.
-// Delivery failures are logged and dropped; they never reach the caller.
 package notify
 
 import (
@@ -23,15 +16,29 @@ import (
 	"time"
 )
 
-// DefaultTimeout bounds one delivery attempt. It is deliberately short: the
-// notification path is asynchronous, but a worker stuck on a dead endpoint
-// would still make every later event late.
-const DefaultTimeout = 5 * time.Second
+const (
+	// DefaultTimeout bounds one delivery attempt. It is deliberately short: the
+	// notification path is asynchronous, but a worker stuck on a dead endpoint
+	// would still make every later event late.
+	DefaultTimeout = 5 * time.Second
 
-// DefaultQueueSize bounds the number of queued events. Crypto admin operations
-// are rare, so a full queue means the configured receiver is gone, not that
-// the operator is busy: dropping is safer than growing memory.
-const DefaultQueueSize = 64
+	// DefaultQueueSize bounds the number of queued events. Crypto admin operations
+	// are rare, so a full queue means the configured receiver is gone, not that
+	// the operator is busy: dropping is safer than growing memory.
+	DefaultQueueSize = 64
+)
+
+// eventLabels are the human-readable operation names. Unknown events fall back
+// to the raw event id so a new event is still readable.
+var eventLabels = map[string]string{
+	"signer.setup":              "分片创建",
+	"signer.resplit":            "重新分片",
+	"signer.verify_share":       "分片校验",
+	"signer.unlock":             "签名器解锁",
+	"signer.lock":               "签名器锁定",
+	"sweep.destination_changed": "归集地址变更",
+	"sweep.executed":            "归集执行",
+}
 
 // Event is the structured payload of one crypto operation. It must never carry
 // shard material, mnemonics, private keys, TOTP seeds or the vault data key.
@@ -76,6 +83,32 @@ type Sink interface {
 // Option configures a Dispatcher.
 type Option func(*Dispatcher)
 
+// Dispatcher is the asynchronous, bounded Notifier used in production.
+type Dispatcher struct {
+	provider ConfigProvider
+	sinks    []Sink
+	timeout  time.Duration
+	logger   *slog.Logger
+
+	queue chan Event
+	done  chan struct{}
+	once  sync.Once
+}
+
+// WebhookSink POSTs one JSON document to a generic operator endpoint. A Bark
+// device URL (https://api.day.app/<device-key>) works as-is because the payload
+// carries the title/body fields Bark expects in addition to the structured
+// event fields.
+type WebhookSink struct {
+	client *http.Client
+}
+
+// EmailSink sends one plain-text mail through the project's existing mail
+// sender. An empty recipient keeps the channel disabled.
+type EmailSink struct {
+	sender EmailSender
+}
+
 // WithSinks sets the delivery channels. Nil sinks are ignored.
 func WithSinks(sinks ...Sink) Option {
 	return func(d *Dispatcher) {
@@ -112,18 +145,6 @@ func WithLogger(logger *slog.Logger) Option {
 			d.logger = logger
 		}
 	}
-}
-
-// Dispatcher is the asynchronous, bounded Notifier used in production.
-type Dispatcher struct {
-	provider ConfigProvider
-	sinks    []Sink
-	timeout  time.Duration
-	logger   *slog.Logger
-
-	queue chan Event
-	done  chan struct{}
-	once  sync.Once
 }
 
 // NewDispatcher starts the delivery worker. Callers should keep one Dispatcher
@@ -209,14 +230,6 @@ func (d *Dispatcher) deliver(ev Event) {
 	}
 }
 
-// WebhookSink POSTs one JSON document to a generic operator endpoint. A Bark
-// device URL (https://api.day.app/<device-key>) works as-is because the payload
-// carries the title/body fields Bark expects in addition to the structured
-// event fields.
-type WebhookSink struct {
-	client *http.Client
-}
-
 // NewWebhookSink returns a webhook sink with its own timeout-bounded client.
 func NewWebhookSink() *WebhookSink {
 	return &WebhookSink{client: &http.Client{Timeout: DefaultTimeout}}
@@ -272,12 +285,6 @@ func webhookPayload(ev Event) map[string]any {
 	return payload
 }
 
-// EmailSink sends one plain-text mail through the project's existing mail
-// sender. An empty recipient keeps the channel disabled.
-type EmailSink struct {
-	sender EmailSender
-}
-
 // NewEmailSink returns an email sink. A nil sender is tolerated and turns the
 // sink into a no-op.
 func NewEmailSink(sender EmailSender) *EmailSink {
@@ -292,18 +299,6 @@ func (s *EmailSink) Send(ctx context.Context, cfg Config, ev Event) error {
 		return nil
 	}
 	return s.sender.SendEmail(ctx, recipient, Title(ev), Body(ev))
-}
-
-// eventLabels are the human-readable operation names. Unknown events fall back
-// to the raw event id so a new event is still readable.
-var eventLabels = map[string]string{
-	"signer.setup":              "分片创建",
-	"signer.resplit":            "重新分片",
-	"signer.verify_share":       "分片校验",
-	"signer.unlock":             "签名器解锁",
-	"signer.lock":               "签名器锁定",
-	"sweep.destination_changed": "归集地址变更",
-	"sweep.executed":            "归集执行",
 }
 
 // Title is the short human-readable event name.

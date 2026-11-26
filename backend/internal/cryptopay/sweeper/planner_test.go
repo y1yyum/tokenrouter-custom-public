@@ -12,6 +12,14 @@ type fakeReader struct {
 	balances map[string][]AddressBalance
 }
 
+// The plan shown in the console must say whether a child address still needs
+// native gas before the transfer can run. Without this the operator sees
+// NeedsGasTopUp=false right up to the failed execution.
+type fakeNode struct {
+	native   *big.Int
+	gasPrice *big.Int
+}
+
 func (f *fakeReader) UnsweptBalances(_ context.Context, chain string) ([]AddressBalance, error) {
 	return f.balances[chain], nil
 }
@@ -81,14 +89,6 @@ func TestPlannerSkipsZeroBalances(t *testing.T) {
 	if len(plan.Entries) != 0 {
 		t.Fatalf("expected no entries for zero balances, got %d", len(plan.Entries))
 	}
-}
-
-// The plan shown in the console must say whether a child address still needs
-// native gas before the transfer can run. Without this the operator sees
-// NeedsGasTopUp=false right up to the failed execution.
-type fakeNode struct {
-	native   *big.Int
-	gasPrice *big.Int
 }
 
 func (f *fakeNode) Balance(context.Context, string) (*big.Int, error) { return f.native, nil }

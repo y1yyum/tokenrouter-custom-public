@@ -26,31 +26,44 @@ const (
 	// through an unobserved interval just to accommodate a slow scanner.
 	depositNetworkTTL       = 2 * time.Minute
 	depositNetworkIOTimeout = 350 * time.Millisecond
-)
 
-// Customer-facing backlog thresholds. A scan cursor is almost always a little
-// behind the confirmed head: BSC mines one block every ~3s while the scanner
-// covers the interval in batches, so "tens of blocks behind" is the normal,
-// healthy state and must never raise a notice. Only a backlog measured in
-// chain time is user-relevant, so a block count is converted with the network's
-// own block interval before it is classified:
-//
-//	100 BSC blocks (3s each)   = 5 minutes
-//	100 ETH blocks (12s each)  = 20 minutes
-//	100 Arbitrum blocks (.25s) = 25 seconds
-//
-// Bands (a backlog exactly at a boundary stays in the calmer band, so the
-// notice never appears one second earlier than the stated window):
-//
-//	<= 5 min   -> available, the page shows no notice at all
-//	5–30 min   -> slow, a calm "network is slower" note
-//	> 30 min   -> delayed, a real delay
-//
-// Scan/RPC failures keep their own path (delayed, then stalled) because they
-// are abnormal regardless of how many blocks the cursor reached.
-const (
+	// Customer-facing backlog thresholds. A scan cursor is almost always a little
+	// behind the confirmed head: BSC mines one block every ~3s while the scanner
+	// covers the interval in batches, so "tens of blocks behind" is the normal,
+	// healthy state and must never raise a notice. Only a backlog measured in
+	// chain time is user-relevant, so a block count is converted with the network's
+	// own block interval before it is classified:
+	//
+	//	100 BSC blocks (3s each)   = 5 minutes
+	//	100 ETH blocks (12s each)  = 20 minutes
+	//	100 Arbitrum blocks (.25s) = 25 seconds
+	//
+	// Bands (a backlog exactly at a boundary stays in the calmer band, so the
+	// notice never appears one second earlier than the stated window):
+	//
+	//	<= 5 min   -> available, the page shows no notice at all
+	//	5–30 min   -> slow, a calm "network is slower" note
+	//	> 30 min   -> delayed, a real delay
+	//
+	// Scan/RPC failures keep their own path (delayed, then stalled) because they
+	// are abnormal regardless of how many blocks the cursor reached.
 	depositLagNoticeAfter  = 5 * time.Minute
 	depositLagDelayedAfter = 30 * time.Minute
+
+	// depositChainBlockTimeDefault applies to a network without an entry above.
+	depositChainBlockTimeDefault = 3 * time.Second
+
+	// ETA model. The scanner polls every 5s, so even a fully caught-up network pays
+	// one scan period before a transfer is seen. The rest is waiting:
+	//
+	//	instant credit : backlog + scan period
+	//	final credit   : confirmations × block time + backlog + scan period
+	//
+	// The result is ceiled to whole seconds and clamped so a stuck cursor cannot
+	// publish an hour-long "estimate" and an empty backlog cannot publish zero.
+	depositScanPeriod = 5 * time.Second
+	depositETAFloor   = 5 * time.Second
+	depositETACeiling = 30 * time.Minute
 )
 
 // depositChainBlockTime is the nominal block interval of each deposit network.
@@ -66,75 +79,6 @@ var depositChainBlockTime = map[string]time.Duration{
 	ChainArbitrum: 250 * time.Millisecond,
 	ChainBase:     2 * time.Second,
 	ChainXLayer:   3 * time.Second,
-}
-
-// depositChainBlockTimeDefault applies to a network without an entry above.
-const depositChainBlockTimeDefault = 3 * time.Second
-
-// depositBacklogChainTime converts an unscanned block count into how much chain
-// time it represents.
-func depositBacklogChainTime(chain string, blocks uint64) time.Duration {
-	if blocks == 0 {
-		return 0
-	}
-	interval := depositChainBlockTime[chain]
-	if interval <= 0 {
-		interval = depositChainBlockTimeDefault
-	}
-	if maxBlocks := uint64(math.MaxInt64 / int64(interval)); blocks > maxBlocks {
-		return time.Duration(math.MaxInt64)
-	}
-	return time.Duration(blocks) * interval
-}
-
-// ETA model. The scanner polls every 5s, so even a fully caught-up network pays
-// one scan period before a transfer is seen. The rest is waiting:
-//
-//	instant credit : backlog + scan period
-//	final credit   : confirmations × block time + backlog + scan period
-//
-// The result is ceiled to whole seconds and clamped so a stuck cursor cannot
-// publish an hour-long "estimate" and an empty backlog cannot publish zero.
-const (
-	depositScanPeriod = 5 * time.Second
-	depositETAFloor   = 5 * time.Second
-	depositETACeiling = 30 * time.Minute
-)
-
-// depositBacklogSeconds measures how far the durable cursor lags the confirmed
-// head in chain time. ok=false means this pass could not prove the distance
-// (no cursor yet, unmeasurable chain, or a rewind), and callers must publish
-// null rather than a fabricated number.
-func depositBacklogSeconds(o scanner.DepositScanObservation) (int64, bool) {
-	if !o.CanMeasure || o.ConfirmedHead == 0 || o.Cursor == 0 || o.Cursor > o.ConfirmedHead {
-		return 0, false
-	}
-	seconds := int64(math.Ceil(depositBacklogChainTime(o.Chain, o.ConfirmedHead-o.Cursor).Seconds()))
-	return seconds, true
-}
-
-// depositETA estimates the normal-path time to credit. backlogSeconds must be a
-// real measurement; a nil backlog yields a nil ETA.
-func depositETA(chain string, confirmations int64, instant bool, backlogSeconds *int64) *int64 {
-	if backlogSeconds == nil || confirmations < 0 {
-		return nil
-	}
-	wait := depositScanPeriod + time.Duration(*backlogSeconds)*time.Second
-	if !instant {
-		interval := depositChainBlockTime[chain]
-		if interval <= 0 {
-			interval = depositChainBlockTimeDefault
-		}
-		wait += time.Duration(confirmations) * interval
-	}
-	if wait < depositETAFloor {
-		wait = depositETAFloor
-	}
-	if wait > depositETACeiling {
-		wait = depositETACeiling
-	}
-	seconds := int64(math.Ceil(wait.Seconds()))
-	return &seconds
 }
 
 // DepositNetworkStatusReport is the customer-safe chain status read model.
@@ -187,6 +131,78 @@ type depositNetworkMonitor struct {
 	writers map[string]chan struct{}
 }
 
+type networkScanEvidence struct {
+	previous     scanner.DepositScanObservation
+	advanceProof time.Time
+	blockedAt    time.Time
+	blockedHead  uint64
+}
+
+type networkStatusPolicy struct {
+	enabled        bool
+	chains         []string
+	explicitChains bool
+	updatedAt      time.Time
+	fingerprint    string
+	// confirmations / instantCredit describe the credit rules the ETA and the
+	// instant-credit column are derived from; they travel with the fingerprint,
+	// so a config edit invalidates old observations instead of mixing them.
+	confirmations map[string]int
+	instantCredit bool
+}
+
+// depositBacklogChainTime converts an unscanned block count into how much chain
+// time it represents.
+func depositBacklogChainTime(chain string, blocks uint64) time.Duration {
+	if blocks == 0 {
+		return 0
+	}
+	interval := depositChainBlockTime[chain]
+	if interval <= 0 {
+		interval = depositChainBlockTimeDefault
+	}
+	if maxBlocks := uint64(math.MaxInt64 / int64(interval)); blocks > maxBlocks {
+		return time.Duration(math.MaxInt64)
+	}
+	return time.Duration(blocks) * interval
+}
+
+// depositBacklogSeconds measures how far the durable cursor lags the confirmed
+// head in chain time. ok=false means this pass could not prove the distance
+// (no cursor yet, unmeasurable chain, or a rewind), and callers must publish
+// null rather than a fabricated number.
+func depositBacklogSeconds(o scanner.DepositScanObservation) (int64, bool) {
+	if !o.CanMeasure || o.ConfirmedHead == 0 || o.Cursor == 0 || o.Cursor > o.ConfirmedHead {
+		return 0, false
+	}
+	seconds := int64(math.Ceil(depositBacklogChainTime(o.Chain, o.ConfirmedHead-o.Cursor).Seconds()))
+	return seconds, true
+}
+
+// depositETA estimates the normal-path time to credit. backlogSeconds must be a
+// real measurement; a nil backlog yields a nil ETA.
+func depositETA(chain string, confirmations int64, instant bool, backlogSeconds *int64) *int64 {
+	if backlogSeconds == nil || confirmations < 0 {
+		return nil
+	}
+	wait := depositScanPeriod + time.Duration(*backlogSeconds)*time.Second
+	if !instant {
+		interval := depositChainBlockTime[chain]
+		if interval <= 0 {
+			interval = depositChainBlockTimeDefault
+		}
+		wait += time.Duration(confirmations) * interval
+	}
+	if wait < depositETAFloor {
+		wait = depositETAFloor
+	}
+	if wait > depositETACeiling {
+		wait = depositETACeiling
+	}
+	seconds := int64(math.Ceil(wait.Seconds()))
+	return &seconds
+}
+
 func newDepositNetworkMonitor(store networkStatusStore, now func() time.Time) *depositNetworkMonitor {
 	m := &depositNetworkMonitor{store: store, now: now, writers: make(map[string]chan struct{}, len(evmChains))}
 	for _, chain := range evmChains {
@@ -232,13 +248,6 @@ func (m *depositNetworkMonitor) observer(fingerprint string) func(scanner.Deposi
 		default:
 		}
 	}
-}
-
-type networkScanEvidence struct {
-	previous     scanner.DepositScanObservation
-	advanceProof time.Time
-	blockedAt    time.Time
-	blockedHead  uint64
 }
 
 func (e *networkScanEvidence) observe(o scanner.DepositScanObservation) (string, time.Time) {
@@ -303,19 +312,6 @@ func (e *networkScanEvidence) observe(o scanner.DepositScanObservation) (string,
 	default:
 		return depositStatusDelayed, o.At
 	}
-}
-
-type networkStatusPolicy struct {
-	enabled        bool
-	chains         []string
-	explicitChains bool
-	updatedAt      time.Time
-	fingerprint    string
-	// confirmations / instantCredit describe the credit rules the ETA and the
-	// instant-credit column are derived from; they travel with the fingerprint,
-	// so a config edit invalidates old observations instead of mixing them.
-	confirmations map[string]int
-	instantCredit bool
 }
 
 // requiredConfirmations returns the configured final depth for a network. A

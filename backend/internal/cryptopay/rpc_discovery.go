@@ -10,16 +10,22 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/sync/singleflight"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/egress/urlpolicy"
-	"golang.org/x/sync/singleflight"
 )
 
 const (
 	rpcDiscoveryLifetime = time.Hour
 	rpcDiscoveryBackoff  = 2 * time.Minute
 	rpcDiscoveryTimeout  = 35 * time.Second
+)
+
+var (
+	automaticRPC      = newRPCDiscovery()
+	automaticRPCSlots = make(chan struct{}, 2)
 )
 
 type discoveredRPC struct {
@@ -38,9 +44,6 @@ type rpcDiscovery struct {
 	probe   func(context.Context, string, []ChainlistCandidate, []string, int) []RPCTestResult
 	now     func() time.Time
 }
-
-var automaticRPC = newRPCDiscovery()
-var automaticRPCSlots = make(chan struct{}, 2)
 
 func newRPCDiscovery() *rpcDiscovery {
 	return &rpcDiscovery{

@@ -7,10 +7,14 @@ func TestReviewWriteGateRequiresExplicitValidOptIn(t *testing.T) {
 		test, write        string
 		isolated, readOnly bool
 	}{
-		{"", "", false, false}, {"false", "true", false, false},
-		{"true", "", true, true}, {"true", "false", true, true},
-		{"true", "malformed", true, true}, {"malformed", "true", true, true},
-		{"true", "true", true, false}, {"1", "1", true, false},
+		{"", "", false, false},
+		{"false", "true", false, false},
+		{"true", "", true, true},
+		{"true", "false", true, true},
+		{"true", "malformed", true, true},
+		{"malformed", "true", true, true},
+		{"true", "true", true, false},
+		{"1", "1", true, false},
 	} {
 		t.Run(tc.test+"/"+tc.write, func(t *testing.T) {
 			t.Setenv("CRYPTO_ADMIN_TEST_MODE", tc.test)

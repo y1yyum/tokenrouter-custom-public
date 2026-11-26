@@ -19,11 +19,9 @@ import (
 // Reads remain available to review instances, and conditional writes compare
 // the raw text captured by the caller, including whitespace.
 
-var (
-	// Verify the host adapter keeps the read and conditional-write contracts
-	// needed by callers that prepare configuration edits.
-	_ AtomicSettingStore = (*ServiceSettingStore)(nil)
-)
+// Verify the host adapter keeps the read and conditional-write contracts
+// needed by callers that prepare configuration edits.
+var _ AtomicSettingStore = (*ServiceSettingStore)(nil)
 
 // ServiceSettingStore holds the host dependencies for raw crypto settings.
 type ServiceSettingStore struct {

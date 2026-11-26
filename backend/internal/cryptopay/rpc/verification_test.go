@@ -13,6 +13,8 @@ import (
 	"time"
 )
 
+var verificationFixtureID atomic.Uint64
+
 type verificationNode struct {
 	chainID string
 	results map[string]any
@@ -27,6 +29,13 @@ type verificationTransport struct {
 	nodes map[string]*verificationNode
 	mu    sync.Mutex
 	calls map[string]int
+}
+
+type verificationFixture struct {
+	pool      *Pool
+	primary   string
+	anchors   []string
+	transport *verificationTransport
 }
 
 func (f *verificationTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -75,24 +84,19 @@ func (f *verificationTransport) RoundTrip(req *http.Request) (*http.Response, er
 	if err != nil {
 		return nil, err
 	}
-	return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header),
-		Body: io.NopCloser(strings.NewReader(string(body))), Request: req}, nil
-}
-
-var verificationFixtureID atomic.Uint64
-
-type verificationFixture struct {
-	pool      *Pool
-	primary   string
-	anchors   []string
-	transport *verificationTransport
+	return &http.Response{
+		StatusCode: http.StatusOK, Header: make(http.Header),
+		Body: io.NopCloser(strings.NewReader(string(body))), Request: req,
+	}, nil
 }
 
 func newVerificationFixture(t *testing.T, count int) *verificationFixture {
 	t.Helper()
 	id := verificationFixtureID.Add(1)
-	fixture := &verificationFixture{primary: fmt.Sprintf("https://registry-%d.example/rpc", id),
-		transport: &verificationTransport{nodes: make(map[string]*verificationNode), calls: make(map[string]int)}}
+	fixture := &verificationFixture{
+		primary:   fmt.Sprintf("https://registry-%d.example/rpc", id),
+		transport: &verificationTransport{nodes: make(map[string]*verificationNode), calls: make(map[string]int)},
+	}
 	for i := 0; i < count; i++ {
 		fixture.anchors = append(fixture.anchors, fmt.Sprintf("https://reference-%d-%d.example/rpc", id, i))
 	}
@@ -135,8 +139,10 @@ func verificationReceipt(logs ...map[string]any) map[string]any {
 	if logs == nil {
 		logs = []map[string]any{}
 	}
-	return map[string]any{"status": "0x1", "blockNumber": "0x65", "blockHash": "0x" + strings.Repeat("bc", 32),
-		"transactionHash": "0x" + strings.Repeat("de", 32), "logs": logs}
+	return map[string]any{
+		"status": "0x1", "blockNumber": "0x65", "blockHash": "0x" + strings.Repeat("bc", 32),
+		"transactionHash": "0x" + strings.Repeat("de", 32), "logs": logs,
+	}
 }
 
 func uppercaseEvidence(value string) string {

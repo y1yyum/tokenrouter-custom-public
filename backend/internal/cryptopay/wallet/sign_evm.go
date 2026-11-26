@@ -4,12 +4,13 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"math/big"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 )
 
 var erc20TransferSelector = []byte{0xa9, 0x05, 0x9c, 0xbb}
@@ -100,8 +101,10 @@ func (m *Manager) SignEVM(ctx context.Context, req EVMSignRequest) (string, erro
 		data = append(data, common.LeftPadBytes(common.HexToAddress(req.To).Bytes(), 32)...)
 		data = append(data, common.LeftPadBytes(amount.Bytes(), 32)...)
 	}
-	tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(req.ChainID), Nonce: req.Nonce,
-		GasTipCap: price, GasFeeCap: price, Gas: req.GasLimit, To: &to, Value: value, Data: data})
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID: big.NewInt(req.ChainID), Nonce: req.Nonce,
+		GasTipCap: price, GasFeeCap: price, Gas: req.GasLimit, To: &to, Value: value, Data: data,
+	})
 	signed, err := types.SignTx(tx, types.LatestSignerForChainID(big.NewInt(req.ChainID)), key)
 	if err != nil {
 		return deny(errors.New("wallet signing failed"))
@@ -114,8 +117,10 @@ func (m *Manager) SignEVM(ctx context.Context, req EVMSignRequest) (string, erro
 	if m.securityEnabled {
 		authorization = m.signatureAuthorizationReason(req.ChainID, signed.Hash().Hex())
 	}
-	if err := writeAudit(ctx, storeTx, auditEntry{op: op, kind: req.Kind, index: req.Index, chainID: req.ChainID,
-		to: req.To, token: req.Token, amount: req.Amount, result: "ok", reason: authorization}); err != nil {
+	if err := writeAudit(ctx, storeTx, auditEntry{
+		op: op, kind: req.Kind, index: req.Index, chainID: req.ChainID,
+		to: req.To, token: req.Token, amount: req.Amount, result: "ok", reason: authorization,
+	}); err != nil {
 		return "", err
 	}
 	if err := storeTx.Commit(); err != nil {

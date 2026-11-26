@@ -8,8 +8,9 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/ethereum/go-ethereum/core/types"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
 // supersededGasError is stored on a job whose gas top-up can no longer be mined.
@@ -102,9 +103,11 @@ func (e *Executor) replaceUnderpricedGas(ctx context.Context, pool *rpc.Pool, j 
 		return nil
 	}
 	idx := j.DerivationIndex
-	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{Index: hot.Index, Kind: "gas", GasIndex: &idx,
+	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{
+		Index: hot.Index, Kind: "gas", GasIndex: &idx,
 		ChainID: ChainIDs[j.Chain], Token: "native", To: j.Address, Amount: amount.String(),
-		Nonce: nonce, GasPrice: price.String(), GasLimit: 21000})
+		Nonce: nonce, GasPrice: price.String(), GasLimit: 21000,
+	})
 	if err != nil {
 		return err
 	}

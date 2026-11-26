@@ -16,13 +16,17 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
-// A swept record is a claim about the chain, not the chain itself. A block that
-// was canonical when the receipt was read can still be replaced, and a sweep
-// that is rolled back leaves the funds on the source address while the record
-// says "swept" forever. The audit re-reads the receipt and its canonical block
-// for the recent window and turns a proven rollback into "failed", which both
-// stops the false claim and frees the address for a new plan.
 const (
+	sweptStillConfirmed sweptObservation = iota
+	sweptMissingReceipt
+	sweptRolledBack
+
+	// A swept record is a claim about the chain, not the chain itself. A block that
+	// was canonical when the receipt was read can still be replaced, and a sweep
+	// that is rolled back leaves the funds on the source address while the record
+	// says "swept" forever. The audit re-reads the receipt and its canonical block
+	// for the recent window and turns a proven rollback into "failed", which both
+	// stops the false claim and frees the address for a new plan.
 	// sweptAuditWindow is how far back a rollback is still worth looking for.
 	// The sweep ticker is hourly, so the window covers one missed tick.
 	sweptAuditWindow = 2 * time.Hour
@@ -33,22 +37,16 @@ const (
 	sweptRollbackPrefix = "swept rollback released: "
 	// transferEventTopic is ERC20 Transfer(address,address,uint256).
 	transferEventTopic = "0xddf252ad1be2c89b69c2b068fc378daa952ba7f163c4a11628f55a4df523b3ef"
-)
 
-const sweptAuditQuery = `SELECT id, chain, from_address, to_address, token, raw_amount,
+	sweptAuditQuery = `SELECT id, chain, from_address, to_address, token, raw_amount,
 		token_decimals, sweep_tx_hash
 	FROM sweep_records
 	WHERE status = 'swept' AND job_version = 1 AND sweep_tx_hash <> ''
 	  AND updated_at > NOW() - ($1 * INTERVAL '1 second')
 	ORDER BY updated_at DESC LIMIT $2`
+)
 
 type sweptObservation int
-
-const (
-	sweptStillConfirmed sweptObservation = iota
-	sweptMissingReceipt
-	sweptRolledBack
-)
 
 // sweptLog is one receipt log of a swept token transfer.
 type sweptLog struct {

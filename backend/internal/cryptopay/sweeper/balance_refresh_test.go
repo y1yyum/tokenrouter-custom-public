@@ -26,17 +26,21 @@ func (r *currentTestReader) CurrentBalance(context.Context, string, string, stri
 }
 
 func currentReaderFor(entry PlanEntry, raw int64) *currentTestReader {
-	return &currentTestReader{current: &AddressBalance{Chain: entry.Chain,
+	return &currentTestReader{current: &AddressBalance{
+		Chain:   entry.Chain,
 		Address: entry.Address, Token: entry.Token, Decimals: entry.Decimals,
-		DerivationIndex: entry.DerivationIndex, Raw: big.NewInt(raw)}}
+		DerivationIndex: entry.DerivationIndex, Raw: big.NewInt(raw),
+	}}
 }
 
 func TestSweepUnsignedJobUsesDepositsCreditedAfterOldPlan(t *testing.T) {
 	e, mock, chain, entry := setupExecutor(t)
 	reader := currentReaderFor(entry, 12_000_000)
 	e.reader = reader
-	job := &sweepJob{PlanEntry: entry, ID: 1, Version: 1,
-		Destination: testDestination, Status: "planned", Confirmations: 2}
+	job := &sweepJob{
+		PlanEntry: entry, ID: 1, Version: 1,
+		Destination: testDestination, Status: "planned", Confirmations: 2,
+	}
 	expectRunStart(mock, job)
 	mock.ExpectExec("UPDATE sweep_records SET\\s+amount=").
 		WithArgs(int64(1), "12", "12000000", int64(0)).
@@ -130,8 +134,10 @@ func TestSweepCurrentBalanceCannotChangeAddressAssignment(t *testing.T) {
 func TestSweepAmountRevisionConflictCannotSignOrBroadcast(t *testing.T) {
 	e, mock, chain, entry := setupExecutor(t)
 	e.reader = currentReaderFor(entry, 12_000_000)
-	job := &sweepJob{PlanEntry: entry, ID: 1, Version: 1,
-		Destination: testDestination, Status: "planned", Confirmations: 2}
+	job := &sweepJob{
+		PlanEntry: entry, ID: 1, Version: 1,
+		Destination: testDestination, Status: "planned", Confirmations: 2,
+	}
 	expectRunStart(mock, job)
 	mock.ExpectExec("UPDATE sweep_records SET\\s+amount=").
 		WithArgs(int64(1), "12", "12000000", int64(0)).

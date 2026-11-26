@@ -1,8 +1,43 @@
-// Package wallet embeds the encrypted deposit and gas wallets in the gateway.
-// It never opens a listener or uses the former signer's policy or budget store.
 package wallet
 
 import "errors"
+
+var (
+	ErrWalletNotConfigured = errors.New("wallet seeds are not configured")
+	// ErrSigningDisabled means the runtime signing switch is off.
+	ErrSigningDisabled = errors.New("wallet signing is disabled")
+	// ErrVaultUnavailable deliberately omits database driver details.
+	ErrVaultUnavailable = errors.New("encrypted wallet seeds unavailable")
+	// ErrAuditUnavailable prevents unaudited wallet results from being returned.
+	ErrAuditUnavailable = errors.New("wallet audit unavailable")
+	// ErrSeedReplacement rejects seed inputs for an existing encrypted vault.
+	ErrSeedReplacement = errors.New("vault already exists; seed replacement is not allowed")
+	// ErrDepositSeedMismatch prevents deriving from a different deposit seed.
+	ErrDepositSeedMismatch = errors.New("deposit seed does not match existing deposit addresses")
+	// ErrSweepBusy means another connection holds the shared sweep lock.
+	ErrSweepBusy = errors.New("sweep is running in another instance")
+	// ErrSweepPending means a durable sweep still needs its existing hot seed.
+	ErrSweepPending = errors.New("unfinished sweep jobs prevent hot mnemonic import")
+	// ErrSignerShareRequired means a v3 vault is sealed and no recovery share
+	// has been supplied in this operation. The HTTP layer maps it to a stable
+	// error code so the UI can prompt for a shard.
+	ErrSignerShareRequired = errors.New("wallet signer is locked; a recovery shard is required")
+	// ErrSignerShareInvalid covers every rejected share without revealing
+	// whether the share was close to correct.
+	ErrSignerShareInvalid = errors.New("recovery shard cannot open this wallet")
+	// ErrSignerRateLimited means too many rejected shares; the operator must
+	// wait before trying again.
+	ErrSignerRateLimited = errors.New("too many rejected recovery shares; the signer is temporarily locked")
+	// ErrShardsNotConfigured means the vault still uses the installation-key
+	// ciphertext and the shard setup flow has not completed.
+	ErrShardsNotConfigured = errors.New("wallet shards are not configured")
+	// ErrShardsAlreadyConfigured means a shard set already exists; use the
+	// re-split flow instead of silently replacing it.
+	ErrShardsAlreadyConfigured = errors.New("wallet shards are already configured; use re-split")
+	// ErrShardsNotAllowed means the requested shard operation is invalid for
+	// the current vault state.
+	ErrShardsNotAllowed = errors.New("wallet shard operation is not allowed in the current state")
+)
 
 // Status describes managed seed configuration and channel readiness.
 type Status struct {
@@ -46,40 +81,3 @@ type MnemonicExport struct {
 	DepositMnemonic string `json:"deposit_mnemonic"`
 	HotMnemonic     string `json:"hot_mnemonic"`
 }
-
-var (
-	ErrWalletNotConfigured = errors.New("wallet seeds are not configured")
-	// ErrSigningDisabled means the runtime signing switch is off.
-	ErrSigningDisabled = errors.New("wallet signing is disabled")
-	// ErrVaultUnavailable deliberately omits database driver details.
-	ErrVaultUnavailable = errors.New("encrypted wallet seeds unavailable")
-	// ErrAuditUnavailable prevents unaudited wallet results from being returned.
-	ErrAuditUnavailable = errors.New("wallet audit unavailable")
-	// ErrSeedReplacement rejects seed inputs for an existing encrypted vault.
-	ErrSeedReplacement = errors.New("vault already exists; seed replacement is not allowed")
-	// ErrDepositSeedMismatch prevents deriving from a different deposit seed.
-	ErrDepositSeedMismatch = errors.New("deposit seed does not match existing deposit addresses")
-	// ErrSweepBusy means another connection holds the shared sweep lock.
-	ErrSweepBusy = errors.New("sweep is running in another instance")
-	// ErrSweepPending means a durable sweep still needs its existing hot seed.
-	ErrSweepPending = errors.New("unfinished sweep jobs prevent hot mnemonic import")
-	// ErrSignerShareRequired means a v3 vault is sealed and no recovery share
-	// has been supplied in this operation. The HTTP layer maps it to a stable
-	// error code so the UI can prompt for a shard.
-	ErrSignerShareRequired = errors.New("wallet signer is locked; a recovery shard is required")
-	// ErrSignerShareInvalid covers every rejected share without revealing
-	// whether the share was close to correct.
-	ErrSignerShareInvalid = errors.New("recovery shard cannot open this wallet")
-	// ErrSignerRateLimited means too many rejected shares; the operator must
-	// wait before trying again.
-	ErrSignerRateLimited = errors.New("too many rejected recovery shares; the signer is temporarily locked")
-	// ErrShardsNotConfigured means the vault still uses the installation-key
-	// ciphertext and the shard setup flow has not completed.
-	ErrShardsNotConfigured = errors.New("wallet shards are not configured")
-	// ErrShardsAlreadyConfigured means a shard set already exists; use the
-	// re-split flow instead of silently replacing it.
-	ErrShardsAlreadyConfigured = errors.New("wallet shards are already configured; use re-split")
-	// ErrShardsNotAllowed means the requested shard operation is invalid for
-	// the current vault state.
-	ErrShardsNotAllowed = errors.New("wallet shard operation is not allowed in the current state")
-)

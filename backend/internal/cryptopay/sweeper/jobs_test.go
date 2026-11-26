@@ -18,31 +18,20 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
-const testToken = "0x1111111111111111111111111111111111111111"
-const testDestination = "0x2222222222222222222222222222222222222222"
-const testBlockHash = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+const (
+	testToken       = "0x1111111111111111111111111111111111111111"
+	testDestination = "0x2222222222222222222222222222222222222222"
+	testBlockHash   = "0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+)
 
 type fixtureWallet struct{ chain *localChain }
-
-func (w *fixtureWallet) HotAddresses(ctx context.Context) (*HotAddress, error) {
-	return &HotAddress{Index: 9, EVM: w.chain.payer}, nil
-}
-func (w *fixtureWallet) SignEVM(ctx context.Context, req EVMSignRequest) (string, error) {
-	c := w.chain
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.beforeSign != nil {
-		c.beforeSign()
-	}
-	c.signs = append(c.signs, req)
-	return c.signed(req), nil
-}
 
 // Every RPC and signing request goes through this local HTTP server. Keys
 // are deterministic test fixtures, never a vault or a real-chain account.
@@ -81,6 +70,23 @@ type localChain struct {
 	beforeSend   func()
 }
 
+type captureArg struct{ match func(driver.Value) bool }
+
+func (w *fixtureWallet) HotAddresses(ctx context.Context) (*HotAddress, error) {
+	return &HotAddress{Index: 9, EVM: w.chain.payer}, nil
+}
+
+func (w *fixtureWallet) SignEVM(ctx context.Context, req EVMSignRequest) (string, error) {
+	c := w.chain
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.beforeSign != nil {
+		c.beforeSign()
+	}
+	c.signs = append(c.signs, req)
+	return c.signed(req), nil
+}
+
 func (c *localChain) signed(req EVMSignRequest) string {
 	key := c.child
 	to, value := common.HexToAddress(req.To), new(big.Int)
@@ -98,8 +104,10 @@ func (c *localChain) signed(req EVMSignRequest) string {
 		data = append(data, common.LeftPadBytes(amount.Bytes(), 32)...)
 	}
 	price, _ := new(big.Int).SetString(req.GasPrice, 10)
-	tx := types.NewTx(&types.DynamicFeeTx{ChainID: big.NewInt(req.ChainID), Nonce: req.Nonce,
-		GasTipCap: price, GasFeeCap: price, Gas: req.GasLimit, To: &to, Value: value, Data: data})
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID: big.NewInt(req.ChainID), Nonce: req.Nonce,
+		GasTipCap: price, GasFeeCap: price, Gas: req.GasLimit, To: &to, Value: value, Data: data,
+	})
 	signed, _ := types.SignTx(tx, types.LatestSignerForChainID(big.NewInt(req.ChainID)), key)
 	raw, _ := signed.MarshalBinary()
 	return "0x" + hex.EncodeToString(raw)
@@ -201,8 +209,10 @@ func (c *localChain) serve(w http.ResponseWriter, r *http.Request) {
 		hash := rawHash(raw)
 		c.raws = append(c.raws, raw)
 		if c.sendError != "" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
-				"error": map[string]any{"code": -32000, "message": c.sendError}})
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": 1,
+				"error": map[string]any{"code": -32000, "message": c.sendError},
+			})
 			return
 		}
 		c.txs[hash] = true
@@ -228,17 +238,21 @@ func (c *localChain) serve(w http.ResponseWriter, r *http.Request) {
 			if c.blocks[hash] != 0 {
 				block = c.blocks[hash]
 			}
-			result = map[string]any{"transactionHash": hash, "status": c.status,
+			result = map[string]any{
+				"transactionHash": hash, "status": c.status,
 				"blockNumber": fmt.Sprintf("0x%x", block), "blockHash": testBlockHash,
-				"logs": c.receiptLogs}
+				"logs": c.receiptLogs,
+			}
 		}
 	case "eth_getBlockByNumber":
 		tag := param(0)
 		finality := tag == "finalized" || tag == "safe"
 		if finality && c.finalityErr {
 			// A node that does not serve the tag at all.
-			_ = json.NewEncoder(w).Encode(map[string]any{"jsonrpc": "2.0", "id": 1,
-				"error": map[string]any{"code": -32602, "message": "invalid block tag"}})
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"jsonrpc": "2.0", "id": 1,
+				"error": map[string]any{"code": -32602, "message": "invalid block tag"},
+			})
 			return
 		}
 		if finality && c.finalityNull {
@@ -279,25 +293,29 @@ func setupExecutor(t *testing.T) (*Executor, sqlmock.Sqlmock, *localChain, PlanE
 	})
 	child, _ := crypto.HexToECDSA(strings.Repeat("0", 63) + "1")
 	hot, _ := crypto.HexToECDSA(strings.Repeat("0", 63) + "2")
-	c := &localChain{child: child, hot: hot, address: crypto.PubkeyToAddress(child.PublicKey).Hex(),
+	c := &localChain{
+		child: child, hot: hot, address: crypto.PubkeyToAddress(child.PublicKey).Hex(),
 		payer: crypto.PubkeyToAddress(hot.PublicKey).Hex(), live: 15_000_000, native: 1_000_000_000_000_000,
 		payerNative: 1_000_000_000_000_000,
-		mined:       true, head: 103, status: "0x1", canonical: testBlockHash, txs: map[string]bool{}, chainID: "0x38"}
+		mined:       true, head: 103, status: "0x1", canonical: testBlockHash, txs: map[string]bool{}, chainID: "0x38",
+	}
 	server := httptest.NewServer(http.HandlerFunc(c.serve))
 	t.Cleanup(server.Close)
 	wallet := &fixtureWallet{chain: c}
 	pool := rpc.NewPoolWithHTTPClient(server.URL+"/rpc", server.Client())
-	config := Config{HotWalletEVM: testDestination, Confirmations: map[string]uint64{"bsc": 2},
-		GasTopUp: map[string]float64{"bsc": 0.002}}
-	entry := PlanEntry{Chain: "bsc", Address: c.address, DerivationIndex: 42,
-		Token: testToken, RawAmount: big.NewInt(10_000_000), Decimals: 6}
+	config := Config{
+		HotWalletEVM: testDestination, Confirmations: map[string]uint64{"bsc": 2},
+		GasTopUp: map[string]float64{"bsc": 0.002},
+	}
+	entry := PlanEntry{
+		Chain: "bsc", Address: c.address, DerivationIndex: 42,
+		Token: testToken, RawAmount: big.NewInt(10_000_000), Decimals: 6,
+	}
 	e := NewExecutor(db, map[string]*rpc.Pool{"bsc": pool}, wallet, config,
 		map[string]TokenSpec{"bsc|" + testToken: {Contract: testToken, Decimals: 6}},
 		&fakeReader{}, 123) // deliberately different from wallet's real hot index
 	return e, mock, c, entry
 }
-
-type captureArg struct{ match func(driver.Value) bool }
 
 func (a captureArg) Match(v driver.Value) bool { return a.match(v) }
 
@@ -360,10 +378,14 @@ func signedJob(c *localChain, entry PlanEntry, gas bool) *sweepJob {
 // "1" explicitly; everything else signs at the chain floor, so a test about
 // another behaviour is not silently exercising the underpriced-replacement path.
 func signedJobAtPrice(c *localChain, entry PlanEntry, gas bool, price string) *sweepJob {
-	j := &sweepJob{PlanEntry: entry, ID: 1, Version: 1, Revision: 1,
-		Destination: testDestination, Status: "sweep_pending", Confirmations: 2}
-	req := EVMSignRequest{Index: 42, Kind: "sweep", ChainID: 56, Token: entry.Token,
-		To: testDestination, Amount: "10000000", Nonce: 3, GasPrice: price, GasLimit: transferGasLimit}
+	j := &sweepJob{
+		PlanEntry: entry, ID: 1, Version: 1, Revision: 1,
+		Destination: testDestination, Status: "sweep_pending", Confirmations: 2,
+	}
+	req := EVMSignRequest{
+		Index: 42, Kind: "sweep", ChainID: 56, Token: entry.Token,
+		To: testDestination, Amount: "10000000", Nonce: 3, GasPrice: price, GasLimit: transferGasLimit,
+	}
 	if gas {
 		req.Kind, req.Token, req.To, req.Amount, req.Nonce, req.GasLimit = "gas", "native", entry.Address, "195000", 7, 21000
 		j.GasPayer, j.GasNonce, j.GasAmount = c.payer, "7", req.Amount

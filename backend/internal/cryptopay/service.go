@@ -15,6 +15,9 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
+
 	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/ledger"
@@ -25,8 +28,72 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/sweeper"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/wallet"
-	"github.com/google/uuid"
-	"github.com/redis/go-redis/v9"
+)
+
+const (
+	// sweepRunRetention bounds how many finished runs stay queryable, so a process
+	// that has been up for weeks does not accumulate them.
+	sweepRunRetention = 20
+
+	// nativeReferencePriceTimeout caps the whole "about $X" decoration pass, so a
+	// hung ticker can delay the deposit page by seconds but never fail it. The
+	// price is a courtesy for the user, not part of the credit calculation.
+	nativeReferencePriceTimeout = 2 * time.Second
+
+	// User-facing deposit statuses derived from the instant-credit flags. The raw
+	// ledger keeps status='credited' + provisional and status='reverted' +
+	// revoked_at; users only need to know "临时入账" and "已回滚".
+	userDepositStatusProvisional = "provisional"
+	userDepositStatusRevoked     = "revoked"
+)
+
+var (
+	// watchedTokens maps chain -> token contracts with decimals. Kept in code
+	// (not settings) because a wrong contract would credit the wrong asset;
+	// changing it should require a code review. Every contract below was
+	// EVM contracts are lowercase. Native
+	// USDC addresses follow developers.circle.com/stablecoins/usdc-contract-addresses.
+	// The previously accepted X Layer bridge remains explicit as USDC.e.
+	watchedTokens = map[string][]TokenConfig{
+		ChainEthereum: {
+			// ETH is the chain's mainnet coin: no contract, 18 decimals, and it
+			// arrives as a transaction value transfer rather than a Transfer log.
+			{Contract: scanner.NativeToken, Decimals: 18, Symbol: "ETH", Native: true},
+			{Contract: "0xdac17f958d2ee523a2206206994597c13d831ec7", Decimals: 6, Symbol: "USDT"},
+			{Contract: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Decimals: 6, Symbol: "USDC"},
+		},
+		ChainBSC: {
+			// BNB is the chain's mainnet coin; USDT/USDC on BSC are 18-decimal
+			// BEP-20 tokens whose contracts are unrelated to the native coin.
+			{Contract: scanner.NativeToken, Decimals: 18, Symbol: "BNB", Native: true},
+			{Contract: "0x55d398326f99059ff775485246999027b3197955", Decimals: 18, Symbol: "USDT"}, // BSC-USD (Tether)
+			{Contract: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", Decimals: 18, Symbol: "USDC"}, // USD Coin (Circle)
+		},
+		ChainPolygon: {
+			{Contract: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", Decimals: 6, Symbol: "USDT"},   // Tether USD (PoS)
+			{Contract: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", Decimals: 6, Symbol: "USDC"},   // USD Coin (native)
+			{Contract: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", Decimals: 6, Symbol: "USDC.e"}, // Bridged USDC stays accepted: exchanges and bridges still send it, and ignoring it silently drops real deposits.
+		},
+		ChainPlasma: {
+			{Contract: "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", Decimals: 6, Symbol: "USDT"}, // USDT0 on Plasma
+			{Contract: "0x2d661c89d812261039af9764eceaaee884f5f67f", Decimals: 6, Symbol: "USDC"}, // Circle-issued native USDC
+		},
+		ChainArbitrum: {
+			{Contract: "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", Decimals: 6, Symbol: "USDT"}, // Tether USD (Arbitrum One)
+			{Contract: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", Decimals: 6, Symbol: "USDC"}, // USD Coin (native)
+		},
+		ChainBase: {
+			{Contract: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", Decimals: 6, Symbol: "USDC"}, // USD Coin (Base)
+		},
+		ChainXLayer: {
+			{Contract: "0x779ded0c9e1022225f8e0630b35a9b54be713736", Decimals: 6, Symbol: "USDT"},   // USDT0 on X Layer
+			{Contract: "0xb6ceceab302e2e4948951ee7843fc24e92933061", Decimals: 6, Symbol: "USDC"},   // Circle-issued native USDC
+			{Contract: "0x74b7f16337b8972027f6196a17a631ac6de26d22", Decimals: 6, Symbol: "USDC.e"}, // Existing bridged token remains accepted
+		},
+	}
+
+	sweepRunsMu sync.Mutex
+	sweepRuns   = map[string]*SweepRunState{}
 )
 
 // service.go assembles crypto payment components and applies stored configuration
@@ -58,6 +125,312 @@ type TokenConfig struct {
 // the narrow signature keeps this package free of a notify import.
 type PushNotifier interface {
 	PushToAdmins(ctx context.Context, title, body, group string) error
+}
+
+// Service is the cryptopay facade: owns config snapshots, the RPC pools,
+// the scanner worker, the ledger and the sweeper.
+type Service struct {
+	db       *sql.DB
+	settings *ServiceSettingStore // persisted crypto configuration access
+	creditor ledger.Creditor
+
+	// startOnce and monitorWallet keep worker startup under the host lifecycle.
+	// The key itself belongs to the wallet. Only its availability at construction
+	// is needed to decide whether to launch the security monitor.
+	startOnce     sync.Once // worker startup ownership
+	monitorWallet bool      // persistent key availability
+
+	mu                sync.RWMutex
+	config            CryptoConfig
+	configFingerprint string // Stored config, before the local wallet guard.
+	reloadFailed      bool   // Retry transient load/guard failures without a config change.
+	pools             map[string]*rpc.Pool
+	worker            *scanner.Worker
+	planner           *sweeper.Planner
+	wallet            *wallet.Manager
+	executor          *sweeper.Executor
+	addresses         *addresses.Service
+	// nativePrice is the process-wide market feed. It is rebuilt only when the
+	// configured endpoint changes, so its 60s cache survives scan passes and
+	// manual confirmations share the same observations.
+	nativePrice *nativeprice.Provider
+
+	// configCancel/configDone own the independent config watcher across reloads.
+	configCancel context.CancelFunc
+	configDone   chan struct{}
+	closed       bool
+	// maintCancel stops the pool top-up / scheduled sweep loop.
+	maintCancel     context.CancelFunc
+	securityCancel  context.CancelFunc
+	discoveryCancel context.CancelFunc
+	// nativeCancel stops the address-based native-coin poller. It is separate
+	// from the block worker loop because its cadence is a per-address polling
+	// interval, not the chain scan interval.
+	nativeCancel context.CancelFunc
+	// hotResolver caches the derived gas-wallet address across reloads so the
+	// hot-wallet poll does not audit a derivation row per tick.
+	hotResolver *hotAddressResolver
+	// nativeGuardAt throttles the disabled-channel native outflow guard.
+	nativeGuardMu  sync.Mutex
+	nativeGuardAt  time.Time
+	securityPaused atomic.Bool
+	// push delivers operator alerts (unmatched deposits). Optional.
+	// Keep notification delivery independent of configuration publication.
+	pushMu sync.RWMutex
+	push   PushNotifier
+	// events delivers best-effort "someone touched the wallet" messages to the
+	// operator's webhook/email. Optional and never blocks an operation.
+	eventsMu sync.RWMutex
+	events   notify.Notifier
+	// sweepMu serialises sweep runs: the manual admin trigger and the
+	// scheduler must never send the same funds twice.
+	sweepMu sync.Mutex
+	// chainMon backs the admin node-status page (probe cache, sample window,
+	// on-demand ticker). Read-only; the zero value is ready to use.
+	chainMon             chainMonitor
+	depositNetworkStatus *depositNetworkMonitor
+}
+
+// HotWalletStatus is the gas readiness of the sweep hot wallet per chain.
+// A hot wallet without native coin cannot pay for sweeps, and the failure
+// would otherwise only show up as failed sweep records.
+type HotWalletStatus struct {
+	// Address is the GAS PAYER: the wallet's Gas-seed address. This is the
+	// wallet the operator must fund with native coin, which is not
+	// necessarily the sweep receiving address.
+	Address string `json:"address"`
+	// Receiving is the configured sweep destination (where swept USDT
+	// lands). It needs no gas.
+	Receiving string `json:"receiving,omitempty"`
+	Chain     string `json:"chain"`
+	Balance   string `json:"balance"` // native coin, decimal
+	Symbol    string `json:"symbol"`
+	Enough    bool   `json:"enough"`
+	Error     string `json:"error,omitempty"`
+	RPCSource string `json:"rpc_source"`
+	RPCReady  bool   `json:"rpc_ready"`
+	ErrorCode string `json:"error_code,omitempty"`
+}
+
+// SweepRunState is the in-memory record of one asynchronous sweep.
+//
+// The run itself already outlives the HTTP request (see the handler), but the
+// operator still needs to know it is running and what it produced without
+// holding a connection open for minutes. The state lives in memory on purpose:
+// it describes one process's current work, not durable history — the durable
+// record is sweep_records, which every job writes as it goes.
+type SweepRunState struct {
+	ID        string           `json:"id"`
+	DryRun    bool             `json:"dry_run"`
+	Chains    []string         `json:"chains"`
+	StartedAt time.Time        `json:"started_at"`
+	Finished  bool             `json:"finished"`
+	Error     string           `json:"error,omitempty"`
+	Summary   *sweeper.Summary `json:"summary,omitempty"`
+}
+
+// SweepRecord is one sweep_records row for the admin UI.
+type SweepRecord struct {
+	ID          int64  `json:"id"`
+	Chain       string `json:"chain"`
+	FromAddress string `json:"from_address"`
+	ToAddress   string `json:"to_address"`
+	Token       string `json:"token"`
+	Amount      string `json:"amount"`
+	GasTxHash   string `json:"gas_tx_hash"`
+	SweepTxHash string `json:"sweep_tx_hash"`
+	Status      string `json:"status"`
+	Error       string `json:"error"`
+	CreatedAt   string `json:"created_at"`
+	// JobVersion separates current-format jobs from legacy or hand-handled rows.
+	// The admin console hides 0 by default so old records never mix with work.
+	JobVersion int `json:"job_version"`
+	// TokenSymbol and UpdatedAt are filled by ListSweepRecordsPage only.
+	TokenSymbol string `json:"token_symbol"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// DepositRecord is one deposit_transactions row for reconciliation.
+type DepositRecord struct {
+	ID          int64  `json:"id"`
+	Chain       string `json:"chain"`
+	TxHash      string `json:"tx_hash"`
+	LogIndex    int    `json:"log_index"`
+	FromAddress string `json:"from_address"`
+	ToAddress   string `json:"to_address"`
+	Token       string `json:"token"`
+	TokenSymbol string `json:"token_symbol"`
+	Amount      string `json:"amount"`
+	Status      string `json:"status"`
+	Reason      string `json:"reason,omitempty"`
+	CreatedAt   string `json:"created_at"`
+	// NativePriceUSD/At/Source answer "which price, observed when" for a
+	// native-coin deposit. Empty for stablecoins, whose amount is already USD.
+	NativePriceUSD    string `json:"native_price_usd,omitempty"`
+	NativePriceAt     string `json:"native_price_at,omitempty"`
+	NativePriceSource string `json:"native_price_source,omitempty"`
+	// Instant-credit reconciliation state. provisional=true with revoked_at
+	// empty means the balance was credited at 0 confirmations and is still
+	// inside the risk window; revoked_at non-empty means it was clawed back and
+	// revoke_reason says why. ProvisionalAmount is the frozen credited amount
+	// from the linked payment order.
+	Provisional       bool    `json:"provisional"`
+	ProvisionalAmount float64 `json:"provisional_amount,omitempty"`
+	CreditedAt        string  `json:"credited_at,omitempty"`
+	RevokedAt         string  `json:"revoked_at,omitempty"`
+	RevokeReason      string  `json:"revoke_reason,omitempty"`
+}
+
+// DepositSummary totals the deposit ledger for the console header.
+type DepositSummary struct {
+	Total    int64   `json:"total"`
+	Credited int64   `json:"credited"`
+	Pending  int64   `json:"pending"`
+	Ignored  int64   `json:"ignored"`
+	Amount   float64 `json:"amount"`
+	// Provisional counts instant credits still inside the 0-confirmation risk
+	// window; Revoked counts credits that were clawed back (a subset of the
+	// reverted rows). Operators watch both when investigating a chain incident.
+	Provisional int64 `json:"provisional"`
+	Revoked     int64 `json:"revoked"`
+}
+
+// DepositInfo is everything the standalone deposit page needs.
+//
+// There is deliberately no response-wide rate. A rate is a property of the
+// asset being sent, not of the account: since native deposits settle at the
+// market price observed when they are credited (PR #306), the old top-level
+// `rate` told every client that 1 ETH was worth the stablecoin multiplier.
+// Clients must read DepositAsset.Rate / MarketPriced instead.
+type DepositInfo struct {
+	Enabled bool           `json:"enabled"`
+	Chains  []DepositChain `json:"chains"`
+	// MinAmount / MaxAmount are the credit thresholds. A stablecoin is
+	// compared by its token amount (already USD-denominated); a market-priced
+	// asset is compared by USD notional (amount × price at credit time), so a
+	// client must label them as USD for that asset, never as a coin amount.
+	MinAmount float64 `json:"min_amount"`
+	MaxAmount float64 `json:"max_amount"`
+}
+
+// DepositAsset is one asset a user can send to a chain's deposit address.
+// Native distinguishes ETH/BNB from the ERC-20 tokens so the UI can label the
+// asset correctly: the address and QR code are the same for both.
+type DepositAsset struct {
+	Symbol string `json:"symbol"`
+	Native bool   `json:"native"`
+	// MarketPriced marks an asset that is settled at the market price
+	// observed when the deposit is credited (ETH, BNB). A fixed rate must
+	// never be rendered for it: Rate is null.
+	MarketPriced bool `json:"market_priced"`
+	// Rate is how many balance units one whole asset is worth under the fixed
+	// rate. It is set for stablecoins and null for market-priced assets,
+	// where a constant number would misstate what the user receives.
+	Rate *float64 `json:"rate"`
+	// ReferencePriceUSD is a display-only quote for a market-priced asset
+	// ("about $3,210 per ETH"). It is best-effort: absent whenever the feed is
+	// unavailable, and it is never used to compute a credit.
+	ReferencePriceUSD *string `json:"reference_price_usd,omitempty"`
+}
+
+// DepositChain is one chain's deposit address.
+type DepositChain struct {
+	Chain   string   `json:"chain"`
+	Address string   `json:"address"`
+	Tokens  []string `json:"tokens"` // supported symbols on this chain, e.g. ["USDT","USDC"]
+	// Assets is Tokens with the native-coin flag, in the same order. Kept
+	// alongside Tokens so an older client that only reads Tokens still shows
+	// every accepted symbol.
+	Assets []DepositAsset `json:"assets"`
+	// EtaSeconds is the normal-path time to credit on this network, from the
+	// same live measurement the network-status endpoint publishes. Null when
+	// there is no fresh measurement; clients must render an unknown rather than
+	// substitute a guess.
+	EtaSeconds *int64 `json:"eta_seconds"`
+	// InstantCredit reports whether this network credits on first detection
+	// (0 confirmations) instead of waiting for the configured final depth.
+	InstantCredit bool `json:"instant_credit"`
+}
+
+// UserDepositRecord is one deposit row for the user's own history.
+type UserDepositRecord struct {
+	Chain     string  `json:"chain"`
+	TxHash    string  `json:"tx_hash"`
+	Token     string  `json:"token"`
+	Amount    string  `json:"amount"`
+	Status    string  `json:"status"`
+	Reason    string  `json:"reason,omitempty"` // human text for non-credited rows
+	CreatedAt string  `json:"created_at"`
+	Credited  float64 `json:"credited"`
+	// CreditedKnown distinguishes a resolved settlement amount from legacy
+	// credited rows whose payment order can no longer be resolved. A numeric
+	// zero must not be presented as a confirmed zero-credit result.
+	CreditedKnown *bool `json:"credited_known,omitempty"`
+	// BlockNumber, Confirmations and RequiredConfirmations drive the
+	// "confirming n/m" progress for pending deposits.
+	BlockNumber           uint64 `json:"block_number"`
+	Confirmations         int    `json:"confirmations"`
+	RequiredConfirmations int    `json:"required_confirmations"`
+	// Instant-credit reconciliation state. Provisional marks a credit that was
+	// added at 0 confirmations and is still inside the risk window; RevokedAt
+	// marks one the chain later invalidated and that was automatically clawed
+	// back. Status is rewritten to "provisional" / "revoked" so clients do not
+	// have to re-derive the user-facing wording from internal ledger columns.
+	Provisional  bool   `json:"provisional"`
+	CreditedAt   string `json:"credited_at,omitempty"`
+	RevokedAt    string `json:"revoked_at,omitempty"`
+	RevokeReason string `json:"revoke_reason,omitempty"`
+}
+
+// NewService builds the facade and starts the scan worker when enabled. The
+// supplied settings adapter reads the stored configuration at startup and
+// during later reloads.
+func NewService(
+	db *sql.DB,
+	settings *ServiceSettingStore,
+	creditor ledger.Creditor,
+	addressSvc *addresses.Service,
+	appConfig *config.Config,
+	statusRedis ...*redis.Client,
+) *Service {
+	s := NewManagedService(db, settings, creditor, addressSvc, appConfig, statusRedis...)
+	s.Start(context.Background())
+	return s
+}
+
+// NewManagedService prepares the wallet, storage bindings and guards without
+// starting chain work. The application attaches its notification sinks, then
+// calls Start from the registered lifecycle hook before accepting traffic.
+func NewManagedService(
+	db *sql.DB,
+	settings *ServiceSettingStore,
+	creditor ledger.Creditor,
+	addressSvc *addresses.Service,
+	appConfig *config.Config,
+	statusRedis ...*redis.Client,
+) *Service {
+	var masterKey string
+	if appConfig != nil {
+		masterKey = mode.PersistentKey(appConfig.Security.SecretEncryptionKey, appConfig.Security.SecretEncryptionKeyConfigured)
+	}
+	s := &Service{
+		db:            db,
+		settings:      settings,
+		creditor:      creditor,
+		pools:         map[string]*rpc.Pool{},
+		wallet:        wallet.New(db, masterKey),
+		addresses:     addressSvc,
+		monitorWallet: masterKey != "",
+	}
+	if len(statusRedis) > 0 && statusRedis[0] != nil {
+		s.depositNetworkStatus = newDepositNetworkMonitor(redisNetworkStatusStore{rdb: statusRedis[0].WithTimeout(depositNetworkIOTimeout)}, time.Now)
+	}
+	s.wallet.EnableSecurityMonitoring()
+	s.hotResolver = &hotAddressResolver{svc: s}
+	if addressSvc != nil {
+		addressSvc.SetSecurityGuards(s.checkWalletActivity, s.validateWalletAssignment)
+	}
+	return s
 }
 
 // SetPushNotifier wires operator alerts. Optional: nil stays silent.
@@ -139,50 +512,6 @@ func toDisplayAmount(raw *big.Int, decimals int) string {
 		return whole
 	}
 	return whole + "." + frac
-}
-
-// watchedTokens maps chain -> token contracts with decimals. Kept in code
-// (not settings) because a wrong contract would credit the wrong asset;
-// changing it should require a code review. Every contract below was
-// EVM contracts are lowercase. Native
-// USDC addresses follow developers.circle.com/stablecoins/usdc-contract-addresses.
-// The previously accepted X Layer bridge remains explicit as USDC.e.
-var watchedTokens = map[string][]TokenConfig{
-	ChainEthereum: {
-		// ETH is the chain's mainnet coin: no contract, 18 decimals, and it
-		// arrives as a transaction value transfer rather than a Transfer log.
-		{Contract: scanner.NativeToken, Decimals: 18, Symbol: "ETH", Native: true},
-		{Contract: "0xdac17f958d2ee523a2206206994597c13d831ec7", Decimals: 6, Symbol: "USDT"},
-		{Contract: "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", Decimals: 6, Symbol: "USDC"},
-	},
-	ChainBSC: {
-		// BNB is the chain's mainnet coin; USDT/USDC on BSC are 18-decimal
-		// BEP-20 tokens whose contracts are unrelated to the native coin.
-		{Contract: scanner.NativeToken, Decimals: 18, Symbol: "BNB", Native: true},
-		{Contract: "0x55d398326f99059ff775485246999027b3197955", Decimals: 18, Symbol: "USDT"}, // BSC-USD (Tether)
-		{Contract: "0x8ac76a51cc950d9822d68b83fe1ad97b32cd580d", Decimals: 18, Symbol: "USDC"}, // USD Coin (Circle)
-	},
-	ChainPolygon: {
-		{Contract: "0xc2132d05d31c914a87c6611c10748aeb04b58e8f", Decimals: 6, Symbol: "USDT"},   // Tether USD (PoS)
-		{Contract: "0x3c499c542cef5e3811e1192ce70d8cc03d5c3359", Decimals: 6, Symbol: "USDC"},   // USD Coin (native)
-		{Contract: "0x2791bca1f2de4661ed88a30c99a7a9449aa84174", Decimals: 6, Symbol: "USDC.e"}, // Bridged USDC stays accepted: exchanges and bridges still send it, and ignoring it silently drops real deposits.
-	},
-	ChainPlasma: {
-		{Contract: "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", Decimals: 6, Symbol: "USDT"}, // USDT0 on Plasma
-		{Contract: "0x2d661c89d812261039af9764eceaaee884f5f67f", Decimals: 6, Symbol: "USDC"}, // Circle-issued native USDC
-	},
-	ChainArbitrum: {
-		{Contract: "0xfd086bc7cd5c481dcc9c85ebe478a1c0b69fcbb9", Decimals: 6, Symbol: "USDT"}, // Tether USD (Arbitrum One)
-		{Contract: "0xaf88d065e77c8cc2239327c5edb3a432268e5831", Decimals: 6, Symbol: "USDC"}, // USD Coin (native)
-	},
-	ChainBase: {
-		{Contract: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", Decimals: 6, Symbol: "USDC"}, // USD Coin (Base)
-	},
-	ChainXLayer: {
-		{Contract: "0x779ded0c9e1022225f8e0630b35a9b54be713736", Decimals: 6, Symbol: "USDT"},   // USDT0 on X Layer
-		{Contract: "0xb6ceceab302e2e4948951ee7843fc24e92933061", Decimals: 6, Symbol: "USDC"},   // Circle-issued native USDC
-		{Contract: "0x74b7f16337b8972027f6196a17a631ac6de26d22", Decimals: 6, Symbol: "USDC.e"}, // Existing bridged token remains accepted
-	},
 }
 
 func cryptoWorkersAllowed() bool {
@@ -306,121 +635,6 @@ func evmContracts(chain string) []string {
 		out = append(out, t.Contract)
 	}
 	return out
-}
-
-// Service is the cryptopay facade: owns config snapshots, the RPC pools,
-// the scanner worker, the ledger and the sweeper.
-type Service struct {
-	db       *sql.DB
-	settings *ServiceSettingStore // persisted crypto configuration access
-	creditor ledger.Creditor
-
-	// startOnce and monitorWallet keep worker startup under the host lifecycle.
-	// The key itself belongs to the wallet. Only its availability at construction
-	// is needed to decide whether to launch the security monitor.
-	startOnce     sync.Once // worker startup ownership
-	monitorWallet bool      // persistent key availability
-
-	mu                sync.RWMutex
-	config            CryptoConfig
-	configFingerprint string // Stored config, before the local wallet guard.
-	reloadFailed      bool   // Retry transient load/guard failures without a config change.
-	pools             map[string]*rpc.Pool
-	worker            *scanner.Worker
-	planner           *sweeper.Planner
-	wallet            *wallet.Manager
-	executor          *sweeper.Executor
-	addresses         *addresses.Service
-	// nativePrice is the process-wide market feed. It is rebuilt only when the
-	// configured endpoint changes, so its 60s cache survives scan passes and
-	// manual confirmations share the same observations.
-	nativePrice *nativeprice.Provider
-
-	// configCancel/configDone own the independent config watcher across reloads.
-	configCancel context.CancelFunc
-	configDone   chan struct{}
-	closed       bool
-	// maintCancel stops the pool top-up / scheduled sweep loop.
-	maintCancel     context.CancelFunc
-	securityCancel  context.CancelFunc
-	discoveryCancel context.CancelFunc
-	// nativeCancel stops the address-based native-coin poller. It is separate
-	// from the block worker loop because its cadence is a per-address polling
-	// interval, not the chain scan interval.
-	nativeCancel context.CancelFunc
-	// hotResolver caches the derived gas-wallet address across reloads so the
-	// hot-wallet poll does not audit a derivation row per tick.
-	hotResolver *hotAddressResolver
-	// nativeGuardAt throttles the disabled-channel native outflow guard.
-	nativeGuardMu  sync.Mutex
-	nativeGuardAt  time.Time
-	securityPaused atomic.Bool
-	// push delivers operator alerts (unmatched deposits). Optional.
-	// Keep notification delivery independent of configuration publication.
-	pushMu sync.RWMutex
-	push   PushNotifier
-	// events delivers best-effort "someone touched the wallet" messages to the
-	// operator's webhook/email. Optional and never blocks an operation.
-	eventsMu sync.RWMutex
-	events   notify.Notifier
-	// sweepMu serialises sweep runs: the manual admin trigger and the
-	// scheduler must never send the same funds twice.
-	sweepMu sync.Mutex
-	// chainMon backs the admin node-status page (probe cache, sample window,
-	// on-demand ticker). Read-only; the zero value is ready to use.
-	chainMon             chainMonitor
-	depositNetworkStatus *depositNetworkMonitor
-}
-
-// NewService builds the facade and starts the scan worker when enabled. The
-// supplied settings adapter reads the stored configuration at startup and
-// during later reloads.
-func NewService(
-	db *sql.DB,
-	settings *ServiceSettingStore,
-	creditor ledger.Creditor,
-	addressSvc *addresses.Service,
-	appConfig *config.Config,
-	statusRedis ...*redis.Client,
-) *Service {
-	s := NewManagedService(db, settings, creditor, addressSvc, appConfig, statusRedis...)
-	s.Start(context.Background())
-	return s
-}
-
-// NewManagedService prepares the wallet, storage bindings and guards without
-// starting chain work. The application attaches its notification sinks, then
-// calls Start from the registered lifecycle hook before accepting traffic.
-func NewManagedService(
-	db *sql.DB,
-	settings *ServiceSettingStore,
-	creditor ledger.Creditor,
-	addressSvc *addresses.Service,
-	appConfig *config.Config,
-	statusRedis ...*redis.Client,
-) *Service {
-	var masterKey string
-	if appConfig != nil {
-		masterKey = mode.PersistentKey(appConfig.Security.SecretEncryptionKey, appConfig.Security.SecretEncryptionKeyConfigured)
-	}
-	s := &Service{
-		db:            db,
-		settings:      settings,
-		creditor:      creditor,
-		pools:         map[string]*rpc.Pool{},
-		wallet:        wallet.New(db, masterKey),
-		addresses:     addressSvc,
-		monitorWallet: masterKey != "",
-	}
-	if len(statusRedis) > 0 && statusRedis[0] != nil {
-		s.depositNetworkStatus = newDepositNetworkMonitor(redisNetworkStatusStore{rdb: statusRedis[0].WithTimeout(depositNetworkIOTimeout)}, time.Now)
-	}
-	s.wallet.EnableSecurityMonitoring()
-	s.hotResolver = &hotAddressResolver{svc: s}
-	if addressSvc != nil {
-		addressSvc.SetSecurityGuards(s.checkWalletActivity, s.validateWalletAssignment)
-	}
-	return s
 }
 
 // Start loads the persisted channel settings and starts the eligible workers
@@ -960,27 +1174,6 @@ func (s *Service) HotAddresses(ctx context.Context) (*sweeper.HotAddress, error)
 	return wallet.HotAddresses(ctx)
 }
 
-// HotWalletStatus is the gas readiness of the sweep hot wallet per chain.
-// A hot wallet without native coin cannot pay for sweeps, and the failure
-// would otherwise only show up as failed sweep records.
-type HotWalletStatus struct {
-	// Address is the GAS PAYER: the wallet's Gas-seed address. This is the
-	// wallet the operator must fund with native coin, which is not
-	// necessarily the sweep receiving address.
-	Address string `json:"address"`
-	// Receiving is the configured sweep destination (where swept USDT
-	// lands). It needs no gas.
-	Receiving string `json:"receiving,omitempty"`
-	Chain     string `json:"chain"`
-	Balance   string `json:"balance"` // native coin, decimal
-	Symbol    string `json:"symbol"`
-	Enough    bool   `json:"enough"`
-	Error     string `json:"error,omitempty"`
-	RPCSource string `json:"rpc_source"`
-	RPCReady  bool   `json:"rpc_ready"`
-	ErrorCode string `json:"error_code,omitempty"`
-}
-
 // nativeSymbol is the gas coin of each supported chain.
 func nativeSymbol(chain string) string {
 	switch chain {
@@ -1210,32 +1403,6 @@ func (s *Service) runSweepLocked(ctx context.Context, dryRun, manual bool, chain
 	return exec.RunAndWait(ctx, dryRun)
 }
 
-// SweepRunState is the in-memory record of one asynchronous sweep.
-//
-// The run itself already outlives the HTTP request (see the handler), but the
-// operator still needs to know it is running and what it produced without
-// holding a connection open for minutes. The state lives in memory on purpose:
-// it describes one process's current work, not durable history — the durable
-// record is sweep_records, which every job writes as it goes.
-type SweepRunState struct {
-	ID        string           `json:"id"`
-	DryRun    bool             `json:"dry_run"`
-	Chains    []string         `json:"chains"`
-	StartedAt time.Time        `json:"started_at"`
-	Finished  bool             `json:"finished"`
-	Error     string           `json:"error,omitempty"`
-	Summary   *sweeper.Summary `json:"summary,omitempty"`
-}
-
-var (
-	sweepRunsMu sync.Mutex
-	sweepRuns   = map[string]*SweepRunState{}
-)
-
-// sweepRunRetention bounds how many finished runs stay queryable, so a process
-// that has been up for weeks does not accumulate them.
-const sweepRunRetention = 20
-
 // StartSweepAsync launches a sweep and returns immediately with a run id the
 // caller can poll. Refuses when a run is already active: two concurrent sweeps
 // would read the same balances and could double-send.
@@ -1355,27 +1522,6 @@ func (s *Service) SweepRuns() []*SweepRunState {
 	return out
 }
 
-// SweepRecord is one sweep_records row for the admin UI.
-type SweepRecord struct {
-	ID          int64  `json:"id"`
-	Chain       string `json:"chain"`
-	FromAddress string `json:"from_address"`
-	ToAddress   string `json:"to_address"`
-	Token       string `json:"token"`
-	Amount      string `json:"amount"`
-	GasTxHash   string `json:"gas_tx_hash"`
-	SweepTxHash string `json:"sweep_tx_hash"`
-	Status      string `json:"status"`
-	Error       string `json:"error"`
-	CreatedAt   string `json:"created_at"`
-	// JobVersion separates current-format jobs from legacy or hand-handled rows.
-	// The admin console hides 0 by default so old records never mix with work.
-	JobVersion int `json:"job_version"`
-	// TokenSymbol and UpdatedAt are filled by ListSweepRecordsPage only.
-	TokenSymbol string `json:"token_symbol"`
-	UpdatedAt   string `json:"updated_at"`
-}
-
 // ReconcileSweep checks one stuck job against the chain without signing,
 // broadcasting, or releasing an address based only on a missing receipt.
 func (s *Service) ReconcileSweep(ctx context.Context, jobID int64) (*sweeper.ReconcileResult, error) {
@@ -1441,37 +1587,6 @@ func (s *Service) ListSweepRecords(ctx context.Context, chain string, limit int)
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// DepositRecord is one deposit_transactions row for reconciliation.
-type DepositRecord struct {
-	ID          int64  `json:"id"`
-	Chain       string `json:"chain"`
-	TxHash      string `json:"tx_hash"`
-	LogIndex    int    `json:"log_index"`
-	FromAddress string `json:"from_address"`
-	ToAddress   string `json:"to_address"`
-	Token       string `json:"token"`
-	TokenSymbol string `json:"token_symbol"`
-	Amount      string `json:"amount"`
-	Status      string `json:"status"`
-	Reason      string `json:"reason,omitempty"`
-	CreatedAt   string `json:"created_at"`
-	// NativePriceUSD/At/Source answer "which price, observed when" for a
-	// native-coin deposit. Empty for stablecoins, whose amount is already USD.
-	NativePriceUSD    string `json:"native_price_usd,omitempty"`
-	NativePriceAt     string `json:"native_price_at,omitempty"`
-	NativePriceSource string `json:"native_price_source,omitempty"`
-	// Instant-credit reconciliation state. provisional=true with revoked_at
-	// empty means the balance was credited at 0 confirmations and is still
-	// inside the risk window; revoked_at non-empty means it was clawed back and
-	// revoke_reason says why. ProvisionalAmount is the frozen credited amount
-	// from the linked payment order.
-	Provisional       bool    `json:"provisional"`
-	ProvisionalAmount float64 `json:"provisional_amount,omitempty"`
-	CreditedAt        string  `json:"credited_at,omitempty"`
-	RevokedAt         string  `json:"revoked_at,omitempty"`
-	RevokeReason      string  `json:"revoke_reason,omitempty"`
 }
 
 // scanDepositPrice fills the native settlement fields from nullable columns.
@@ -1549,20 +1664,6 @@ func (s *Service) ListDeposits(ctx context.Context, chain, status string, limit 
 		out = append(out, r)
 	}
 	return out, rows.Err()
-}
-
-// DepositSummary totals the deposit ledger for the console header.
-type DepositSummary struct {
-	Total    int64   `json:"total"`
-	Credited int64   `json:"credited"`
-	Pending  int64   `json:"pending"`
-	Ignored  int64   `json:"ignored"`
-	Amount   float64 `json:"amount"`
-	// Provisional counts instant credits still inside the 0-confirmation risk
-	// window; Revoked counts credits that were clawed back (a subset of the
-	// reverted rows). Operators watch both when investigating a chain incident.
-	Provisional int64 `json:"provisional"`
-	Revoked     int64 `json:"revoked"`
 }
 
 // ListDepositsPaged returns a page plus whole-set counters. The console needs
@@ -1668,68 +1769,6 @@ func (s *Service) ListDepositsExportPage(ctx context.Context, chain, status stri
 	}
 	return out, rows.Err()
 }
-
-// DepositInfo is everything the standalone deposit page needs.
-//
-// There is deliberately no response-wide rate. A rate is a property of the
-// asset being sent, not of the account: since native deposits settle at the
-// market price observed when they are credited (PR #306), the old top-level
-// `rate` told every client that 1 ETH was worth the stablecoin multiplier.
-// Clients must read DepositAsset.Rate / MarketPriced instead.
-type DepositInfo struct {
-	Enabled bool           `json:"enabled"`
-	Chains  []DepositChain `json:"chains"`
-	// MinAmount / MaxAmount are the credit thresholds. A stablecoin is
-	// compared by its token amount (already USD-denominated); a market-priced
-	// asset is compared by USD notional (amount × price at credit time), so a
-	// client must label them as USD for that asset, never as a coin amount.
-	MinAmount float64 `json:"min_amount"`
-	MaxAmount float64 `json:"max_amount"`
-}
-
-// DepositAsset is one asset a user can send to a chain's deposit address.
-// Native distinguishes ETH/BNB from the ERC-20 tokens so the UI can label the
-// asset correctly: the address and QR code are the same for both.
-type DepositAsset struct {
-	Symbol string `json:"symbol"`
-	Native bool   `json:"native"`
-	// MarketPriced marks an asset that is settled at the market price
-	// observed when the deposit is credited (ETH, BNB). A fixed rate must
-	// never be rendered for it: Rate is null.
-	MarketPriced bool `json:"market_priced"`
-	// Rate is how many balance units one whole asset is worth under the fixed
-	// rate. It is set for stablecoins and null for market-priced assets,
-	// where a constant number would misstate what the user receives.
-	Rate *float64 `json:"rate"`
-	// ReferencePriceUSD is a display-only quote for a market-priced asset
-	// ("about $3,210 per ETH"). It is best-effort: absent whenever the feed is
-	// unavailable, and it is never used to compute a credit.
-	ReferencePriceUSD *string `json:"reference_price_usd,omitempty"`
-}
-
-// DepositChain is one chain's deposit address.
-type DepositChain struct {
-	Chain   string   `json:"chain"`
-	Address string   `json:"address"`
-	Tokens  []string `json:"tokens"` // supported symbols on this chain, e.g. ["USDT","USDC"]
-	// Assets is Tokens with the native-coin flag, in the same order. Kept
-	// alongside Tokens so an older client that only reads Tokens still shows
-	// every accepted symbol.
-	Assets []DepositAsset `json:"assets"`
-	// EtaSeconds is the normal-path time to credit on this network, from the
-	// same live measurement the network-status endpoint publishes. Null when
-	// there is no fresh measurement; clients must render an unknown rather than
-	// substitute a guess.
-	EtaSeconds *int64 `json:"eta_seconds"`
-	// InstantCredit reports whether this network credits on first detection
-	// (0 confirmations) instead of waiting for the configured final depth.
-	InstantCredit bool `json:"instant_credit"`
-}
-
-// nativeReferencePriceTimeout caps the whole "about $X" decoration pass, so a
-// hung ticker can delay the deposit page by seconds but never fail it. The
-// price is a courtesy for the user, not part of the credit calculation.
-const nativeReferencePriceTimeout = 2 * time.Second
 
 // DepositInfo resolves (assigning on first use) the user's addresses.
 func (s *Service) DepositInfo(ctx context.Context, userID int64) (*DepositInfo, error) {
@@ -1855,44 +1894,6 @@ func (s *Service) attachNativeReferencePrices(parent context.Context, info *Depo
 		}
 	}
 }
-
-// UserDepositRecord is one deposit row for the user's own history.
-type UserDepositRecord struct {
-	Chain     string  `json:"chain"`
-	TxHash    string  `json:"tx_hash"`
-	Token     string  `json:"token"`
-	Amount    string  `json:"amount"`
-	Status    string  `json:"status"`
-	Reason    string  `json:"reason,omitempty"` // human text for non-credited rows
-	CreatedAt string  `json:"created_at"`
-	Credited  float64 `json:"credited"`
-	// CreditedKnown distinguishes a resolved settlement amount from legacy
-	// credited rows whose payment order can no longer be resolved. A numeric
-	// zero must not be presented as a confirmed zero-credit result.
-	CreditedKnown *bool `json:"credited_known,omitempty"`
-	// BlockNumber, Confirmations and RequiredConfirmations drive the
-	// "confirming n/m" progress for pending deposits.
-	BlockNumber           uint64 `json:"block_number"`
-	Confirmations         int    `json:"confirmations"`
-	RequiredConfirmations int    `json:"required_confirmations"`
-	// Instant-credit reconciliation state. Provisional marks a credit that was
-	// added at 0 confirmations and is still inside the risk window; RevokedAt
-	// marks one the chain later invalidated and that was automatically clawed
-	// back. Status is rewritten to "provisional" / "revoked" so clients do not
-	// have to re-derive the user-facing wording from internal ledger columns.
-	Provisional  bool   `json:"provisional"`
-	CreditedAt   string `json:"credited_at,omitempty"`
-	RevokedAt    string `json:"revoked_at,omitempty"`
-	RevokeReason string `json:"revoke_reason,omitempty"`
-}
-
-// User-facing deposit statuses derived from the instant-credit flags. The raw
-// ledger keeps status='credited' + provisional and status='reverted' +
-// revoked_at; users only need to know "临时入账" and "已回滚".
-const (
-	userDepositStatusProvisional = "provisional"
-	userDepositStatusRevoked     = "revoked"
-)
 
 // ownWalletAddresses returns the operator's wallet addresses lowercased for
 // comparison. A lookup failure is reported as an empty list: the deposit list

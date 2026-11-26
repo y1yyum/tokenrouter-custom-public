@@ -8,14 +8,17 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 )
 
 func recordedTransferFixture() scanner.Transfer {
-	return scanner.Transfer{Chain: "bsc", TxHash: "0x" + strings.Repeat("ab", 32), LogIndex: 7,
+	return scanner.Transfer{
+		Chain: "bsc", TxHash: "0x" + strings.Repeat("ab", 32), LogIndex: 7,
 		From: "0x" + strings.Repeat("cd", 20), To: "0x" + strings.Repeat("ef", 20),
 		Token: "0x" + strings.Repeat("12", 20), Amount: big.NewInt(1234567), BlockNumber: 101,
-		BlockHash: "0x" + strings.Repeat("34", 32)}
+		BlockHash: "0x" + strings.Repeat("34", 32),
+	}
 }
 
 func recordedTransferRows() *sqlmock.Rows {

@@ -70,8 +70,10 @@ func TestUnderpricedSweepIsReplacedAtTheSameNonce(t *testing.T) {
 func TestReleasedUnderpricedRecordLetsTheNextSweepReuseItsNonce(t *testing.T) {
 	e, m, c, entry := setupExecutor(t)
 	c.childNonce, c.childPending = "0x0", "0x1"
-	dead := c.signed(EVMSignRequest{Index: 42, Kind: "sweep", ChainID: 56, Token: entry.Token,
-		To: testDestination, Amount: "10000000", Nonce: 0, GasPrice: "1", GasLimit: transferGasLimit})
+	dead := c.signed(EVMSignRequest{
+		Index: 42, Kind: "sweep", ChainID: 56, Token: entry.Token,
+		To: testDestination, Amount: "10000000", Nonce: 0, GasPrice: "1", GasLimit: transferGasLimit,
+	})
 	expectCreate(m, entry, nil, nil)
 	expectAddressClear(m, entry)
 	m.ExpectQuery(`SELECT sweep_raw_tx FROM sweep_records`).
@@ -118,8 +120,10 @@ func TestSweepWithAHealthyFeeIsNotReplaced(t *testing.T) {
 // reported as exactly that, and it is the relationship (limit x floor < cap)
 // that decides it.
 func TestGasBudgetBelowTheChainFloorIsNamed(t *testing.T) {
-	config := Config{HotWalletEVM: testDestination, Confirmations: map[string]uint64{"bsc": 2},
-		GasTopUp: map[string]float64{"bsc": 1e-6}} // 1e12 wei: below one floored transfer
+	config := Config{
+		HotWalletEVM: testDestination, Confirmations: map[string]uint64{"bsc": 2},
+		GasTopUp: map[string]float64{"bsc": 1e-6},
+	} // 1e12 wei: below one floored transfer
 	err := GasBudgetCoversGasFloor(config, "bsc")
 	if err == nil || !strings.Contains(err.Error(), "gas_topup") {
 		t.Fatalf("a budget below the chain floor must be named: %v", err)

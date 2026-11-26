@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 )
 

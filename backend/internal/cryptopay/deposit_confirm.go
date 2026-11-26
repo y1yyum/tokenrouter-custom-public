@@ -72,27 +72,6 @@ type DepositConfirmSummary struct {
 	Failed   int                    `json:"failed"`
 }
 
-// NormalizeDepositConfirmIDs removes duplicates, keeps first-seen order and
-// enforces 1..MaxDepositConfirmIDs positive ids.
-func NormalizeDepositConfirmIDs(ids []int64) ([]int64, error) {
-	seen := make(map[int64]struct{}, len(ids))
-	out := make([]int64, 0, len(ids))
-	for _, id := range ids {
-		if id <= 0 {
-			return nil, ErrDepositConfirmInvalid
-		}
-		if _, duplicate := seen[id]; duplicate {
-			continue
-		}
-		seen[id] = struct{}{}
-		out = append(out, id)
-	}
-	if len(out) == 0 || len(out) > MaxDepositConfirmIDs {
-		return nil, ErrDepositConfirmInvalid
-	}
-	return out, nil
-}
-
 // manualDepositProcessor adapts the ledger's operator entry to the confirmer.
 type manualDepositProcessor struct {
 	ledger *ledger.Ledger // receipt-verified deposit ledger
@@ -133,6 +112,40 @@ type depositConfirmRow struct {
 	orderID     sql.NullInt64
 }
 
+// depositPoolEntry caches one chain's verified pool for the whole batch. A
+// timeout is never cached: it says nothing about the chain.
+type depositPoolEntry struct {
+	pool *rpc.Pool
+	msg  string
+}
+
+// pgDepositLocker holds a per-deposit PostgreSQL session advisory lock on a
+// dedicated connection for the whole confirmation. A row lock (FOR UPDATE) is
+// deliberately not used: the ledger and creditor run on other connections, and
+// their UPDATE of the same row would wait on it forever.
+type pgDepositLocker struct{ db *sql.DB }
+
+// NormalizeDepositConfirmIDs removes duplicates, keeps first-seen order and
+// enforces 1..MaxDepositConfirmIDs positive ids.
+func NormalizeDepositConfirmIDs(ids []int64) ([]int64, error) {
+	seen := make(map[int64]struct{}, len(ids))
+	out := make([]int64, 0, len(ids))
+	for _, id := range ids {
+		if id <= 0 {
+			return nil, ErrDepositConfirmInvalid
+		}
+		if _, duplicate := seen[id]; duplicate {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 || len(out) > MaxDepositConfirmIDs {
+		return nil, ErrDepositConfirmInvalid
+	}
+	return out, nil
+}
+
 func (c *depositConfirmer) load(ctx context.Context, id int64) (*depositConfirmRow, error) {
 	var r depositConfirmRow
 	err := c.db.QueryRowContext(ctx, `SELECT id, chain, tx_hash, log_index, from_address, to_address, token,
@@ -144,13 +157,6 @@ func (c *depositConfirmer) load(ctx context.Context, id int64) (*depositConfirmR
 		return nil, err
 	}
 	return &r, nil
-}
-
-// depositPoolEntry caches one chain's verified pool for the whole batch. A
-// timeout is never cached: it says nothing about the chain.
-type depositPoolEntry struct {
-	pool *rpc.Pool
-	msg  string
 }
 
 func (c *depositConfirmer) chainPool(ctx context.Context, cache map[string]depositPoolEntry, chain string) (*rpc.Pool, string) {
@@ -249,8 +255,10 @@ func (c *depositConfirmer) confirmOne(ctx context.Context, cache map[string]depo
 	switch row.status {
 	case "pending":
 	case "credited":
-		return DepositConfirmResult{ID: id, Status: DepositConfirmAlreadyCredited, OrderID: orderPtr(row.orderID),
-			Message: "这条记录已经入账，无需重复确认。"}
+		return DepositConfirmResult{
+			ID: id, Status: DepositConfirmAlreadyCredited, OrderID: orderPtr(row.orderID),
+			Message: "这条记录已经入账，无需重复确认。",
+		}
 	default:
 		return fail(DepositConfirmRejected, fmt.Sprintf("记录状态是 %s（%s），不能手动入账。",
 			cleanText(row.status, 16), depositReasonText(row.reason, c.minCredit, c.maxCredit)))
@@ -562,12 +570,6 @@ func (s *Service) ConfirmDeposits(ctx context.Context, adminID int64, ids []int6
 		"admin_id", adminID, "requested", len(ids), "credited", summary.Credited, "failed", summary.Failed)
 	return summary, nil
 }
-
-// pgDepositLocker holds a per-deposit PostgreSQL session advisory lock on a
-// dedicated connection for the whole confirmation. A row lock (FOR UPDATE) is
-// deliberately not used: the ledger and creditor run on other connections, and
-// their UPDATE of the same row would wait on it forever.
-type pgDepositLocker struct{ db *sql.DB }
 
 func depositLockKeys(id int64) (int32, int32) {
 	folded := uint64(id)

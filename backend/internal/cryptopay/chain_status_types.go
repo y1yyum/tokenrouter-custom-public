@@ -5,8 +5,8 @@ import (
 	"time"
 )
 
-// Chain states reported by the admin "node status" page.
 const (
+	// Chain states reported by the admin "node status" page.
 	// ChainStateDisabled: RPC nodes are configured but the chain is not in
 	// crypto.config.chains, so the scanner skips it silently. This is the BSC
 	// incident: the cursor froze for hours with nothing in the logs.
@@ -20,20 +20,16 @@ const (
 	// ChainStateCatchingUp: backlog above the threshold but the cursor is moving.
 	ChainStateCatchingUp = "catching_up"
 	ChainStateSynced     = "synced"
-)
 
-// Node statuses.
-const (
+	// Node statuses.
 	NodeStatusOK         = "ok"
 	NodeStatusSlow       = "slow"
 	NodeStatusBehind     = "behind"
 	NodeStatusError      = "error"
 	NodeStatusWrongChain = "wrong_chain"
-)
 
-// Fixed error vocabulary. Text returned by a node or a driver is never echoed:
-// it can carry the endpoint URL, an API key or arbitrary upstream content.
-const (
+	// Fixed error vocabulary. Text returned by a node or a driver is never echoed:
+	// it can carry the endpoint URL, an API key or arbitrary upstream content.
 	NodeErrTimeout    = "timeout"
 	NodeErrConnection = "connection"
 	NodeErrHTTP429    = "http_429"
@@ -44,18 +40,14 @@ const (
 	NodeErrWrongChain = "wrong_chain"
 	// ErrKindDB marks a failed cursor read; it only appears in last_error.
 	ErrKindDB = "db_error"
-)
 
-// last_error stages.
-const (
+	// last_error stages.
 	ErrStageHead   = "head"
 	ErrStageCursor = "cursor"
-)
 
-// Thresholds. The backlog threshold is derived from the chain's own observed
-// block rate instead of a fixed block count: 200 blocks is about two and a half
-// minutes on a sub-second chain but more than half an hour on Ethereum.
-const (
+	// Thresholds. The backlog threshold is derived from the chain's own observed
+	// block rate instead of a fixed block count: 200 blocks is about two and a half
+	// minutes on a sub-second chain but more than half an hour on Ethereum.
 	// chainBacklogWindow is how much chain time of unscanned blocks still counts
 	// as synced. 200 blocks on a ~80 blocks/min chain.
 	chainBacklogWindow = 150 * time.Second

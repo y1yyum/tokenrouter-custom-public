@@ -15,6 +15,8 @@ import (
 	"golang.org/x/net/publicsuffix"
 )
 
+var ErrIndependentEvidence = errors.New("independent RPC confirmation is unavailable or disagrees")
+
 // Reference nodes are a separate trust boundary from a remotely fetched node
 // registry. Two independent reference operators must corroborate funds evidence.
 // A registry entry cannot nominate itself as a reference or reduce the quorum.
@@ -23,6 +25,22 @@ type verificationPolicy struct {
 	anchors    []string
 	chainMu    sync.Mutex
 	verifiedAt map[string]time.Time
+}
+
+type referenceEvidence struct {
+	raw json.RawMessage
+	err error
+}
+
+type evidenceLog struct {
+	Address     string   `json:"address"`
+	Topics      []string `json:"topics"`
+	Data        string   `json:"data"`
+	BlockNumber string   `json:"blockNumber"`
+	BlockHash   string   `json:"blockHash"`
+	TxHash      string   `json:"transactionHash"`
+	Index       string   `json:"logIndex"`
+	Removed     bool     `json:"removed"`
 }
 
 // SetIndependentVerification applies a reference policy to automatic pools.
@@ -130,13 +148,6 @@ func needsIndependentEvidence(method string) bool {
 	default:
 		return false
 	}
-}
-
-var ErrIndependentEvidence = errors.New("independent RPC confirmation is unavailable or disagrees")
-
-type referenceEvidence struct {
-	raw json.RawMessage
-	err error
 }
 
 func (p *Pool) verifyIndependentEvidence(ctx context.Context, policy *verificationPolicy, source, method string, params any, observed json.RawMessage) (json.RawMessage, error) {
@@ -252,17 +263,6 @@ func evidenceHeight(method string, raw json.RawMessage) (uint64, error) {
 		return 0, ErrIndependentEvidence
 	}
 	return evidenceQuantity(block.Number)
-}
-
-type evidenceLog struct {
-	Address     string   `json:"address"`
-	Topics      []string `json:"topics"`
-	Data        string   `json:"data"`
-	BlockNumber string   `json:"blockNumber"`
-	BlockHash   string   `json:"blockHash"`
-	TxHash      string   `json:"transactionHash"`
-	Index       string   `json:"logIndex"`
-	Removed     bool     `json:"removed"`
 }
 
 func normalizedLogs(raw json.RawMessage) ([]string, error) {

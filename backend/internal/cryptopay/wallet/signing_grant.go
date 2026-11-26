@@ -15,13 +15,15 @@ import (
 
 var ErrSigningAuthorizationRequired = errors.New("wallet signing requires an active sweep authorization")
 
-type signingGrantContextKey struct{}
-type signingGrant struct {
-	nonce       [32]byte
-	expires     int64
-	destination string
-	mac         []byte
-}
+type (
+	signingGrantContextKey struct{}
+	signingGrant           struct {
+		nonce       [32]byte
+		expires     int64
+		destination string
+		mac         []byte
+	}
+)
 
 // This authority is random per process, independent of the seed-encryption
 // master, and never written to settings, environment, logs or API responses.

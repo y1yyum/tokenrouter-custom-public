@@ -3,10 +3,15 @@ package addresses
 import (
 	"context"
 	"fmt"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"strings"
 	"sync"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 )
+
+// hotWalletIndex is the HD index reserved for the hot/gas wallet. It must
+// match the built-in Gas wallet index (zero).
+const hotWalletIndex = 0
 
 // Deriver supplies public deposit addresses from the unlocked local wallet.
 type Deriver interface {
@@ -44,12 +49,12 @@ type Service struct {
 	families []string
 }
 
-// Guards are attached by the wallet facade, including for the direct address
-// HTTP endpoint. Every assignment is checked before its public address leaves.
-func (s *Service) SetSecurityGuards(before func(context.Context) error, validate func(context.Context, Assignment) error) {
-	s.guardMu.Lock()
-	defer s.guardMu.Unlock()
-	s.beforeAssign, s.validateAssignment = before, validate
+// PoolStatus reports how many unassigned addresses remain per family. An
+// empty pool means new users cannot be given a deposit address at all, so the
+// console surfaces it before it runs dry.
+type PoolStatus struct {
+	Free         map[string]int64 `json:"free"`
+	LowWatermark int64            `json:"low_watermark"`
 }
 
 // NewService wires the address service. topUpBatch is derived per request;
@@ -63,6 +68,14 @@ func NewService(repo PoolStore, deriver Deriver) *Service {
 		lowWatermark: 10,
 		families:     []string{FamilyEVM, FamilySolana},
 	}
+}
+
+// Guards are attached by the wallet facade, including for the direct address
+// HTTP endpoint. Every assignment is checked before its public address leaves.
+func (s *Service) SetSecurityGuards(before func(context.Context) error, validate func(context.Context, Assignment) error) {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	s.beforeAssign, s.validateAssignment = before, validate
 }
 
 // SetFamilies narrows assignment to the families the caller can actually scan.
@@ -191,10 +204,6 @@ func (s *Service) SetDeriver(deriver Deriver) {
 	s.deriver = deriver
 }
 
-// hotWalletIndex is the HD index reserved for the hot/gas wallet. It must
-// match the built-in Gas wallet index (zero).
-const hotWalletIndex = 0
-
 // EnsurePool tops the pool up when below the low watermark. Called by the
 // background worker; safe to call repeatedly.
 func (s *Service) EnsurePool(ctx context.Context) error {
@@ -245,14 +254,6 @@ func (s *Service) TopUpTo(ctx context.Context, target int64) error {
 // ListByUser exposes the user's assignments to the HTTP layer.
 func (s *Service) ListByUser(ctx context.Context, userID int64) ([]Assignment, error) {
 	return s.repo.ListByUser(ctx, userID)
-}
-
-// PoolStatus reports how many unassigned addresses remain per family. An
-// empty pool means new users cannot be given a deposit address at all, so the
-// console surfaces it before it runs dry.
-type PoolStatus struct {
-	Free         map[string]int64 `json:"free"`
-	LowWatermark int64            `json:"low_watermark"`
 }
 
 func (s *Service) PoolStatus(ctx context.Context) (*PoolStatus, error) {

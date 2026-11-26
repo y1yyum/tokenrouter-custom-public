@@ -1,25 +1,3 @@
-// Package shards implements a versioned 2-of-3 Shamir secret sharing scheme
-// over GF(256). It is the wire-compatible sibling of the browser implementation
-// in the admin frontend: both sides must produce identical share strings.
-//
-// It is deliberately not SLIP-39: SLIP-39 adds a passphrase, Feistel
-// encryption and a 1024-word wordlist, and no audited Go + browser pair
-// exists for byte-identical output. This scheme keeps the security-relevant
-// properties (GF(256) Shamir sharing, threshold 2 of 3, versioned share with a
-// checksum, order-independent recovery) while staying small enough to audit on
-// both sides.
-//
-// Share text format:
-//
-//	S2V1-XXXX-XXXX-... (base32, RFC 4648, no padding, grouped in fours)
-//
-// Decoded payload:
-//
-//	version(1) | threshold(1) | total(1) | index(1) | dataLen(1) | data(n) | checksum(4)
-//
-// The checksum is the first four bytes of SHA-256 over everything before it.
-// A share is only useful together with one other share from the same split;
-// a single share reveals nothing about the secret.
 package shards
 
 import (
@@ -55,6 +33,12 @@ var (
 	ErrThreshold  = errors.New("at least two different shares are required")
 	ErrDuplicate  = errors.New("duplicate share index")
 	ErrParameters = errors.New("share parameters are invalid")
+
+	// gfExp/gfLog implement multiplication in GF(2^8) with the AES reduction
+	// polynomial 0x11b and generator 0x03.
+	gfExp [512]byte
+
+	gfLog [256]byte
 )
 
 // Share is one point of the split secret.
@@ -64,6 +48,18 @@ type Share struct {
 	Total     byte
 	Index     byte
 	Data      []byte
+}
+
+func init() {
+	x := byte(1)
+	for i := 0; i < 255; i++ {
+		gfExp[i] = x
+		gfLog[x] = byte(i)
+		x = mulByThree(x)
+	}
+	for i := 255; i < len(gfExp); i++ {
+		gfExp[i] = gfExp[i-255]
+	}
 }
 
 // Commitment is the public fingerprint of the data key. It lets the server
@@ -180,23 +176,6 @@ func evaluate(coefficients []byte, x byte) byte {
 		result = mul(result, x) ^ coefficients[i]
 	}
 	return result
-}
-
-// gfExp/gfLog implement multiplication in GF(2^8) with the AES reduction
-// polynomial 0x11b and generator 0x03.
-var gfExp [512]byte
-var gfLog [256]byte
-
-func init() {
-	x := byte(1)
-	for i := 0; i < 255; i++ {
-		gfExp[i] = x
-		gfLog[x] = byte(i)
-		x = mulByThree(x)
-	}
-	for i := 255; i < len(gfExp); i++ {
-		gfExp[i] = gfExp[i-255]
-	}
 }
 
 func mulByThree(x byte) byte {

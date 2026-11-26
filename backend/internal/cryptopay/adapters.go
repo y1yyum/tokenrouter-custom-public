@@ -17,6 +17,13 @@ type addressResolver struct {
 	svc *addresses.Service
 }
 
+// balanceReader feeds the sweep planner: credited-but-unswept totals per
+// address, derived from deposit_transactions minus sweep_records.
+type balanceReader struct {
+	db       *sql.DB
+	decimals map[string]int // "chain|lower(contract)" -> token decimals
+}
+
 func newAddressResolver(svc *addresses.Service) *addressResolver {
 	return &addressResolver{svc: svc}
 }
@@ -54,13 +61,6 @@ func (r *addressResolver) IsOwnAddress(ctx context.Context, chain, address strin
 		return false, err
 	}
 	return assignment != nil, nil
-}
-
-// balanceReader feeds the sweep planner: credited-but-unswept totals per
-// address, derived from deposit_transactions minus sweep_records.
-type balanceReader struct {
-	db       *sql.DB
-	decimals map[string]int // "chain|lower(contract)" -> token decimals
 }
 
 func newBalanceReader(db *sql.DB, decimals map[string]int) *balanceReader {
@@ -189,8 +189,10 @@ func (b *balanceReader) CurrentBalance(ctx context.Context, chain, address, toke
 	if err != nil {
 		return nil, fmt.Errorf("decode current sweep balance: %w", err)
 	}
-	return &sweeper.AddressBalance{Chain: chain, Address: address, Token: token,
-		DerivationIndex: uint32(index.Int64), Raw: raw, Decimals: decimals}, nil
+	return &sweeper.AddressBalance{
+		Chain: chain, Address: address, Token: token,
+		DerivationIndex: uint32(index.Int64), Raw: raw, Decimals: decimals,
+	}, nil
 }
 
 // decimalToRaw converts a NUMERIC string ("12.345678") into raw units for

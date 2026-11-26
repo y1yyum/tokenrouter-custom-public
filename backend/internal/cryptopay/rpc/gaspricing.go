@@ -12,25 +12,25 @@ import (
 	"github.com/ethereum/go-ethereum/common/hexutil"
 )
 
-// A gas price is a signed number, not a hint: it decides whether a transaction
-// can be mined at all. Two independent defects produced dead sweep bytes on BSC
-// on 2026-11-13 (sweep_records.id=560, tx 0x9f208df3…, nonce 0x0, gasPrice 0x1):
-//
-//   - Pool.GasPrice returned whatever the first endpoint in the rotation
-//     answered, with no cross-endpoint check. A public endpoint that reports
-//     0x1 (1 wei) is valid JSON-RPC, so the pool accepted it even though the
-//     network itself reported 0x2faf080 (50,000,000 wei) at the same time.
-//   - Nothing compared the quote with the chain's own minimum, so a single bad
-//     endpoint produced a fee no validator would ever include.
-//
-// Both are fixed here: every healthy endpoint is sampled and the median is
-// used (one outlier cannot move it), and the result is clamped to a per-chain
-// floor that is documented below.
-const weiPerGwei = 1_000_000_000
-
-// Minimum acceptable gas price per chain, in wei. A pool never signs below its
-// chain's floor; a quote under it is treated as a bad answer, not a bargain.
 const (
+	// A gas price is a signed number, not a hint: it decides whether a transaction
+	// can be mined at all. Two independent defects produced dead sweep bytes on BSC
+	// on 2026-11-13 (sweep_records.id=560, tx 0x9f208df3…, nonce 0x0, gasPrice 0x1):
+	//
+	//   - Pool.GasPrice returned whatever the first endpoint in the rotation
+	//     answered, with no cross-endpoint check. A public endpoint that reports
+	//     0x1 (1 wei) is valid JSON-RPC, so the pool accepted it even though the
+	//     network itself reported 0x2faf080 (50,000,000 wei) at the same time.
+	//   - Nothing compared the quote with the chain's own minimum, so a single bad
+	//     endpoint produced a fee no validator would ever include.
+	//
+	// Both are fixed here: every healthy endpoint is sampled and the median is
+	// used (one outlier cannot move it), and the result is clamped to a per-chain
+	// floor that is documented below.
+	weiPerGwei = 1_000_000_000
+
+	// Minimum acceptable gas price per chain, in wei. A pool never signs below its
+	// chain's floor; a quote under it is treated as a bad answer, not a bargain.
 	// Ethereum mainnet: 1 gwei is the long-standing minimum that relayers and
 	// block builders accept; the observed eth_gasPrice is 1-5 gwei.
 	ethereumMinGasPriceWei = 1 * weiPerGwei
@@ -54,6 +54,10 @@ const (
 	// too-low fee produces a transaction that never lands, while this value is
 	// still accepted on every chain the sweeper supports.
 	unknownChainMinGasPriceWei = 1 * weiPerGwei
+
+	// gasPriceCacheTTL keeps one sweep run from sampling the whole pool once per
+	// address. It is short enough that a real price move is picked up quickly.
+	gasPriceCacheTTL = 30 * time.Second
 )
 
 // gasPriceFloors is keyed by EIP-155 chain id so a pool only needs to know the
@@ -162,10 +166,6 @@ func clampGasPrice(price, floor *big.Int) *big.Int {
 	}
 	return new(big.Int).Set(floor)
 }
-
-// gasPriceCacheTTL keeps one sweep run from sampling the whole pool once per
-// address. It is short enough that a real price move is picked up quickly.
-const gasPriceCacheTTL = 30 * time.Second
 
 func (p *Pool) cachedGasPrice() *big.Int {
 	p.gasMu.Lock()

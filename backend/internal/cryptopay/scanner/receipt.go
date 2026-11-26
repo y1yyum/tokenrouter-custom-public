@@ -16,6 +16,19 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
+// An endpoint's proof that it serves the configured chain is remembered for a
+// few minutes. verifiedChainPool runs on every scan pass (every five seconds,
+// several times per chain), and without this each run probed every configured
+// endpoint again: dozens of eth_chainId requests a minute per chain, counted
+// against the provider's daily allowance like any other call, for an answer that
+// never changes. A failed probe is remembered only briefly, so a node that was
+// merely busy is asked again within a pass or two and a dead one is not asked
+// on every pass.
+const (
+	chainProofTTL     = 5 * time.Minute
+	chainProofFailTTL = 10 * time.Second
+)
+
 var (
 	// Only an explicit JSON null means absent. Transport/decode failures are
 	// inconclusive and never count towards a missing-transaction alert.
@@ -23,6 +36,14 @@ var (
 	ErrTransactionReverted = errors.New("transaction reverted")
 	ErrNonCanonicalBlock   = errors.New("receipt block is not canonical")
 	ErrTransferMismatch    = errors.New("receipt does not contain the observed transfer")
+
+	// proofClock is a seam for tests.
+	proofClock = time.Now
+
+	chainProofs = struct {
+		sync.Mutex
+		byKey map[string]chainProof
+	}{byKey: make(map[string]chainProof)}
 )
 
 // ReceiptCheck includes the exact logs, not just the transaction's status:
@@ -33,6 +54,11 @@ type ReceiptCheck struct {
 	BlockHash   string
 	TxHash      string
 	Logs        []evmLog
+}
+
+type chainProof struct {
+	err   error // nil: proved to serve the chain
+	until time.Time
 }
 
 // VerifyTransaction returns a receipt plus ErrTransactionReverted for an
@@ -186,32 +212,6 @@ func verifyChain(ctx context.Context, pool *rpc.Pool, chain string) error {
 	}
 	return nil
 }
-
-// An endpoint's proof that it serves the configured chain is remembered for a
-// few minutes. verifiedChainPool runs on every scan pass (every five seconds,
-// several times per chain), and without this each run probed every configured
-// endpoint again: dozens of eth_chainId requests a minute per chain, counted
-// against the provider's daily allowance like any other call, for an answer that
-// never changes. A failed probe is remembered only briefly, so a node that was
-// merely busy is asked again within a pass or two and a dead one is not asked
-// on every pass.
-const (
-	chainProofTTL     = 5 * time.Minute
-	chainProofFailTTL = 10 * time.Second
-)
-
-// proofClock is a seam for tests.
-var proofClock = time.Now
-
-type chainProof struct {
-	err   error // nil: proved to serve the chain
-	until time.Time
-}
-
-var chainProofs = struct {
-	sync.Mutex
-	byKey map[string]chainProof
-}{byKey: make(map[string]chainProof)}
 
 func chainProofKey(chain, endpoint string) string { return chain + "|" + endpoint }
 

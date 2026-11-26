@@ -175,7 +175,8 @@ func unavailableSecurityStatus(reason string) SecurityStatus {
 	return SecurityStatus{Enabled: true, Locked: true, DepositsPaused: true, Reason: reason, AlertPending: true}
 }
 
-func snapshotKey(userID int64, family string) string    { return fmt.Sprintf("%d:%s", userID, family) }
+func snapshotKey(userID int64, family string) string { return fmt.Sprintf("%d:%s", userID, family) }
+
 func poolSnapshotKey(index int64, family string) string { return fmt.Sprintf("%s:%d", family, index) }
 
 func (m *Manager) validateSnapshotAddress(row addressSnapshot) error {

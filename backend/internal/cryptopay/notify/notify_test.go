@@ -14,6 +14,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+type recordingEmailSender struct {
+	mu      sync.Mutex
+	sent    []string
+	err     error
+	subject string
+	body    string
+}
+
 func TestWebhookSinkPostsStructuredEventAndBarkFields(t *testing.T) {
 	type captured struct {
 		body        []byte
@@ -72,14 +80,6 @@ func TestWebhookSinkReportsNon2xxAndUnsupportedScheme(t *testing.T) {
 
 	// An empty endpoint means "channel not configured", not a failure.
 	require.NoError(t, sink.Send(context.Background(), Config{Enabled: true}, Event{Event: "signer.setup"}))
-}
-
-type recordingEmailSender struct {
-	mu      sync.Mutex
-	sent    []string
-	err     error
-	subject string
-	body    string
 }
 
 func (s *recordingEmailSender) SendEmail(_ context.Context, to, subject, body string) error {

@@ -10,10 +10,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-var sweepPageColumns = []string{"id", "chain", "from_address", "to_address", "token", "amount", "gas_tx_hash",
-	"sweep_tx_hash", "status", "error", "created_at", "updated_at", "job_version"}
-
 const sweepPageSelect = `(?s)SELECT id, chain, from_address, to_address, token, amount::text,\s+gas_tx_hash, sweep_tx_hash, status, error, created_at, updated_at, job_version\s+FROM sweep_records WHERE 1=1`
+
+var sweepPageColumns = []string{
+	"id", "chain", "from_address", "to_address", "token", "amount", "gas_tx_hash",
+	"sweep_tx_hash", "status", "error", "created_at", "updated_at", "job_version",
+}
 
 func newSweepPageService(t *testing.T) (*Service, sqlmock.Sqlmock) {
 	t.Helper()

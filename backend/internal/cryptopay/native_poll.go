@@ -15,25 +15,37 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
 )
 
-// NativeScanBlocks is the default native-coin scan source: the original
-// per-block eth_getBlockByNumber scan. NativeScanTxList keeps the account-API
-// path (one request per watched address per poll interval) as an explicit
-// operator choice.
 const (
+	// NativeScanBlocks is the default native-coin scan source: the original
+	// per-block eth_getBlockByNumber scan. NativeScanTxList keeps the account-API
+	// path (one request per watched address per poll interval) as an explicit
+	// operator choice.
 	NativeScanTxList = scanner.NativeScanTxList
 	NativeScanBlocks = scanner.NativeScanBlocks
+
+	// DefaultNativePollSeconds paces the native poll. It is a per-address
+	// interval, not a block cursor: in txlist mode the call count is
+	// addresses × (86400 / interval) and does not depend on the chain's block rate;
+	// in the default blocks mode it paces the hot-wallet native-outflow guard.
+	DefaultNativePollSeconds = 10
+
+	// txListPageLimit is the account API's maximum rows per answer. A full page may
+	// have truncated the range, so the cursor re-reads the last returned block
+	// instead of jumping to the range end.
+	txListPageLimit = 10000
+
+	// nativeFirstRunLookback mirrors the block scanner's first-run window: a new
+	// address starts a bounded distance behind the confirmed head instead of at
+	// genesis, so enabling a chain never credits long-past transfers.
+	nativeFirstRunLookback = 200
+
+	// nativePollOverlap re-reads the last blocks of every window. An account API can
+	// index a transaction later than the chain mined it; without the overlap a
+	// cursor that already passed that height would never see the row again. The
+	// overlap costs nothing extra (one call per address per poll) and duplicate rows
+	// are dropped by the seen cache and the ledger's unique key.
+	nativePollOverlap = 64
 )
-
-// DefaultNativePollSeconds paces the native poll. It is a per-address
-// interval, not a block cursor: in txlist mode the call count is
-// addresses × (86400 / interval) and does not depend on the chain's block rate;
-// in the default blocks mode it paces the hot-wallet native-outflow guard.
-const DefaultNativePollSeconds = 10
-
-// txListPageLimit is the account API's maximum rows per answer. A full page may
-// have truncated the range, so the cursor re-reads the last returned block
-// instead of jumping to the range end.
-const txListPageLimit = 10000
 
 // nativeTxLister is the account-API seam (an *explorer.Client in production).
 type nativeTxLister interface {
@@ -85,6 +97,23 @@ type nativePoll struct {
 	outflowOnly bool
 }
 
+// nativeServiceSink routes observed native rows into the two existing paths:
+// the block scanner's verification/ledger seam for deposits, and the wallet
+// security guard for outflows.
+type nativeServiceSink struct {
+	svc    *Service
+	worker *scanner.Worker
+}
+
+// hotAddressResolver caches the derived gas-wallet address. Derivation audits
+// a row, so it must not run once per poll per chain; an imported mnemonic
+// changes it, and a reload rebuilds the resolver.
+type hotAddressResolver struct {
+	mu    sync.Mutex
+	svc   *Service
+	value string
+}
+
 func newNativePoll(chainConfigs []scanner.ChainConfig) *nativePoll {
 	chains := make([]scanner.ChainConfig, 0, len(chainConfigs))
 	for _, chain := range chainConfigs {
@@ -101,18 +130,6 @@ func newNativePoll(chainConfigs []scanner.ChainConfig) *nativePoll {
 		firstRunLookback: nativeFirstRunLookback,
 	}
 }
-
-// nativeFirstRunLookback mirrors the block scanner's first-run window: a new
-// address starts a bounded distance behind the confirmed head instead of at
-// genesis, so enabling a chain never credits long-past transfers.
-const nativeFirstRunLookback = 200
-
-// nativePollOverlap re-reads the last blocks of every window. An account API can
-// index a transaction later than the chain mined it; without the overlap a
-// cursor that already passed that height would never see the row again. The
-// overlap costs nothing extra (one call per address per poll) and duplicate rows
-// are dropped by the seen cache and the ledger's unique key.
-const nativePollOverlap = 64
 
 // runOnce polls every native chain once. Individual chain failures are reported
 // and do not stop the other chains.
@@ -454,29 +471,12 @@ func safeCause(err error) string {
 	return "provider call failed"
 }
 
-// nativeServiceSink routes observed native rows into the two existing paths:
-// the block scanner's verification/ledger seam for deposits, and the wallet
-// security guard for outflows.
-type nativeServiceSink struct {
-	svc    *Service
-	worker *scanner.Worker
-}
-
 func (s nativeServiceSink) ProcessNativeDeposit(ctx context.Context, chain scanner.ChainConfig, t scanner.Transfer) error {
 	return s.worker.ProcessObservedTransfer(ctx, chain, t)
 }
 
 func (s nativeServiceSink) ScanNativeOutflow(ctx context.Context, chain scanner.ChainConfig, t scanner.Transfer) error {
 	return s.svc.scanNativeOutflow(ctx, chain, t)
-}
-
-// hotAddressResolver caches the derived gas-wallet address. Derivation audits
-// a row, so it must not run once per poll per chain; an imported mnemonic
-// changes it, and a reload rebuilds the resolver.
-type hotAddressResolver struct {
-	mu    sync.Mutex
-	svc   *Service
-	value string
 }
 
 func (r *hotAddressResolver) address(ctx context.Context) (string, error) {
@@ -538,7 +538,8 @@ func newExplorerClient(cfg CryptoConfig) (*explorer.Client, error) {
 // newNativePoll wires the production seams for one reload. Caller holds no
 // lock requirement beyond constructing it.
 func (s *Service) newNativePoll(cfg CryptoConfig, chainConfigs []scanner.ChainConfig, worker *scanner.Worker,
-	client nativeTxLister, addressLister func(context.Context, string) ([]string, error)) *nativePoll {
+	client nativeTxLister, addressLister func(context.Context, string) ([]string, error),
+) *nativePoll {
 	poll := newNativePoll(chainConfigs)
 	// A chain without an RPC pool cannot verify a receipt or read a head; the
 	// block worker skips it silently, so the poller must not turn that known

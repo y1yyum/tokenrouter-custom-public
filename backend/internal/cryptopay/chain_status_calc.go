@@ -13,6 +13,22 @@ type chainSample struct {
 	Head   uint64
 }
 
+// chainStateInput carries everything the state decision depends on.
+type chainStateInput struct {
+	Enabled      bool
+	HasEndpoints bool
+	UsableNodes  int
+	// CursorFailed: the cursor table could not be read at all.
+	CursorFailed bool
+	// CursorMissing: the table was read but this chain has no row (never scanned).
+	CursorMissing bool
+	Unscanned     uint64
+	Threshold     uint64
+	// StalledSeconds: seconds since the cursor last moved, or since its row was
+	// first seen missing.
+	StalledSeconds int64
+}
+
 func chainPtr[T any](v T) *T { return &v }
 
 func round1(v float64) float64 { return math.Round(v*10) / 10 }
@@ -139,22 +155,6 @@ func secondsSince(then, now time.Time) int64 {
 		return 0
 	}
 	return int64(d / time.Second)
-}
-
-// chainStateInput carries everything the state decision depends on.
-type chainStateInput struct {
-	Enabled      bool
-	HasEndpoints bool
-	UsableNodes  int
-	// CursorFailed: the cursor table could not be read at all.
-	CursorFailed bool
-	// CursorMissing: the table was read but this chain has no row (never scanned).
-	CursorMissing bool
-	Unscanned     uint64
-	Threshold     uint64
-	// StalledSeconds: seconds since the cursor last moved, or since its row was
-	// first seen missing.
-	StalledSeconds int64
 }
 
 // classifyChainState decides the row state. Precedence, first match wins:

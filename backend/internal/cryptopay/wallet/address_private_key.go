@@ -8,10 +8,30 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/gagliardetto/solana-go"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
+)
+
+const (
+	addressPrivateKeyExportOp = "private_key_export"
+
+	exportAssignmentSQL = `SELECT id, user_id, chain, address, derivation_index, status
+	FROM deposit_addresses WHERE id = $1 FOR SHARE`
+
+	exportPoolSQL = `SELECT address, assigned_user_id, status FROM crypto_address_pool
+	WHERE chain_family = $1 AND derivation_index = $2 FOR SHARE`
+)
+
+var (
+	// ErrExportAddressNotFound means the requested deposit assignment is absent.
+	ErrExportAddressNotFound = errors.New("deposit address not found")
+	// ErrExportAddressUnsupportedFamily rejects unknown stored address families.
+	ErrExportAddressUnsupportedFamily = errors.New("deposit address family is not supported")
+	// ErrExportAddressMismatch prevents exporting an unverified assignment key.
+	ErrExportAddressMismatch = errors.New("deposit address does not match managed wallet")
 )
 
 // AddressPrivateKeyExport contains one explicitly selected deposit private key.
@@ -24,23 +44,6 @@ type AddressPrivateKeyExport struct {
 	PrivateKey      string `json:"private_key"`
 	Format          string `json:"format"`
 }
-
-var (
-	// ErrExportAddressNotFound means the requested deposit assignment is absent.
-	ErrExportAddressNotFound = errors.New("deposit address not found")
-	// ErrExportAddressUnsupportedFamily rejects unknown stored address families.
-	ErrExportAddressUnsupportedFamily = errors.New("deposit address family is not supported")
-	// ErrExportAddressMismatch prevents exporting an unverified assignment key.
-	ErrExportAddressMismatch = errors.New("deposit address does not match managed wallet")
-)
-
-const addressPrivateKeyExportOp = "private_key_export"
-
-const exportAssignmentSQL = `SELECT id, user_id, chain, address, derivation_index, status
-	FROM deposit_addresses WHERE id = $1 FOR SHARE`
-
-const exportPoolSQL = `SELECT address, assigned_user_id, status FROM crypto_address_pool
-	WHERE chain_family = $1 AND derivation_index = $2 FOR SHARE`
 
 // ExportAddressPrivateKey verifies the selected database assignment against the
 // current encrypted deposit seed. Operator 2FA and session-bound grants belong
@@ -141,8 +144,10 @@ func (m *Manager) exportAddressPrivateKey(ctx context.Context, addressID int64) 
 		return nil, err
 	}
 	defer clear(key)
-	if err := writeAudit(ctx, tx, auditEntry{op: addressPrivateKeyExportOp, kind: family,
-		index: index, to: row.Address, result: "success"}); err != nil {
+	if err := writeAudit(ctx, tx, auditEntry{
+		op: addressPrivateKeyExportOp, kind: family,
+		index: index, to: row.Address, result: "success",
+	}); err != nil {
 		return nil, err
 	}
 	if err := tx.Commit(); err != nil {
@@ -157,8 +162,10 @@ func (m *Manager) exportAddressPrivateKey(ctx context.Context, addressID int64) 
 	} else {
 		encoded = hex.EncodeToString(key)
 	}
-	return &AddressPrivateKeyExport{AddressID: row.ID, Address: row.Address,
-		Family: family, DerivationIndex: index, PrivateKey: encoded, Format: format}, nil
+	return &AddressPrivateKeyExport{
+		AddressID: row.ID, Address: row.Address,
+		Family: family, DerivationIndex: index, PrivateKey: encoded, Format: format,
+	}, nil
 }
 
 func exportAddressesEqual(family, left, right string) bool {

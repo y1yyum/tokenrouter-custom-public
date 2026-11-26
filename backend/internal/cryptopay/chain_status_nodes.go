@@ -10,9 +10,26 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"golang.org/x/net/publicsuffix"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
+
+// nodeProbe is the raw outcome of probing one node. The derived status (ok, slow,
+// behind) depends on the other nodes, so it is computed per request.
+type nodeProbe struct {
+	// Answered: eth_chainId came back, so the node is reachable.
+	Answered bool
+	// WrongChain: it answered, but for a different chain than the one expected.
+	WrongChain bool
+	// HasHead: eth_blockNumber also came back; Head is valid.
+	HasHead bool
+	Head    uint64
+	// HasLatency: Latency is a real round trip (zero must not read as "instant").
+	HasLatency bool
+	Latency    time.Duration
+	ErrorKind  string
+}
 
 // classifyNodeError maps a probe failure to the fixed vocabulary. The error text
 // is never inspected for display: transport and driver errors can contain the
@@ -85,22 +102,6 @@ func providerLabel(host string) string {
 		return "node"
 	}
 	return b.String()
-}
-
-// nodeProbe is the raw outcome of probing one node. The derived status (ok, slow,
-// behind) depends on the other nodes, so it is computed per request.
-type nodeProbe struct {
-	// Answered: eth_chainId came back, so the node is reachable.
-	Answered bool
-	// WrongChain: it answered, but for a different chain than the one expected.
-	WrongChain bool
-	// HasHead: eth_blockNumber also came back; Head is valid.
-	HasHead bool
-	Head    uint64
-	// HasLatency: Latency is a real round trip (zero must not read as "instant").
-	HasLatency bool
-	Latency    time.Duration
-	ErrorKind  string
 }
 
 // nodeHealth grades a node that returned a head. Falling behind outranks being

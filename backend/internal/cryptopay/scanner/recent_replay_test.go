@@ -11,10 +11,16 @@ import (
 	"time"
 
 	"github.com/DATA-DOG/go-sqlmock"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
 type replayStateArgument struct{ want recentReplayState }
+
+type knownReplayHandler struct {
+	*recordingHandler
+	checks int
+}
 
 func TestZeroValueTransferDoesNotConsumeVerificationBudget(t *testing.T) {
 	fixture := newRPCFixture(testTransfer())
@@ -301,11 +307,6 @@ func TestRecentReplayCompletionIsThrottledAcrossWorkerReplacement(t *testing.T) 
 	if err := second.scanChain(t.Context(), second.chains[0]); err != nil || len(secondHandler.processed) != 0 {
 		t.Fatal("worker replacement bypassed durable overlap throttle", err)
 	}
-}
-
-type knownReplayHandler struct {
-	*recordingHandler
-	checks int
 }
 
 func (h *knownReplayHandler) HasRecordedTransfer(context.Context, Transfer, int) (bool, error) {

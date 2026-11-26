@@ -1,11 +1,3 @@
-// Package nativeprice resolves the USD price of a chain's native coin.
-//
-// Native deposits must be credited at the market price observed when the
-// deposit is settled: a constant multiplier cannot tell 1 ETH from 1 USDT.
-// The provider is deliberately fail-closed. It returns an error instead of a
-// default, a zero or a quote older than MaxQuoteAge, and the ledger leaves the
-// deposit pending for the next pass. Crediting on a guessed price is worse
-// than crediting a few minutes late.
 package nativeprice
 
 import (
@@ -61,6 +53,27 @@ type Quote struct {
 	Source string
 }
 
+// Provider fetches and caches native-coin USD quotes.
+type Provider struct {
+	baseURL   string
+	client    *http.Client
+	now       func() time.Time
+	sleep     func(time.Duration)
+	sleepBase time.Duration
+
+	mu    sync.Mutex
+	cache map[string]Quote
+}
+
+// Option customises a Provider. Options exist for tests and for deployments
+// that need a shared HTTP client; production defaults need none.
+type Option func(*Provider)
+
+type tickerResponse struct {
+	Symbol string `json:"symbol"`
+	Price  string `json:"price"`
+}
+
 // Age returns how old the quote is at now. A zero At counts as infinitely old.
 func (q Quote) Age(now time.Time) time.Duration {
 	if q.At.IsZero() {
@@ -85,22 +98,6 @@ func SymbolForChain(chain string) (string, bool) {
 	}
 	return "", false
 }
-
-// Provider fetches and caches native-coin USD quotes.
-type Provider struct {
-	baseURL   string
-	client    *http.Client
-	now       func() time.Time
-	sleep     func(time.Duration)
-	sleepBase time.Duration
-
-	mu    sync.Mutex
-	cache map[string]Quote
-}
-
-// Option customises a Provider. Options exist for tests and for deployments
-// that need a shared HTTP client; production defaults need none.
-type Option func(*Provider)
 
 // WithHTTPClient replaces the default client.
 func WithHTTPClient(client *http.Client) Option {
@@ -203,11 +200,6 @@ func (p *Provider) store(symbol string, quote Quote) {
 	p.mu.Lock()
 	p.cache[symbol] = quote
 	p.mu.Unlock()
-}
-
-type tickerResponse struct {
-	Symbol string `json:"symbol"`
-	Price  string `json:"price"`
 }
 
 func (p *Provider) fetch(ctx context.Context, symbol string) (Quote, error) {

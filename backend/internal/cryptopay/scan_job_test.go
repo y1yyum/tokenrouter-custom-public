@@ -9,10 +9,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
-	"github.com/stretchr/testify/require"
 )
 
 // fakeScan stands in for the worker: one chain with a durable cursor. step runs
@@ -26,6 +27,8 @@ type fakeScan struct {
 	progErr   error
 	step      func(ctx context.Context, f *fakeScan, call int, from uint64) error
 }
+
+type scanCtxKey struct{}
 
 func newFakeScan(cursor, confirmed uint64) *fakeScan {
 	return &fakeScan{cursor: cursor, confirmed: confirmed}
@@ -308,8 +311,6 @@ func TestScanRegistryAllowsOneRunAtATime(t *testing.T) {
 	require.Equal(t, ScanRunCompleted, third.Status)
 	require.Equal(t, third.ID, r.list()[0].ID, "newest first")
 }
-
-type scanCtxKey struct{}
 
 func TestScanRunSurvivesTheStartingRequestEndingAndKeepsItsValues(t *testing.T) {
 	r := newTestRegistry()

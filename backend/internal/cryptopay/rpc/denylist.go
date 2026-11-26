@@ -7,18 +7,25 @@ import (
 	"sync/atomic"
 )
 
-// deniedRPC hosts are refused on every path: configured lists, automatic
-// chainlist discovery and any pool reload.
-//
-// 0.48.club answered eth_gasPrice with 0x1 (one wei) while healthy BSC nodes
-// reported 0.05–1 gwei. The sweeper trusted it, priced a 999.99 USDT sweep at
-// roughly 0.019 gwei, and the transaction sat unmined for 43 hours while the
-// address stayed reserved. The whole 48.club domain is denied rather than the
-// single host: the operator already proved it can serve junk, and 0.48.club and
-// rpc-bsc.48.club are one codebase away from swapping behaviour.
-var deniedRPCDomains = []string{
-	"48.club",
-}
+var (
+	// deniedRPC hosts are refused on every path: configured lists, automatic
+	// chainlist discovery and any pool reload.
+	//
+	// 0.48.club answered eth_gasPrice with 0x1 (one wei) while healthy BSC nodes
+	// reported 0.05–1 gwei. The sweeper trusted it, priced a 999.99 USDT sweep at
+	// roughly 0.019 gwei, and the transaction sat unmined for 43 hours while the
+	// address stayed reserved. The whole 48.club domain is denied rather than the
+	// single host: the operator already proved it can serve junk, and 0.48.club and
+	// rpc-bsc.48.club are one codebase away from swapping behaviour.
+	deniedRPCDomains = []string{
+		"48.club",
+	}
+
+	// Gas-price sanity. A node that answers below the floor is not asked again for
+	// a price in this call; the floor itself is the answer so a signed transaction
+	// is never underpriced just because one endpoint is broken.
+	defaultGasPriceFloorWei atomic.Int64
+)
 
 // IsDeniedRPCEndpoint reports whether the endpoint belongs to a denied domain.
 // Unparsable input is not denied here; the caller validates shape separately.
@@ -62,11 +69,6 @@ func filterRPCList(endpoints string) []string {
 	}
 	return list
 }
-
-// Gas-price sanity. A node that answers below the floor is not asked again for
-// a price in this call; the floor itself is the answer so a signed transaction
-// is never underpriced just because one endpoint is broken.
-var defaultGasPriceFloorWei atomic.Int64
 
 // SetDefaultGasPriceFloor installs the process-wide floor in wei.
 func SetDefaultGasPriceFloor(wei int64) {

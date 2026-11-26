@@ -20,34 +20,60 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
 )
 
-// Shared by every scanner instance; distinct from the sweeper's CRYPTOSW key.
-const scanLockKey int64 = 0x43525950544f5343
+const (
+	// Shared by every scanner instance; distinct from the sweeper's CRYPTOSW key.
+	scanLockKey int64 = 0x43525950544f5343
 
-// GuardScanLockKey is the advisory lock of the idle-chain wallet guard scan
-// ("CRYPTOSG"). The guard scans only chains that are NOT scanned for deposits,
-// with its own cursors and no deposit handler, so it never needs to exclude the
-// deposit scan. Sharing one lock made a guard iteration that kept failing on a
-// dead chain hold the global lock back to back and starve the deposit scan of
-// every chain (pg_locks showed it held 96% of the time).
-const GuardScanLockKey int64 = 0x43525950544f5347
+	// GuardScanLockKey is the advisory lock of the idle-chain wallet guard scan
+	// ("CRYPTOSG"). The guard scans only chains that are NOT scanned for deposits,
+	// with its own cursors and no deposit handler, so it never needs to exclude the
+	// deposit scan. Sharing one lock made a guard iteration that kept failing on a
+	// dead chain hold the global lock back to back and starve the deposit scan of
+	// every chain (pg_locks showed it held 96% of the time).
+	GuardScanLockKey int64 = 0x43525950544f5347
 
-// A lagging chain yields between bounded batches so other chains and other
-// instances get regular turns. Durable progress always ends at a completed
-// batch; the next pass starts at precisely the next unscanned block.
-const maxScanBatchesPerChain = 4
+	// A lagging chain yields between bounded batches so other chains and other
+	// instances get regular turns. Durable progress always ends at a completed
+	// batch; the next pass starts at precisely the next unscanned block.
+	maxScanBatchesPerChain = 4
 
-// A fixed 30s pass could not finish the head security window plus four batches
-// on a chain that was far behind, so every pass timed out before the deposit
-// cursor advanced and the chain never caught up (BSC stayed frozen for hours
-// while ETH/Polygon, which were only tens of blocks behind, scanned normally).
-// The budget is per chain and the pass still yields between batches, so a
-// longer ceiling does not starve other chains or other instances.
-const maxScanTimePerChain = 90 * time.Second
+	// A fixed 30s pass could not finish the head security window plus four batches
+	// on a chain that was far behind, so every pass timed out before the deposit
+	// cursor advanced and the chain never caught up (BSC stayed frozen for hours
+	// while ETH/Polygon, which were only tens of blocks behind, scanned normally).
+	// The budget is per chain and the pass still yields between batches, so a
+	// longer ceiling does not starve other chains or other instances.
+	maxScanTimePerChain = 90 * time.Second
 
-var ErrScanBusy = errors.New("another payment scan is running")
+	// maxChainPause caps how long a stalled chain's forward scan is left alone.
+	maxChainPause = time.Minute
 
-// ErrInvalidScanChain rejects a scope that includes a chain this worker does not scan.
-var ErrInvalidScanChain = errors.New("scan chain must be an enabled EVM chain")
+	// scanPassDeadline bounds one whole pass. Without it a single hung RPC call
+	// keeps the pass (and therefore the scan session lock) forever, every later
+	// tick answers ErrScanBusy, and the chain stops advancing until the process is
+	// restarted. The budget is deliberately larger than the per-chain allowance so
+	// a normal backlog still finishes.
+	scanPassDeadline = 15 * time.Minute
+
+	// scanRateLimitRoundBackoff is how long one pass waits before repeating a round
+	// that a node throttled. Short enough to stay inside the scan interval, long
+	// enough for a per-second budget to refill.
+	scanRateLimitRoundBackoff = 3 * time.Second
+)
+
+var (
+	ErrScanBusy = errors.New("another payment scan is running")
+
+	// ErrInvalidScanChain rejects a scope that includes a chain this worker does not scan.
+	ErrInvalidScanChain = errors.New("scan chain must be an enabled EVM chain")
+
+	// rawScanCause keeps the underlying error text so a stuck chain can be
+	// diagnosed. Only endpoint credentials are removed: an RPC key lives in the URL
+	// path, and journald may travel farther than the machine it was written on.
+	scanURLKeyPattern = regexp.MustCompile(`(?i)(/rpc/)[A-Za-z0-9_-]{8,}`)
+
+	scanQueryKeyPattern = regexp.MustCompile(`(?i)(apikey=)[A-Za-z0-9_-]+`)
+)
 
 // ChainConfig describes one chain's scan parameters.
 type ChainConfig struct {
@@ -74,13 +100,6 @@ type ChainConfig struct {
 	// address-based poller owns discovery, so this pass must not pay the
 	// per-block cost while Native stays on for the allowlist and decimals.
 	NativeSource string
-}
-
-// NativeBlockScan reports whether a worker pass must read blocks for native
-// value transfers. In txlist mode discovery belongs to the address poller, so
-// the expensive per-block read is skipped without disabling native crediting.
-func (c ChainConfig) NativeBlockScan() bool {
-	return c.Native && c.NativeSource != NativeScanTxList
 }
 
 // DepositHandler receives observed transfers (the ledger).
@@ -158,6 +177,102 @@ type chainCoverage struct {
 
 type chainHeadSnapshot struct {
 	pool *rpc.Pool
+}
+
+// scanStageError attributes a per-chain failure to the scan step that produced
+// it (security, head, deposit, live or replay). Error() is the unchanged inner
+// message, so callers and stored errors see exactly what they saw before.
+type scanStageError struct {
+	chain    string
+	stage    string
+	from, to uint64
+	err      error
+}
+
+// provisionalCreditHandler is implemented by a ledger that supports instant
+// credit. A worker without it keeps the confirmation-gated behaviour.
+type provisionalCreditHandler interface {
+	ProcessProvisional(ctx context.Context, t Transfer, decimals int) (bool, error)
+}
+
+// periodicPassKey marks the context of a timer-driven pass. Only those passes
+// are paced by a chain's failure backoff: a manual scan or backfill is an
+// operator asking to try now, and always runs.
+type periodicPassKey struct{}
+
+// chainPause is the retry gate of one chain after consecutive stalled passes.
+type chainPause struct {
+	failures int
+	next     time.Time
+}
+
+// chainPausedError is what a timer pass reports for the forward stage of a chain
+// whose recent attempts all failed: the attempt was skipped on purpose. Only the
+// forward range and the replay behind it wait. The head security window, head
+// observation and the coverage record still run every pass, so a deposit made
+// during the stall is still seen as pending and can still be credited once a
+// security scan covers it.
+type chainPausedError struct {
+	failures int
+	wait     time.Duration
+}
+
+// DepositScanObservation contains the existing per-chain evidence from one
+// periodic, lock-held payment scan. It is an internal observation, not a DTO.
+type DepositScanObservation struct {
+	Chain           string
+	Round           uint64
+	At              time.Time
+	ConfirmedHead   uint64
+	CursorBefore    uint64
+	Cursor          uint64
+	CanMeasure      bool
+	ForwardFailed   bool
+	NearHeadScanned bool
+	Failed          bool
+}
+
+// An already durable observation is handled by the rotating pending/reorg
+// queues. Compare its complete identity, including block hash and amount,
+// before avoiding repeated network checks in an overlapping range.
+type recordedTransferHandler interface {
+	HasRecordedTransfer(context.Context, Transfer, int) (bool, error)
+}
+
+// NativeBlockScan reports whether a worker pass must read blocks for native
+// value transfers. In txlist mode discovery belongs to the address poller, so
+// the expensive per-block read is skipped without disabling native crediting.
+func (c ChainConfig) NativeBlockScan() bool {
+	return c.Native && c.NativeSource != NativeScanTxList
+}
+
+// NewWorker builds the scan loop. addresses returns the watched recipient
+// list per chain (cached by the caller).
+func NewWorker(
+	db *sql.DB,
+	pools map[string]*rpc.Pool,
+	chains []ChainConfig,
+	cursor *CursorStore,
+	handler DepositHandler,
+	addresses func(ctx context.Context, chain string) ([]string, error),
+	interval time.Duration,
+	maxRange uint64,
+) *Worker {
+	recentReplay := interval > 0
+	if interval <= 0 {
+		interval = 15 * time.Second
+	}
+	if maxRange == 0 {
+		maxRange = 2000
+	}
+	return &Worker{
+		db:    db,
+		pools: pools, chains: chains, cursor: cursor, handler: handler,
+		addresses: addresses, interval: interval, maxRange: maxRange,
+		done:         make(chan struct{}),
+		recentReplay: recentReplay,
+		liveProgress: recentReplay,
+	}
 }
 
 func (w *Worker) chainCoverageLocked(chain string) *chainCoverage {
@@ -265,16 +380,6 @@ func (w *Worker) markCreditedConfirmations(ctx context.Context, chain ChainConfi
 	}
 }
 
-// scanStageError attributes a per-chain failure to the scan step that produced
-// it (security, head, deposit, live or replay). Error() is the unchanged inner
-// message, so callers and stored errors see exactly what they saw before.
-type scanStageError struct {
-	chain    string
-	stage    string
-	from, to uint64
-	err      error
-}
-
 func (e *scanStageError) Error() string { return e.err.Error() }
 func (e *scanStageError) Unwrap() error { return e.err }
 
@@ -358,12 +463,6 @@ func (e *scanStageError) logAttrs() []any {
 	// reads it, and carry the underlying text for diagnosis.
 	return append(attrs, "cause", rpc.SafeError(e.err), "raw_cause", rawScanCause(e.err))
 }
-
-// rawScanCause keeps the underlying error text so a stuck chain can be
-// diagnosed. Only endpoint credentials are removed: an RPC key lives in the URL
-// path, and journald may travel farther than the machine it was written on.
-var scanURLKeyPattern = regexp.MustCompile(`(?i)(/rpc/)[A-Za-z0-9_-]{8,}`)
-var scanQueryKeyPattern = regexp.MustCompile(`(?i)(apikey=)[A-Za-z0-9_-]+`)
 
 func rawScanCause(err error) string {
 	if err == nil {
@@ -471,41 +570,6 @@ func (w *Worker) SetDepositReorgResolver(fn func(context.Context, DepositReorg) 
 	}
 }
 
-// provisionalCreditHandler is implemented by a ledger that supports instant
-// credit. A worker without it keeps the confirmation-gated behaviour.
-type provisionalCreditHandler interface {
-	ProcessProvisional(ctx context.Context, t Transfer, decimals int) (bool, error)
-}
-
-// NewWorker builds the scan loop. addresses returns the watched recipient
-// list per chain (cached by the caller).
-func NewWorker(
-	db *sql.DB,
-	pools map[string]*rpc.Pool,
-	chains []ChainConfig,
-	cursor *CursorStore,
-	handler DepositHandler,
-	addresses func(ctx context.Context, chain string) ([]string, error),
-	interval time.Duration,
-	maxRange uint64,
-) *Worker {
-	recentReplay := interval > 0
-	if interval <= 0 {
-		interval = 15 * time.Second
-	}
-	if maxRange == 0 {
-		maxRange = 2000
-	}
-	return &Worker{
-		db:    db,
-		pools: pools, chains: chains, cursor: cursor, handler: handler,
-		addresses: addresses, interval: interval, maxRange: maxRange,
-		done:         make(chan struct{}),
-		recentReplay: recentReplay,
-		liveProgress: recentReplay,
-	}
-}
-
 // decimalToRawUnits converts a NUMERIC string into raw token units.
 func decimalToRawUnits(value string, decimals int) (*big.Int, error) {
 	value = strings.TrimSpace(value)
@@ -569,23 +633,9 @@ func (w *Worker) run(ctx context.Context) {
 	}
 }
 
-// periodicPassKey marks the context of a timer-driven pass. Only those passes
-// are paced by a chain's failure backoff: a manual scan or backfill is an
-// operator asking to try now, and always runs.
-type periodicPassKey struct{}
-
 func isPeriodicPass(ctx context.Context) bool {
 	return ctx != nil && ctx.Value(periodicPassKey{}) != nil
 }
-
-// chainPause is the retry gate of one chain after consecutive stalled passes.
-type chainPause struct {
-	failures int
-	next     time.Time
-}
-
-// maxChainPause caps how long a stalled chain's forward scan is left alone.
-const maxChainPause = time.Minute
 
 // chainPauseDelay is how long a chain's forward scan waits before the next
 // timer-driven attempt after `failures` consecutive passes that needed to move
@@ -619,17 +669,6 @@ func chainPauseDelay(failures int, interval time.Duration) time.Duration {
 	// +-20% so chains that failed together do not retry in lockstep.
 	jitter := time.Duration(rand.Int63n(int64(delay)/5*2+1)) - delay/5
 	return delay + jitter
-}
-
-// chainPausedError is what a timer pass reports for the forward stage of a chain
-// whose recent attempts all failed: the attempt was skipped on purpose. Only the
-// forward range and the replay behind it wait. The head security window, head
-// observation and the coverage record still run every pass, so a deposit made
-// during the stall is still seen as pending and can still be credited once a
-// security scan covers it.
-type chainPausedError struct {
-	failures int
-	wait     time.Duration
 }
 
 func (e *chainPausedError) Error() string {
@@ -722,13 +761,6 @@ func (w *Worker) noteChainPass(chain ChainConfig, scanErr error, now time.Time) 
 	}
 }
 
-// scanPassDeadline bounds one whole pass. Without it a single hung RPC call
-// keeps the pass (and therefore the scan session lock) forever, every later
-// tick answers ErrScanBusy, and the chain stops advancing until the process is
-// restarted. The budget is deliberately larger than the per-chain allowance so
-// a normal backlog still finishes.
-const scanPassDeadline = 15 * time.Minute
-
 func (w *Worker) scanAll(parent context.Context) {
 	if w == nil {
 		return
@@ -762,11 +794,6 @@ func (w *Worker) scanAll(parent context.Context) {
 		slog.Error("[cryptopay] scan pass exceeded its deadline; session lock released", "deadline", scanPassDeadline.String())
 	}
 }
-
-// scanRateLimitRoundBackoff is how long one pass waits before repeating a round
-// that a node throttled. Short enough to stay inside the scan interval, long
-// enough for a per-second budget to refill.
-const scanRateLimitRoundBackoff = 3 * time.Second
 
 // isRateLimitedScan reports whether any failure in err is an HTTP/RPC 429.
 func isRateLimitedScan(err error) bool {
@@ -821,21 +848,6 @@ func (w *Worker) reportScanFailure(err error) {
 	if reportOther {
 		slog.Error("[cryptopay] payment scan incomplete; retrying without skipping blocks", "cause", rpc.SafeError(errors.Join(other...)), "raw_cause", rawScanCause(errors.Join(other...)))
 	}
-}
-
-// DepositScanObservation contains the existing per-chain evidence from one
-// periodic, lock-held payment scan. It is an internal observation, not a DTO.
-type DepositScanObservation struct {
-	Chain           string
-	Round           uint64
-	At              time.Time
-	ConfirmedHead   uint64
-	CursorBefore    uint64
-	Cursor          uint64
-	CanMeasure      bool
-	ForwardFailed   bool
-	NearHeadScanned bool
-	Failed          bool
 }
 
 // SetDepositScanObserver installs a nonblocking observer before Start.
@@ -1510,13 +1522,6 @@ func (w *Worker) finalizeProvisional(ctx context.Context, chain ChainConfig, p d
 		p.chain, p.txHash, p.logIndex, int64(chain.Confirmations)); err != nil {
 		slog.Warn("[cryptopay] provisional credit not finalized", "chain", p.chain, "tx", p.txHash, "log_index", p.logIndex, "cause", rpc.SafeError(err))
 	}
-}
-
-// An already durable observation is handled by the rotating pending/reorg
-// queues. Compare its complete identity, including block hash and amount,
-// before avoiding repeated network checks in an overlapping range.
-type recordedTransferHandler interface {
-	HasRecordedTransfer(context.Context, Transfer, int) (bool, error)
 }
 
 func (w *Worker) processTransfer(ctx context.Context, pool *rpc.Pool, chain ChainConfig, transfer Transfer, decimals int) error {
