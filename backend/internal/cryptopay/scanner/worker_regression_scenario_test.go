@@ -412,7 +412,6 @@ func TestPendingRejectsChangedOrNoncanonicalTransfer(t *testing.T) {
 		{"canonical RPC down", func(f *rpcFixture) { f.fail = "canonical" }, "", true},
 	}
 	for _, field := range []string{"token", "from", "to", "amount", "index", "topic", "removed", "log block", "log tx"} {
-		field := field
 		tests = append(tests, struct {
 			name    string
 			change  func(*rpcFixture)
@@ -661,7 +660,7 @@ func TestPendingExcludesWrongChainEndpointFromRotatingPool(t *testing.T) {
 	right, wrong := newRPCFixture(tr), newRPCFixture(tr)
 	wrong.chainID = "0x89"
 	w, mock, handler := workerFixture(t, right)
-	w.pools["bsc"] = rpc.NewPoolWithHTTPClient(strings.Join([]string{w.pools["bsc"].Endpoints()[0], wrong.pool(t).Endpoints()[0]}, ","), &http.Client{})
+	w.pools["bsc"] = rpc.NewPoolWithHTTPClient(w.pools["bsc"].Endpoints()[0]+","+wrong.pool(t).Endpoints()[0], &http.Client{})
 	expectObservation(mock, tr, "1", "")
 	expectObservationUpdate(mock, tr, "pending", "", "pending", "").WillReturnResult(sqlmock.NewResult(0, 1))
 	if err := w.retryPending(t.Context()); err != nil {
@@ -719,12 +718,12 @@ func TestDisabledChainRowsRotateOutOfTheRecheckPage(t *testing.T) {
 	fixture := newRPCFixture(tr)
 	w, mock, handler := workerFixture(t, fixture)
 	firstPage := observationRows()
-	for index := 0; index < 200; index++ {
+	for index := range 200 {
 		tx := fmt.Sprintf("disabled-tx-%d", index)
 		firstPage.AddRow("polygon", tx, 0, tr.From, tr.To, tr.Token, "1", 101, tr.BlockHash, "", false)
 	}
 	mock.ExpectQuery(`(?s)ORDER BY COALESCE\(d.last_attempt_at, d.created_at\), d.id.*LIMIT 200`).WillReturnRows(firstPage)
-	for index := 0; index < 200; index++ {
+	for index := range 200 {
 		skipped := tr
 		skipped.Chain, skipped.TxHash, skipped.LogIndex = "polygon", fmt.Sprintf("disabled-tx-%d", index), 0
 		expectObservationUpdate(mock, skipped, "credited", "", "credited", "").WillReturnResult(sqlmock.NewResult(0, 1))

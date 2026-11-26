@@ -264,7 +264,7 @@ func observationAttempts(pool *rpc.Pool) int {
 func readReceipt(ctx context.Context, pool *rpc.Pool, chain, hash string) (receiptFields, bool, bool, error) {
 	attempts := observationAttempts(pool)
 	var absent bool
-	for i := 0; i < attempts; i++ {
+	for range attempts {
 		result, err := pool.Call(ctx, "eth_getTransactionReceipt", []any{hash})
 		if err != nil {
 			return receiptFields{}, false, false, err
@@ -301,7 +301,7 @@ func readReceipt(ctx context.Context, pool *rpc.Pool, chain, hash string) (recei
 func canonicalBlock(ctx context.Context, pool *rpc.Pool, chain, hash string, receipt receiptFields, block uint64) (bool, error) {
 	attempts := observationAttempts(pool)
 	mismatch := false
-	for i := 0; i < attempts; i++ {
+	for i := range attempts {
 		canonical, err := pool.Call(ctx, "eth_getBlockByNumber", []any{receipt.BlockNumber, false})
 		if err != nil {
 			return false, err

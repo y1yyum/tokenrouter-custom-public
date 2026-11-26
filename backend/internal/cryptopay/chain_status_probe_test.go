@@ -89,13 +89,11 @@ func TestProbeSharesOneFlightAndCachesForTheTTL(t *testing.T) {
 	results := make([][]nodeProbe, callers)
 	errs := make([]error, callers)
 	var wg sync.WaitGroup
-	for i := 0; i < callers; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for i := range callers {
+		wg.Go(func() {
 			<-start
 			results[i], errs[i] = m.probe(context.Background(), "bsc", 56, endpoints)
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

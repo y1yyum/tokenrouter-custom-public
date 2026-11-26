@@ -381,7 +381,7 @@ func PinSweepDestinationLock(ctx context.Context, store SettingStore, actorUserI
 	if now.IsZero() {
 		now = time.Now()
 	}
-	for attempt := 0; attempt < 3; attempt++ {
+	for range 3 {
 		cfg, expected, loadErr := LoadConfigForUpdate(ctx, store)
 		if loadErr != nil {
 			return false, false, loadErr

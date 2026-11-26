@@ -665,8 +665,7 @@ func TestScanRangeEndingMidConcurrentScanAccountsForEveryBatch(t *testing.T) {
 					failed[batch] = true
 				}
 				parts := joinedParts(err)
-				var last *LogsError
-				if errors.As(parts[len(parts)-1], &last) {
+				if last, ok := errors.AsType[*LogsError](parts[len(parts)-1]); ok {
 					// An interrupted request wraps its failure; a batch that never ran does not.
 					if _, direct := last.Err.(*rpc.Failure); direct {
 						tail = last.Batch

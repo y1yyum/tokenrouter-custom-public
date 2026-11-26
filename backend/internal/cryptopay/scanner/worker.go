@@ -11,6 +11,7 @@ import (
 	"math/rand"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -388,8 +389,7 @@ func stageErr(chain, stage string, from, to uint64, err error) error {
 	if err == nil {
 		return nil
 	}
-	var tagged *scanStageError
-	if errors.As(err, &tagged) {
+	if _, ok := errors.AsType[*scanStageError](err); ok {
 		return err
 	}
 	return &scanStageError{chain: chain, stage: stage, from: from, to: to, err: err}
@@ -417,8 +417,7 @@ func (e *scanStageError) logAttrs() []any {
 	if e.from != 0 || e.to != 0 {
 		attrs = append(attrs, "from", e.from, "to", e.to)
 	}
-	var logsErr *LogsError
-	if errors.As(e.err, &logsErr) {
+	if logsErr, ok := errors.AsType[*LogsError](e.err); ok {
 		attrs = append(attrs, "query_from", logsErr.FromBlock, "query_to", logsErr.ToBlock,
 			"batch", logsErr.Batch, "addresses", logsErr.Addresses)
 	}
@@ -492,8 +491,7 @@ func collectScanFailures(err error, byChain map[string][]*scanStageError, other 
 		}
 		return
 	}
-	var tagged *scanStageError
-	if !errors.As(err, &tagged) {
+	if _, ok := errors.AsType[*scanStageError](err); !ok {
 		*other = append(*other, err)
 		return
 	}
@@ -726,8 +724,7 @@ func (w *Worker) forwardStalled(chain ChainConfig) bool {
 // extends the pause. A pass whose forward scan was itself skipped, or that never
 // got past the head lookup, is neither.
 func (w *Worker) noteChainPass(chain ChainConfig, scanErr error, now time.Time) {
-	var skipped *chainPausedError
-	if errors.As(scanErr, &skipped) {
+	if _, ok := errors.AsType[*chainPausedError](scanErr); ok {
 		return
 	}
 	// A pass that could not even read the chain head never reached the forward scan,
@@ -780,12 +777,9 @@ func (w *Worker) scanAll(parent context.Context) {
 				return
 			case <-time.After(scanRateLimitRoundBackoff):
 			}
-			if retried := w.runPeriodicPass(ctx); retried == nil {
+			err = w.runPeriodicPass(ctx)
+			if err == nil || parent.Err() != nil {
 				return
-			} else if parent.Err() != nil {
-				return
-			} else {
-				err = retried
 			}
 		}
 		w.reportScanFailure(err)
@@ -801,15 +795,9 @@ func isRateLimitedScan(err error) bool {
 		return false
 	}
 	if joined, ok := err.(interface{ Unwrap() []error }); ok {
-		for _, inner := range joined.Unwrap() {
-			if isRateLimitedScan(inner) {
-				return true
-			}
-		}
-		return false
+		return slices.ContainsFunc(joined.Unwrap(), isRateLimitedScan)
 	}
-	var failure *rpc.Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*rpc.Failure](err); ok {
 		return failure.HTTPStatus == http.StatusTooManyRequests || failure.RPCCode == 429
 	}
 	return false

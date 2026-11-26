@@ -196,7 +196,7 @@ func ContextAuthorizeOrderBalanceRedeem(ctx context.Context, code string, author
 func IsOrderBalanceCredential(code string) bool {
 	if suffix, ok := strings.CutPrefix(code, "crypto-"); ok && len(suffix) == 24 {
 		for _, ch := range suffix {
-			if !(ch >= '0' && ch <= '9') && !(ch >= 'a' && ch <= 'f') {
+			if (ch < '0' || ch > '9') && (ch < 'a' || ch > 'f') {
 				return false
 			}
 		}
@@ -204,7 +204,7 @@ func IsOrderBalanceCredential(code string) bool {
 	}
 	if suffix, ok := strings.CutPrefix(code, "cd-"); ok && len(suffix) == 26 {
 		for _, ch := range suffix {
-			if !(ch >= 'A' && ch <= 'Z') && !(ch >= '2' && ch <= '7') {
+			if (ch < 'A' || ch > 'Z') && (ch < '2' || ch > '7') {
 				return false
 			}
 		}

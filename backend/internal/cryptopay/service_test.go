@@ -236,15 +236,13 @@ func TestNativePriceReferenceConcurrentReload(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for range 4 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			for range 100 {
 				info := buildDepositInfo(cfg, depositInfoAssigned())
 				s.attachNativeReferencePrices(t.Context(), info)
 			}
-		}()
+		})
 	}
 	close(start)
 	for range 100 {

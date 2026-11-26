@@ -167,7 +167,7 @@ func TestLiveWindowCreditsThroughLedgerBeforeHistoricalCatchup(t *testing.T) {
 			chain := scanner.ChainConfig{Chain: "bsc", Tokens: []string{token}, Decimals: map[string]int{token: 6}, Confirmations: 3, MaxRange: 100}
 			worker := scanner.NewWorker(cursorDB, map[string]*rpc.Pool{"bsc": rpc.NewPoolWithHTTPClient(server.URL, server.Client())}, []scanner.ChainConfig{chain}, scanner.NewCursorStore(cursorDB), handler,
 				func(context.Context, string) ([]string, error) { return []string{to}, nil }, 0, 100)
-			for pass := 0; pass < 2; pass++ {
+			for pass := range 2 {
 				start := int64(100 + pass*400)
 				if scenario.recentReplay {
 					start = 115107 // Caught up, but the provider indexed this deposit late.

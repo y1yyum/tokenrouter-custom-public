@@ -9,6 +9,7 @@ import (
 	"log/slog"
 	"math"
 	"math/big"
+	"slices"
 	"strings"
 	"time"
 
@@ -156,12 +157,7 @@ func (e *Executor) allowsChain(chain string) bool {
 	if len(e.chains) == 0 {
 		return true
 	}
-	for _, allowed := range e.chains {
-		if allowed == chain {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(e.chains, chain)
 }
 
 func (s *Summary) add(out SweepEntry) {
@@ -256,8 +252,7 @@ func (e *Executor) Run(ctx context.Context, dryRun bool) (summary *Summary, err 
 			summary.add(out)
 			if resumeErr != nil {
 				runErrors = joinErrors(runErrors, resumeErr)
-				var storage *persistenceError
-				if errors.As(resumeErr, &storage) {
+				if _, ok := errors.AsType[*persistenceError](resumeErr); ok {
 					// One job whose state could not be persisted must not stop the
 					// other chains; it stays reserved and is observed again next run.
 					// Only a run of consecutive storage failures means the database
@@ -306,8 +301,7 @@ func (e *Executor) Run(ctx context.Context, dryRun bool) (summary *Summary, err 
 		summary.add(out)
 		if sweepErr != nil {
 			runErrors = joinErrors(runErrors, sweepErr)
-			var storage *persistenceError
-			if errors.As(sweepErr, &storage) {
+			if _, ok := errors.AsType[*persistenceError](sweepErr); ok {
 				storageFailures++
 				if storageFailures >= maxConsecutiveStorageFailures {
 					return summary, runErrors
@@ -710,8 +704,7 @@ func (e *Executor) jobError(ctx context.Context, job *sweepJob, cause error) (Sw
 		out.Error = job.Error
 		return out, nil
 	}
-	var storage *persistenceError
-	if errors.As(cause, &storage) {
+	if _, ok := errors.AsType[*persistenceError](cause); ok {
 		return pendingError(job, cause)
 	}
 	// A transport failure or timeout says nothing about the payment. Persisting

@@ -132,7 +132,7 @@ func (m *Manager) SignEVM(ctx context.Context, req EVMSignRequest) (string, erro
 func isEVMNative(token string) bool { return token == "" || strings.EqualFold(token, "native") }
 
 func positiveUint(raw string) (*big.Int, error) {
-	if len(raw) == 0 || len(raw) > 78 {
+	if raw == "" || len(raw) > 78 {
 		return nil, errors.New("invalid positive uint256")
 	}
 	for _, c := range raw {

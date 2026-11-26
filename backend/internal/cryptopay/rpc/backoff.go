@@ -97,10 +97,7 @@ func (t *endpointHealthTracker) fail(endpoint string, err error) {
 		return
 	}
 	state.failures++
-	limit := maxEndpointCooldown
-	if cooldown > limit {
-		limit = cooldown
-	}
+	limit := max(cooldown, maxEndpointCooldown)
 	delay := cooldown
 	for i := 1; i < state.failures && delay < limit; i++ {
 		delay *= 2
@@ -209,7 +206,7 @@ func endpointCooldown(err error) time.Duration {
 // callRetryDelay is an exponential backoff with jitter in [d/2, d].
 func callRetryDelay(round int) time.Duration {
 	delay := callRetryBaseDelay
-	for i := 0; i < round; i++ {
+	for range round {
 		delay *= 2
 	}
 	if delay > callRetryMaxDelay {

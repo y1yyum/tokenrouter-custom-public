@@ -28,7 +28,7 @@ func TestTickerStartsOnceStopsWhenNobodyIsWatching(t *testing.T) {
 	fired := make(chan struct{}, 8)
 	body := func(context.Context) { fired <- struct{}{} }
 
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		m.touch(body)
 	}
 	require.Equal(t, 1, tick.Created(), "five page polls share one sampling loop")

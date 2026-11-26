@@ -455,8 +455,7 @@ func safeCause(err error) string {
 	if err == nil {
 		return ""
 	}
-	var apiErr *explorer.APIError
-	if errors.As(err, &apiErr) {
+	if apiErr, ok := errors.AsType[*explorer.APIError](err); ok {
 		return apiErr.Error()
 	}
 	if errors.Is(err, explorer.ErrNoAPIKey) {

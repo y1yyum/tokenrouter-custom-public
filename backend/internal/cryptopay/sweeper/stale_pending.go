@@ -119,7 +119,7 @@ func (e *Executor) releaseStaleTransaction(ctx context.Context, pool *rpc.Pool, 
 		return false, nil
 	}
 	delay := e.staleRebroadcastDelay()
-	for i := 0; i < staleRebroadcasts; i++ {
+	for range staleRebroadcasts {
 		if delay > 0 {
 			timer := time.NewTimer(delay)
 			select {

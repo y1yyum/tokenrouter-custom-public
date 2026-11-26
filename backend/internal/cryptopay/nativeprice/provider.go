@@ -160,7 +160,7 @@ func (p *Provider) Quote(ctx context.Context, chain string) (Quote, error) {
 	}
 
 	var lastErr error
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		if attempt > 0 {
 			p.sleep(p.sleepBase * time.Duration(1<<(attempt-1)))
 		}

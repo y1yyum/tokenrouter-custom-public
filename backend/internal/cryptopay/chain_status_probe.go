@@ -78,11 +78,9 @@ func (m *chainMonitor) probeAll(wantChainID uint64, endpoints []string) []nodePr
 	probes := make([]nodeProbe, len(endpoints))
 	var wg sync.WaitGroup
 	for i, endpoint := range endpoints {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			probes[i] = m.probeNode(endpoint, wantChainID)
-		}()
+		})
 	}
 	wg.Wait()
 	return probes

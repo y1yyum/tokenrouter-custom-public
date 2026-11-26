@@ -193,8 +193,7 @@ func (c *depositConfirmer) chainPool(ctx context.Context, cache map[string]depos
 // else (a chain-id mismatch string, a joined list) collapses to one sentence so
 // no endpoint or node-supplied text reaches the operator or the logs.
 func rpcFailureDetail(err error) string {
-	var failure *rpc.Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*rpc.Failure](err); ok {
 		return failure.Error()
 	}
 	return "节点不可用或链 ID 不符"

@@ -70,14 +70,14 @@ func TestChainPauseDelayGrowsAndIsCapped(t *testing.T) {
 		return got >= want-want/5 && got <= want+want/5
 	}
 	for failures, want := range map[int]time.Duration{2: 5 * time.Second, 3: 10 * time.Second, 4: 20 * time.Second, 5: 40 * time.Second} {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			if got := chainPauseDelay(failures, interval); !within(got, want) {
 				t.Fatalf("failures=%d delay=%v, want about %v", failures, got, want)
 			}
 		}
 	}
 	for _, failures := range []int{6, 7, 20, 1000} {
-		for i := 0; i < 50; i++ {
+		for range 50 {
 			if got := chainPauseDelay(failures, interval); !within(got, maxChainPause) {
 				t.Fatalf("failures=%d delay=%v must stay near the %v cap", failures, got, maxChainPause)
 			}
@@ -161,7 +161,7 @@ func TestNoteChainPassPausesAfterRepeatedStallsOnly(t *testing.T) {
 	// A batch-level security failure that holds the cursor is a stall too, whatever its stage label says.
 	other := &Worker{interval: 5 * time.Second}
 	chain = chainAt(other, 1000, 100)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		other.noteChainPass(chain, stageErr("polygon", "security", 101, 200, errors.New("guard unavailable")), now)
 	}
 	if _, paused := other.forwardPause("polygon", now); !paused {
@@ -180,7 +180,7 @@ func TestNoteChainPassIgnoresFailuresThatLeftTheCursorFree(t *testing.T) {
 	// caught up: head-window and replay failures are not a stall
 	w := &Worker{interval: 5 * time.Second}
 	chain := chainAt(w, 1000, 995)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		w.noteChainPass(chain, stageErr("polygon", "replay", 1, 2, errors.New("late replay failed")), now)
 		w.noteChainPass(chain, stageErr("polygon", "security", 1, 2, errors.New("head window failed")), now)
 	}
@@ -191,7 +191,7 @@ func TestNoteChainPassIgnoresFailuresThatLeftTheCursorFree(t *testing.T) {
 	progressed := &Worker{interval: 5 * time.Second}
 	chain = chainAt(progressed, 1000, 100)
 	progressed.noteCursor("polygon", 300)
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		progressed.noteChainPass(chain, stageErr("polygon", "deposit", 301, 400, errors.New("timed out after progress")), now)
 	}
 	if _, paused := progressed.forwardPause("polygon", now); paused {
@@ -199,7 +199,7 @@ func TestNoteChainPassIgnoresFailuresThatLeftTheCursorFree(t *testing.T) {
 	}
 	// a failed head lookup says nothing about the forward scan: the pass never reached it
 	blind := &Worker{interval: 5 * time.Second}
-	for i := 0; i < 6; i++ {
+	for range 6 {
 		blind.noteChainPass(ChainConfig{Chain: "polygon", Confirmations: 5}, stageErr("polygon", "head", 0, 0, errors.New("no head")), now)
 	}
 	if _, paused := blind.forwardPause("polygon", now); paused {
@@ -222,7 +222,7 @@ func TestHeadLookupFailuresDoNotRenewAnActivePause(t *testing.T) {
 	before := *w.chainPause["polygon"]
 	w.replayMu.Unlock()
 
-	for i := 0; i < 30; i++ {
+	for i := range 30 {
 		headFailure := stageErr("polygon", "head", 0, 0, errors.New("HTTP 429"))
 		w.noteChainPass(chain, headFailure, now.Add(time.Duration(i)*time.Second))
 		w.noteChainPass(chain, errors.Join(headFailure, stageErr("polygon", "observe", 0, 0, errors.New("429"))), now.Add(time.Duration(i)*time.Second))
@@ -261,7 +261,7 @@ func TestSkippedForwardAttemptsDoNotChangeThePause(t *testing.T) {
 	w.replayMu.Unlock()
 
 	skipped := stageErr("polygon", "deposit", 101, 995, &chainPausedError{failures: 2, wait: 3 * time.Second})
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		w.noteChainPass(chain, skipped, now.Add(time.Duration(i)*time.Second))
 	}
 	w.replayMu.Lock()
@@ -287,7 +287,7 @@ func TestStalledForwardScanBacksOffWhileHeadStageAndManualScansKeepRunning(t *te
 	setFailure("eth_getLogs") // every forward batch is answered with HTTP 503
 	timer := context.WithValue(t.Context(), periodicPassKey{}, true)
 
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		if err := w.RunOnce(timer); err == nil {
 			t.Fatal("the failing forward scan must surface")
 		}
@@ -305,8 +305,7 @@ func TestStalledForwardScanBacksOffWhileHeadStageAndManualScansKeepRunning(t *te
 	// as failing instead of going quiet.
 	headsBefore := fixture.callCount("eth_blockNumber")
 	err := w.RunOnce(timer)
-	var skipped *chainPausedError
-	if !errors.As(err, &skipped) {
+	if _, ok := errors.AsType[*chainPausedError](err); !ok {
 		t.Fatalf("a skipped forward attempt must be reported, got %v", err)
 	}
 	if got := fixture.callCount("eth_getLogs"); got != logsWhileStalling {

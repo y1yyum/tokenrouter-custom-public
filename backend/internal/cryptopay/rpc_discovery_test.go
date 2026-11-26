@@ -63,16 +63,14 @@ func TestAutomaticRPCSingleFlightAndCacheCopies(t *testing.T) {
 	const waiters = 12
 	var wg sync.WaitGroup
 	for range waiters {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			endpoints, err := d.resolve(t.Context(), ChainBSC)
 			if err != nil || !slices.Equal(endpoints, []string{"https://public.example/rpc"}) {
 				t.Errorf("discovery failed: %v %v", endpoints, err)
 				return
 			}
 			endpoints[0] = "https://changed.example"
-		}()
+		})
 	}
 	<-started
 	close(release)

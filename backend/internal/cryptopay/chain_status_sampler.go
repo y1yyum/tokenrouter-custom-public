@@ -31,7 +31,7 @@ func (r *sampleRing) last() (chainSample, bool) {
 // since returns the samples taken at or after cutoff, oldest first.
 func (r *sampleRing) since(cutoff time.Time) []chainSample {
 	out := make([]chainSample, 0, r.size)
-	for i := 0; i < r.size; i++ {
+	for i := range r.size {
 		s := r.buf[(r.start+i)%len(r.buf)]
 		if !s.At.Before(cutoff) {
 			out = append(out, s)

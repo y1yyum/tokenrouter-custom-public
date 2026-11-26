@@ -13,7 +13,7 @@ func TestEndpointThrottleSpacesCalls(t *testing.T) {
 	ctx := context.Background()
 
 	start := time.Now()
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		require.NoError(t, throttle.Wait(ctx))
 	}
 	// Three waits reserve three slots: the third starts at least 2 intervals in.
@@ -24,7 +24,7 @@ func TestEndpointThrottleSpacesCalls(t *testing.T) {
 func TestEndpointThrottleDisabledWhenIntervalZero(t *testing.T) {
 	throttle := NewEndpointThrottle(0)
 	start := time.Now()
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		require.NoError(t, throttle.Wait(context.Background()))
 	}
 	require.Less(t, time.Since(start), 20*time.Millisecond,

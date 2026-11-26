@@ -23,11 +23,9 @@ import (
 // Verification uses the actual matched time step so crossing a period
 // boundary cannot produce a second claim for the same code.
 
-var (
-	// ErrUserSecurityStateChanged reports a concurrent change to account state
-	// that prevented the conditional authenticator write from taking effect.
-	ErrUserSecurityStateChanged = apperror.Conflict("USER_SECURITY_STATE_CHANGED", "account security state changed")
-)
+// ErrUserSecurityStateChanged reports a concurrent change to account state
+// that prevented the conditional authenticator write from taking effect.
+var ErrUserSecurityStateChanged = apperror.Conflict("USER_SECURITY_STATE_CHANGED", "account security state changed")
 
 // totpAtomicBinder installs an authenticator under the current administrator state.
 type totpAtomicBinder interface {

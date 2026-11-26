@@ -186,7 +186,7 @@ func (f *fakeDeriver) Derive(_ context.Context, start, count uint32) ([]Derived,
 	defer f.mu.Unlock()
 	f.calls++
 	out := make([]Derived, 0, count)
-	for i := uint32(0); i < count; i++ {
+	for i := range count {
 		index := start + i
 		out = append(out, Derived{
 			Index:  int64(index),
@@ -304,7 +304,7 @@ func TestGetOrAssignConcurrentSameUser(t *testing.T) {
 	var wg sync.WaitGroup
 	results := make([]map[string]string, 8)
 	errs := make([]error, 8)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()

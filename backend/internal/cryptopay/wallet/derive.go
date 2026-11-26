@@ -18,7 +18,7 @@ import (
 
 // Deriver derives EVM and Solana keys from one BIP39 seed.
 // EVM:    m/44'/60'/0'/0/{index}   (secp256k1)
-// Solana: m/44'/501'/{index}'/0'   (ed25519, SLIP-0010, all hardened)
+// Solana: m/44'/501'/{index}'/0'   (ed25519, SLIP-0010, all hardened).
 type Deriver struct {
 	seed []byte
 }

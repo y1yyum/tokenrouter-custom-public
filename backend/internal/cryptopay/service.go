@@ -675,10 +675,7 @@ func (s *Service) Reload(ctx context.Context) { s.reload(ctx) }
 // (2026-11-24, reverted within 14 minutes). Opt in per deployment with a small
 // rpc_throttle_ms if a provider needs it.
 func applyRPCThrottle(cfg CryptoConfig) {
-	ms := cfg.RPCThrottleMs
-	if ms < 0 {
-		ms = 0
-	}
+	ms := max(cfg.RPCThrottleMs, 0)
 	rpc.SetEndpointThrottleInterval(time.Duration(ms) * time.Millisecond)
 }
 
@@ -1371,7 +1368,7 @@ func (s *Service) runSweepLocked(ctx context.Context, dryRun, manual bool, chain
 		// sweep the addresses whose gas confirmed while it ran. Keep passing
 		// until the queue is empty (or a retryable failure stops being reset),
 		// otherwise a click only ever drains the first handful of addresses.
-		for round := 0; round < 60; round++ {
+		for round := range 60 {
 			reset, rerr := 0, error(nil)
 			if round > 0 {
 				reset, rerr = exec.ResetRetryableFailures(ctx, 200)

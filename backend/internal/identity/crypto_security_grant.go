@@ -32,11 +32,9 @@ const (
 	CryptoGrantTTL = 5 * time.Minute
 )
 
-var (
-	// ErrCryptoGrantRequired prompts the client to discard an unusable payment
-	// grant and obtain new authenticator verification before a sensitive operation.
-	ErrCryptoGrantRequired = infraerrors.Forbidden("CRYPTO_GRANT_REQUIRED", "payment verification expired or is invalid; verify two-factor authentication again")
-)
+// ErrCryptoGrantRequired prompts the client to discard an unusable payment
+// grant and obtain new authenticator verification before a sensitive operation.
+var ErrCryptoGrantRequired = infraerrors.Forbidden("CRYPTO_GRANT_REQUIRED", "payment verification expired or is invalid; verify two-factor authentication again")
 
 // CryptoVerificationGrant is a fixed-lifetime payment capability. It is not a
 // login token and cannot authorize account administration outside crypto routes.

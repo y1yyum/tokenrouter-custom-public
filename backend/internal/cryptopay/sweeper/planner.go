@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -149,12 +150,7 @@ func (p *Planner) allowsChain(chain string) bool {
 	if len(p.chains) == 0 {
 		return true
 	}
-	for _, allowed := range p.chains {
-		if allowed == chain {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.chains, chain)
 }
 
 // BuildManualPlan previews an operator-requested sweep. The global threshold

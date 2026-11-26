@@ -97,10 +97,7 @@ func (e *Executor) recoverMinedSweeps(ctx context.Context) (int, error) {
 			bound[job.Chain] = verified
 			pool = verified
 		}
-		required := e.config.Confirmations[job.Chain]
-		if required < job.Confirmations {
-			required = job.Confirmations
-		}
+		required := max(e.config.Confirmations[job.Chain], job.Confirmations)
 		state, checkErr := checkReceipt(ctx, pool, job.Chain, job.SweepHash, required)
 		if checkErr != nil {
 			slog.Warn("[cryptopay] mined sweep recovery inconclusive",

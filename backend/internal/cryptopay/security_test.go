@@ -176,7 +176,7 @@ func TestIdleGuardPacerBacksOffExponentiallyAndCaps(t *testing.T) {
 func TestIdleGuardPacerDelayNeverExceedsTheCap(t *testing.T) {
 	now := time.Date(2026, 11, 24, 4, 0, 0, 0, time.UTC)
 	for _, failures := range []int{7, 8, 30, 100000} {
-		for draw := 0; draw < 300; draw++ {
+		for draw := range 300 {
 			var p idleGuardPacer
 			for i := 1; i < failures && i < 12; i++ { // walk up to the cap cheaply
 				p.note("plasma", errors.New("down"), now)
@@ -196,7 +196,7 @@ func TestIdleGuardPacerDelayNeverExceedsTheCap(t *testing.T) {
 func TestIdleGuardPacerFirstSuccessResumesFullCadence(t *testing.T) {
 	var p idleGuardPacer
 	now := time.Now()
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		p.note("plasma", errors.New("down"), now)
 	}
 	if p.due("plasma", now) {
@@ -236,7 +236,7 @@ func TestIdleGuardPacerIgnoresAnotherInstanceHoldingTheLock(t *testing.T) {
 func TestIdleGuardPacerIsPerChain(t *testing.T) {
 	var p idleGuardPacer
 	now := time.Date(2026, 11, 24, 4, 0, 0, 0, time.UTC)
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		p.note("plasma", errors.New("403 from every node"), now)
 	}
 	if p.due("plasma", now) {

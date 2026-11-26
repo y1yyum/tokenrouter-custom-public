@@ -249,12 +249,7 @@ type RPCEndpointLimits struct {
 
 // IsEVMChain reports whether chain uses the shared EVM address.
 func IsEVMChain(chain string) bool {
-	for _, c := range evmChains {
-		if c == chain {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(evmChains, chain)
 }
 
 // KnownChain reports whether chain is supported at all.
@@ -393,9 +388,7 @@ func normalizeNativeScan(cfg *CryptoConfig, def CryptoConfig) error {
 	}
 	cfg.ExplorerAPIKey = strings.TrimSpace(cfg.ExplorerAPIKey)
 	urls := make(map[string]string, len(def.ExplorerAPIURL))
-	for chain, root := range def.ExplorerAPIURL {
-		urls[chain] = root
-	}
+	maps.Copy(urls, def.ExplorerAPIURL)
 	for chain, root := range cfg.ExplorerAPIURL {
 		key := strings.ToLower(strings.TrimSpace(chain))
 		root = strings.TrimSpace(root)
@@ -417,7 +410,7 @@ func normalizeNativeScan(cfg *CryptoConfig, def CryptoConfig) error {
 func configuredRPCEndpoints(rpc map[string]string) map[string]struct{} {
 	out := make(map[string]struct{}, len(rpc))
 	for _, list := range rpc {
-		for _, endpoint := range strings.Split(list, ",") {
+		for endpoint := range strings.SplitSeq(list, ",") {
 			if key := rpcEndpointKey(endpoint); key != "" {
 				out[key] = struct{}{}
 			}

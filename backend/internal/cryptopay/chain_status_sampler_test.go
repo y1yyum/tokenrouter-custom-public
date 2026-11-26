@@ -10,7 +10,7 @@ import (
 func TestSampleRingKeepsTheNewestAndResets(t *testing.T) {
 	var r sampleRing
 	base := time.Unix(1_700_000_000, 0)
-	for i := 0; i < chainSampleCapacity+10; i++ {
+	for i := range chainSampleCapacity + 10 {
 		r.push(chainSample{At: base.Add(time.Duration(i) * time.Second), Cursor: uint64(i)})
 	}
 	got := r.since(time.Time{})
@@ -33,7 +33,7 @@ func TestSampleRingKeepsTheNewestAndResets(t *testing.T) {
 func TestSampleRingSinceIncludesTheCutoffInstant(t *testing.T) {
 	var r sampleRing
 	base := time.Unix(1_700_000_000, 0)
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		r.push(chainSample{At: base.Add(time.Duration(i) * time.Minute), Cursor: uint64(i)})
 	}
 	got := r.since(base.Add(time.Minute))

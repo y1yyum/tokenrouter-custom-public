@@ -127,7 +127,7 @@ func TestPoolLearnsRangeLimitAndStopsSendingWideQueriesThere(t *testing.T) {
 	// Both nodes are probed once per call in rotation order, so run enough calls
 	// for the limited node to be reached, then check it is never asked again.
 	pool := NewPoolWithHTTPClient(limited.URL+","+good.URL, limited.Client())
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		if _, _, err := pool.CallEndpoint(context.Background(), "eth_getLogs", getLogsParamsFor(1000, 2999)); err != nil {
 			t.Fatalf("call %d: %v", i, err)
 		}
@@ -140,7 +140,7 @@ func TestPoolLearnsRangeLimitAndStopsSendingWideQueriesThere(t *testing.T) {
 	}
 	// A query inside the limit still goes to the limited node: it is healthy.
 	before := limitedHits.Load()
-	for i := 0; i < 6; i++ {
+	for i := range 6 {
 		if _, _, err := pool.CallEndpoint(context.Background(), "eth_getLogs", getLogsParamsFor(1000, 1049)); err != nil {
 			t.Fatalf("narrow call %d: %v", i, err)
 		}
@@ -267,7 +267,7 @@ func TestQuotaAnswersKeepAnEndpointOutOfRotationForLong(t *testing.T) {
 			}))
 			defer good.Close()
 			pool := NewPoolWithHTTPClient(dead.URL+","+good.URL, dead.Client())
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				if _, err := pool.Call(context.Background(), "eth_blockNumber", nil); err != nil {
 					t.Fatalf("call %d: %v", i, err)
 				}
@@ -378,7 +378,7 @@ func TestConcurrentFailuresOfOneBurstAreOneCooldownStep(t *testing.T) {
 	rateLimited := &Failure{Kind: "http", HTTPStatus: 429}
 	const endpoint = "https://node.example"
 
-	for i := 0; i < 5; i++ { // the five batches of one scan stage, all rejected together
+	for range 5 { // the five batches of one scan stage, all rejected together
 		tracker.fail(endpoint, rateLimited)
 	}
 	tracker.mu.Lock()
@@ -429,7 +429,7 @@ func TestNodeErrorTextIsBoundedBeforeClassification(t *testing.T) {
 func TestHTTPErrorTextIsNeverKeptOnTheFailure(t *testing.T) {
 	shrinkRetryDelays(t)
 	var hits atomic.Int32
-	echoed := "Insufficient RU balance for " + strings.Join([]string{"https://node.example/v2", "0123456789abcdef0123456789abcdef"}, "/")
+	echoed := "Insufficient RU balance for " + "https://node.example/v2" + "/" + "0123456789abcdef0123456789abcdef"
 	srv := jsonErrorNode(503, `{"error":{"code":10007,"message":"`+echoed+`"}}`, &hits)
 	defer srv.Close()
 	pool := NewPoolWithHTTPClient(srv.URL, srv.Client())
@@ -461,7 +461,7 @@ func TestDerivedPoolsShareEndpointHealth(t *testing.T) {
 	defer good.Close()
 	list := dead.URL + "," + good.URL
 	parent := NewPoolWithHTTPClient(list, dead.Client())
-	for i := 0; i < 4; i++ { // the first pass finds out
+	for i := range 4 { // the first pass finds out
 		if _, err := parent.Call(context.Background(), "eth_blockNumber", nil); err != nil {
 			t.Fatalf("parent call %d: %v", i, err)
 		}
@@ -474,7 +474,7 @@ func TestDerivedPoolsShareEndpointHealth(t *testing.T) {
 		"WithEndpoints": func() *Pool { return parent.WithEndpoints(list) },
 		"WithChainID":   func() *Pool { return parent.WithChainID(137) },
 	} {
-		for i := 0; i < 4; i++ { // later passes must not ask it again
+		for i := range 4 { // later passes must not ask it again
 			if _, err := derive().Call(context.Background(), "eth_blockNumber", nil); err != nil {
 				t.Fatalf("%s call %d: %v", name, i, err)
 			}

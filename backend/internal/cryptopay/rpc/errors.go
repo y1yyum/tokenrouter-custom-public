@@ -266,8 +266,7 @@ func (e *Failure) IsTransient() bool {
 // CategoryOf classifies any error; anything that is not an rpc.Failure is
 // unknown to this package.
 func CategoryOf(err error) string {
-	var failure *Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*Failure](err); ok {
 		return failure.Category()
 	}
 	return CategoryUnknown
@@ -314,8 +313,7 @@ func (e *Failure) Detail() string {
 
 // DetailOf returns the sanitised node text of err, if any.
 func DetailOf(err error) string {
-	var failure *Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*Failure](err); ok {
 		return failure.Detail()
 	}
 	return ""
@@ -323,8 +321,7 @@ func DetailOf(err error) string {
 
 // HostOf returns the failing endpoint host, if it is known.
 func HostOf(err error) string {
-	var failure *Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*Failure](err); ok {
 		return failure.Host
 	}
 	return ""
@@ -389,8 +386,7 @@ func rangeLimitFromMessage(message string) (uint64, bool) {
 // SpanLimitOf returns the block span a node named when it refused err's
 // request, or zero.
 func SpanLimitOf(err error) uint64 {
-	var failure *Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*Failure](err); ok {
 		return failure.SpanLimit
 	}
 	return 0
@@ -488,8 +484,7 @@ func SafeError(err error) string {
 	if err == nil {
 		return ""
 	}
-	var failure *Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*Failure](err); ok {
 		return failure.Error()
 	}
 	if errors.Is(err, ErrIndependentEvidence) {

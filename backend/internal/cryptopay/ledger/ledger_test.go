@@ -14,7 +14,7 @@ import (
 	"github.com/DATA-DOG/go-sqlmock"
 	"github.com/shopspring/decimal"
 	"github.com/stretchr/testify/require"
-	sqlite "modernc.org/sqlite"
+	"modernc.org/sqlite"
 
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/nativeprice"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/scanner"
@@ -972,7 +972,7 @@ func TestFailedCreditedWriteCanResumeLinkedOrder(t *testing.T) {
 	tr := depositTransfer(10_000_000)
 	l := New(db, creditor, nil, 100, 1, 0)
 	writeErr := errors.New("mark credited unavailable")
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := range 2 {
 		expectDepositState(mock, tr, stateRows().AddRow("pending", 88, 42, 67.0, "", nil, "", false))
 		expectation := mock.ExpectExec(markCreditedPattern).
 			WithArgs(tr.Chain, tr.TxHash, tr.LogIndex, false, tr.BlockHash)

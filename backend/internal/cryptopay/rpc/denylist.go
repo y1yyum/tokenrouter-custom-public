@@ -60,7 +60,7 @@ func IsDeniedRPCEndpoint(endpoint string) bool {
 // filterRPCList drops denied hosts and keeps the operator's ordering.
 func filterRPCList(endpoints string) []string {
 	var list []string
-	for _, raw := range strings.Split(endpoints, ",") {
+	for raw := range strings.SplitSeq(endpoints, ",") {
 		trimmed := strings.TrimSpace(raw)
 		if trimmed == "" || IsDeniedRPCEndpoint(trimmed) {
 			continue

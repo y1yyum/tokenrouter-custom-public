@@ -208,16 +208,14 @@ func TestDeriveLimitsAndStatusConcurrency(t *testing.T) {
 	}
 	statusManager := New(nil, testMasterKey)
 	var wg sync.WaitGroup
-	for i := 0; i < 16; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			for j := 0; j < 50; j++ {
+	for range 16 {
+		wg.Go(func() {
+			for j := range 50 {
 				statusManager.SetEnabled(j%2 == 0)
 				_, _ = statusManager.Status(t.Context())
 				_ = statusManager.SetDestination(testDestination)
 			}
-		}()
+		})
 	}
 	done := make(chan struct{})
 	go func() { wg.Wait(); close(done) }()

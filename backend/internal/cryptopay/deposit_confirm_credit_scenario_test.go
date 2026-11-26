@@ -86,12 +86,10 @@ func TestManualConfirmConcurrentWithoutAnyLockStillCreditsOnce(t *testing.T) {
 	start := make(chan struct{})
 	var wg sync.WaitGroup
 	for i := range workers {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			results[i] = e.confirm(id)
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

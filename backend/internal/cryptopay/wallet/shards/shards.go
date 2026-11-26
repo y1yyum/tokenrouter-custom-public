@@ -6,6 +6,7 @@ import (
 	"encoding/base32"
 	"errors"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 )
@@ -52,7 +53,7 @@ type Share struct {
 
 func init() {
 	x := byte(1)
-	for i := 0; i < 255; i++ {
+	for i := range 255 {
 		gfExp[i] = x
 		gfLog[x] = byte(i)
 		x = mulByThree(x)
@@ -145,7 +146,7 @@ func Combine(shares []Share) ([]byte, error) {
 	ordered := append([]Share(nil), shares...)
 	sort.Slice(ordered, func(i, j int) bool { return ordered[i].Index < ordered[j].Index })
 	secret := make([]byte, length)
-	for byteIndex := 0; byteIndex < length; byteIndex++ {
+	for byteIndex := range length {
 		// Lagrange interpolation at x=0 over the supplied points.
 		var value byte
 		for i, point := range ordered {
@@ -172,8 +173,8 @@ func Combine(shares []Share) ([]byte, error) {
 // evaluate runs Horner's method over the coefficient list at x.
 func evaluate(coefficients []byte, x byte) byte {
 	var result byte
-	for i := len(coefficients) - 1; i >= 0; i-- {
-		result = mul(result, x) ^ coefficients[i]
+	for _, coefficient := range slices.Backward(coefficients) {
+		result = mul(result, x) ^ coefficient
 	}
 	return result
 }
@@ -208,10 +209,7 @@ func (s Share) String() string {
 	_, _ = builder.WriteString(textPrefix)
 	for i := 0; i < len(encoded); i += 4 {
 		_, _ = builder.WriteString("-")
-		end := i + 4
-		if end > len(encoded) {
-			end = len(encoded)
-		}
+		end := min(i+4, len(encoded))
 		_, _ = builder.WriteString(encoded[i:end])
 	}
 	return builder.String()

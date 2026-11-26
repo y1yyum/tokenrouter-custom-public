@@ -368,7 +368,7 @@ func TestNativePollIgnoresStablecoinTransfers(t *testing.T) {
 
 func TestNativePollPageLimitRereadsTheLastBlock(t *testing.T) {
 	rows := make([]explorer.Tx, 0, txListPageLimit)
-	for i := 0; i < txListPageLimit; i++ {
+	for range txListPageLimit {
 		// Every row is an unrelated transfer from a third party to itself.
 		rows = append(rows, txRow(pollHashDeposit, pollSender, pollExternal, big.NewInt(1), 900))
 	}

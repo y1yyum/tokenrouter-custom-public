@@ -78,8 +78,7 @@ func TestCreateJobReportsReservedAddressWithoutPersistenceError(t *testing.T) {
 	if !errors.Is(err, errAddressReserved) {
 		t.Fatalf("reserved address error = %v, want errAddressReserved", err)
 	}
-	var storage *persistenceError
-	if errors.As(err, &storage) {
+	if _, ok := errors.AsType[*persistenceError](err); ok {
 		t.Fatal("reserved address was reported as a persistence failure")
 	}
 }
@@ -102,7 +101,7 @@ func TestReservedAddressesDoNotAbortTheRun(t *testing.T) {
 	e.config.MinPerAddress = map[string]float64{"bsc": 1}
 
 	expectRunStart(m)
-	for i := 0; i < reserved; i++ {
+	for range reserved {
 		expectInsertReserved(m)
 	}
 	expectInsertAccepted(m, 7)
@@ -146,7 +145,7 @@ func TestStorageFailureBudgetStillStopsTheRun(t *testing.T) {
 	e.config.MinPerAddress = map[string]float64{"bsc": 1}
 
 	expectRunStart(m)
-	for i := 0; i < maxConsecutiveStorageFailures; i++ {
+	for range maxConsecutiveStorageFailures {
 		m.ExpectQuery("INSERT INTO sweep_records").WithArgs(anyArgs(9)...).
 			WillReturnError(errors.New("disk is on fire"))
 	}

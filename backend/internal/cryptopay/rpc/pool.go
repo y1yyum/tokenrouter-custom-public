@@ -286,7 +286,7 @@ func (p *Pool) CallEndpoint(ctx context.Context, method string, params any) (jso
 	// a node's "range too wide" can never mask the real reason nobody answered.
 	var lastErr, lastHardErr error
 	sawRangeLimit := false
-	for round := 0; round < maxCallRounds; round++ {
+	for round := range maxCallRounds {
 		candidates := health.eligible(endpoints)
 		if hasSpan {
 			capable := health.capableOfSpan(endpoints, span)

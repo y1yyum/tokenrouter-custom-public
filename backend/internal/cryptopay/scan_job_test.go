@@ -502,9 +502,7 @@ func TestScanRegistryIsSafeUnderConcurrentReadersAndCancel(t *testing.T) {
 	stop := make(chan struct{})
 	var wg sync.WaitGroup
 	for range 8 {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -518,7 +516,7 @@ func TestScanRegistryIsSafeUnderConcurrentReadersAndCancel(t *testing.T) {
 					s.Rounds++
 				}
 			}
-		}()
+		})
 	}
 	require.Eventually(t, func() bool { return r.get(started.ID).Rounds >= 300 }, 10*time.Second, time.Millisecond)
 	_, err = r.cancel(started.ID)

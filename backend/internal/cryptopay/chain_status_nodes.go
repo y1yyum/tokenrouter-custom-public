@@ -41,8 +41,7 @@ func classifyNodeError(err error) string {
 	if errors.Is(err, context.DeadlineExceeded) {
 		return NodeErrTimeout
 	}
-	var failure *rpc.Failure
-	if errors.As(err, &failure) {
+	if failure, ok := errors.AsType[*rpc.Failure](err); ok {
 		switch failure.Kind {
 		case "http":
 			switch {

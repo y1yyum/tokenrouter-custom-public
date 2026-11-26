@@ -175,7 +175,7 @@ func TestRecentReplayDenseSingleBlockResumesAcrossWorkers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < recentReplayTransfersPerPass; i++ {
+	for i := range recentReplayTransfersPerPass {
 		expectReplaySave(firstMock, recentReplayState{Through: 101, Next: 101, After: i, Hash: testTransfer().BlockHash}).
 			WillReturnResult(sqlmock.NewResult(0, 1))
 	}
@@ -241,7 +241,7 @@ func TestRecentReplayCheckpointSaveFailureCannotSkipPersistedTransfer(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	for i := 0; i < 2; i++ {
+	for i := range 2 {
 		expectReplaySave(secondMock, recentReplayState{Through: 101, Next: 101, After: i, Hash: testTransfer().BlockHash}).WillReturnResult(sqlmock.NewResult(0, 1))
 	}
 	expectReplaySave(secondMock, recentReplayState{Through: 101, Next: 102, After: -1}).WillReturnResult(sqlmock.NewResult(0, 1))

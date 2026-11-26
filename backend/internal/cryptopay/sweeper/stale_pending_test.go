@@ -179,7 +179,7 @@ func expectStaleAge(mock sqlmock.Sqlmock, id, minutes int64) {
 
 func expectStaleRelease(mock sqlmock.Sqlmock, id int64) {
 	args := []driver.Value{id, "failed"}
-	for i := 0; i < 12; i++ {
+	for range 12 {
 		args = append(args, sqlmock.AnyArg())
 	}
 	mock.ExpectExec(`UPDATE sweep_records SET`).

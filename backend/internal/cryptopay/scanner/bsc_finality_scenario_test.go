@@ -111,7 +111,7 @@ func TestBSCWaitingDepositBecomesCreditableAsFinalizedAdvances(t *testing.T) {
 	fixture := newRPCFixture(transfer)
 	fixture.finalized = map[string]any{"number": "0x64"}
 	worker, mock, handler := workerFixture(t, fixture)
-	for round := 0; round < 2; round++ {
+	for round := range 2 {
 		expectObservation(mock, transfer, "1", "")
 		expectObservationUpdate(mock, transfer, "pending", "", "pending", "").WillReturnResult(sqlmock.NewResult(0, 1))
 		if err := worker.retryPending(t.Context()); err != nil {

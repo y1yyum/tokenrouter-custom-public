@@ -235,7 +235,7 @@ func (s *Service) TopUpTo(ctx context.Context, target int64) error {
 		return fmt.Errorf("invalid pool target")
 	}
 	for _, family := range []string{FamilyEVM, FamilySolana} {
-		for round := 0; round < 200; round++ {
+		for range 200 {
 			count, err := s.repo.FreePoolCount(ctx, family)
 			if err != nil {
 				return err

@@ -292,7 +292,7 @@ func (m *Manager) Derive(ctx context.Context, start, count uint32) ([]addresses.
 		return nil, m.denied(ctx, "derive", err)
 	}
 	out := make([]addresses.Derived, 0, count)
-	for i := uint32(0); i < count; i++ {
+	for i := range count {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}

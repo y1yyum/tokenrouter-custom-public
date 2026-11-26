@@ -3,6 +3,7 @@ package routing
 import (
 	"context"
 	"fmt"
+	"maps"
 	"math"
 	"slices"
 	"sort"
@@ -538,9 +539,7 @@ func (s *Marketplace) getVisibleAvailabilityMap(ctx context.Context, groups []Gr
 		// and keeps the catalog available even when history storage is unavailable.
 		probes, err := s.availability.GetSummaryByGroupIDs(ctx, probeGroupIDs, windowDays, bucketMinutes, timezone, now)
 		if err == nil {
-			for groupID, summary := range probes {
-				availabilityMap[groupID] = summary
-			}
+			maps.Copy(availabilityMap, probes)
 		}
 	}
 	importGroupIDs := make([]int64, 0, len(groupIDs))
@@ -556,9 +555,7 @@ func (s *Marketplace) getVisibleAvailabilityMap(ctx context.Context, groups []Gr
 	// and leaves groups without either observation source absent from the map.
 	imported, err := s.availability.GetImportedSummaryByGroupIDs(ctx, importGroupIDs, windowDays, bucketMinutes, timezone, now)
 	if err == nil {
-		for groupID, summary := range imported {
-			availabilityMap[groupID] = summary
-		}
+		maps.Copy(availabilityMap, imported)
 	}
 	return availabilityMap
 }

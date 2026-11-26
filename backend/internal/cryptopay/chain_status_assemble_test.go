@@ -158,7 +158,7 @@ func TestAssembleStalledCursorReadsZeroSpeedAndNoETA(t *testing.T) {
 	in.Plan.Endpoints = in.Plan.Endpoints[:1]
 	in.Cursor = &chainCursor{Block: 100, UpdatedAt: assembleNow.Add(-300 * time.Second)}
 	base := assembleNow.Add(-300 * time.Second)
-	for i := 0; i <= 5; i++ {
+	for i := range 6 {
 		in.Window = append(in.Window, sampleAt(base, i*60, 100, uint64(5000+i*80)))
 	}
 	st := assembleChainStatus(in)

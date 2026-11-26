@@ -833,7 +833,7 @@ func parseChainScope(values []string) []string {
 	}
 	out := make([]string, 0, len(values))
 	for _, raw := range values {
-		for _, part := range strings.Split(raw, ",") {
+		for part := range strings.SplitSeq(raw, ",") {
 			chain := strings.ToLower(strings.TrimSpace(part))
 			if chain != "" {
 				out = append(out, chain)

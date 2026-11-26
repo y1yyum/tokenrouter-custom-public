@@ -96,7 +96,7 @@ func (p *Pool) ConfigureEndpoints(endpoints string, automatic bool, chainID uint
 		policy = newVerificationPolicy(chainID, anchors)
 	}
 	var list []string
-	for _, endpoint := range strings.Split(endpoints, ",") {
+	for endpoint := range strings.SplitSeq(endpoints, ",") {
 		if endpoint = strings.TrimSpace(endpoint); endpoint != "" {
 			list = append(list, endpoint)
 		}

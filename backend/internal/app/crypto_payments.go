@@ -77,7 +77,7 @@ func provideWalletBark(db *sql.DB, encryptor identity.SecretEncryptor) *notifica
 // the corresponding committed financial operation.
 // @project-doc docs/domains/payments_and_entitlements.md#onchain_balance_deposits
 func provideDepositCreditor(client *ent.Client, payments *payment.Runtime, db *sql.DB, eligibility *billing.Eligibility, keys *apikey.APIKeyService, bark *notification.UserBarkService) *cryptopay.DepositCreditor {
-	creditor := cryptopay.NewDepositCreditor(client, payments.OrderLifecycle.Fulfillment, db)
+	creditor := cryptopay.NewDepositCreditor(client, payments.Fulfillment, db)
 	creditor.SetBalanceInvalidator(func(ctx context.Context, userID int64) error {
 		// Gateway eligibility and authenticated API keys each retain wallet
 		// information. Attempt both invalidations after the database commits.

@@ -136,7 +136,7 @@ func TestScanRangeReRunsOnlyTheRateLimitedBatches(t *testing.T) {
 	if err := scanAllBatches(t, t.Context(), pool, recipients); err != nil {
 		t.Fatalf("the rate limited batches must succeed on retry: %v", err)
 	}
-	for batch := 0; batch < 13; batch++ {
+	for batch := range 13 {
 		want := 1
 		if limited[batch] {
 			want = 2

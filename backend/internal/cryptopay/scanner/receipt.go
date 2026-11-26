@@ -252,9 +252,7 @@ func verifiedChainPool(ctx context.Context, pool *rpc.Pool, chain string) (*rpc.
 	var checks sync.WaitGroup
 	jobs := make(chan int)
 	for range min(4, len(configured)) {
-		checks.Add(1)
-		go func() {
-			defer checks.Done()
+		checks.Go(func() {
 			for index := range jobs {
 				errs[index] = verifyChain(probe, pool.WithEndpoints(configured[index]), chain)
 				verified[index] = errs[index] == nil
@@ -262,7 +260,7 @@ func verifiedChainPool(ctx context.Context, pool *rpc.Pool, chain string) (*rpc.
 					storeChainProof(chain, configured[index], errs[index])
 				}
 			}
-		}()
+		})
 	}
 	for index := range configured {
 		if proof, ok := cachedChainProof(chain, configured[index]); ok {

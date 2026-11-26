@@ -97,7 +97,7 @@ func newVerificationFixture(t *testing.T, count int) *verificationFixture {
 		primary:   fmt.Sprintf("https://registry-%d.example/rpc", id),
 		transport: &verificationTransport{nodes: make(map[string]*verificationNode), calls: make(map[string]int)},
 	}
-	for i := 0; i < count; i++ {
+	for i := range count {
 		fixture.anchors = append(fixture.anchors, fmt.Sprintf("https://reference-%d-%d.example/rpc", id, i))
 	}
 	for _, endpoint := range append([]string{fixture.primary}, fixture.anchors...) {

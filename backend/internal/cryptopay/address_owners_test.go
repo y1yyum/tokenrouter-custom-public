@@ -121,7 +121,7 @@ func TestLookupAddressOwnersKeepsTheFirstRowForADuplicatedAddress(t *testing.T) 
 func TestLookupAddressOwnersDeduplicatesBeforeCountingTheCap(t *testing.T) {
 	s, mock := newOwnersService(t)
 	distinct := make([]string, 0, MaxOwnerLookupAddresses)
-	for i := 0; i < MaxOwnerLookupAddresses; i++ {
+	for i := range MaxOwnerLookupAddresses {
 		distinct = append(distinct, fmt.Sprintf("0x%040x", i+1))
 	}
 	// 100 distinct + a repeat + garbage is still a valid request.
@@ -136,7 +136,7 @@ func TestLookupAddressOwnersDeduplicatesBeforeCountingTheCap(t *testing.T) {
 func TestLookupAddressOwnersRejectsMoreThanTheCapWithoutQuerying(t *testing.T) {
 	s, mock := newOwnersService(t) // no expectation: any query would fail the test
 	tooMany := make([]string, 0, MaxOwnerLookupAddresses+1)
-	for i := 0; i < MaxOwnerLookupAddresses+1; i++ {
+	for i := range MaxOwnerLookupAddresses + 1 {
 		tooMany = append(tooMany, fmt.Sprintf("0x%040x", i+1))
 	}
 	got, err := s.LookupAddressOwners(t.Context(), tooMany)
@@ -148,7 +148,7 @@ func TestLookupAddressOwnersRejectsMoreThanTheCapWithoutQuerying(t *testing.T) {
 func TestLookupAddressOwnersIgnoresInvalidInputWithoutQuerying(t *testing.T) {
 	s, mock := newOwnersService(t)
 	junk := make([]string, 0, 400)
-	for i := 0; i < 400; i++ {
+	for i := range 400 {
 		junk = append(junk, fmt.Sprintf("invalid-%d", i)) // many, but none valid: not a "too many"
 	}
 	got, err := s.LookupAddressOwners(t.Context(), junk)

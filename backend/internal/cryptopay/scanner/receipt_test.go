@@ -66,7 +66,7 @@ func TestChainProofIsRememberedAndExpires(t *testing.T) {
 	if first == 0 {
 		t.Fatal("the first pass must probe the endpoint")
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		now = now.Add(5 * time.Second) // five more passes
 		if _, err := verifiedChainPool(t.Context(), pool, "bsc"); err != nil {
 			t.Fatal(err)

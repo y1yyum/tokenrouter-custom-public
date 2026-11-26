@@ -391,8 +391,8 @@ func (w *Worker) reconcile(ctx context.Context, observations []depositObservatio
 					}
 				}
 				count := 0
-				if strings.HasPrefix(p.reason, missingReceiptPrefix) {
-					count, _ = strconv.Atoi(strings.TrimPrefix(p.reason, missingReceiptPrefix))
+				if after, ok := strings.CutPrefix(p.reason, missingReceiptPrefix); ok {
+					count, _ = strconv.Atoi(after)
 				}
 				count++
 				if count >= missingReceiptThreshold {

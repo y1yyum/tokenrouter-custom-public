@@ -47,11 +47,9 @@ func (s *Service) buildChainStatus(ctx context.Context) (*ChainStatusReport, err
 	errs := make([]error, len(plans))
 	var wg sync.WaitGroup
 	for i, plan := range plans {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			chains[i], errs[i] = s.chainStatusFor(ctx, plan, cursors, cursorErr != nil, pending, pendingErr != nil, now)
-		}()
+		})
 	}
 	wg.Wait()
 	for _, err := range errs {

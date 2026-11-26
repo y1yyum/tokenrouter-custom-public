@@ -172,7 +172,7 @@ func (c *Client) TxList(ctx context.Context, chain, address string, startBlock, 
 
 	var lastErr error
 	delay := c.backoff
-	for attempt := 0; attempt < c.retries; attempt++ {
+	for attempt := range c.retries {
 		if attempt > 0 {
 			if err := c.sleep(ctx, delay); err != nil {
 				return nil, err

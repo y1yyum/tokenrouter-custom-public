@@ -380,8 +380,7 @@ func TestConfigFingerprintCoversEveryExportedField(t *testing.T) {
 	excluded := map[string]string{}
 	base := DefaultCryptoConfig()
 	configType := reflect.TypeOf(base)
-	for i := 0; i < configType.NumField(); i++ {
-		field := configType.Field(i)
+	for field := range configType.Fields() {
 		if !field.IsExported() {
 			continue
 		}
