@@ -15,7 +15,7 @@ set -e
 # application's responsibility. Uninstall prompts determine whether configuration
 # is retained, and removing the installation lock allows a later fresh setup.
 #
-# Usage: curl -sSL https://raw.githubusercontent.com/TokenFlux/TokenRouter/main/deploy/install.sh | bash
+# Usage: curl -sSL https://raw.githubusercontent.com/y1yyum/tokenrouter-custom-public/main/deploy/install.sh | bash
 
 # The message table requires Bash 4 associative arrays. Check the interpreter
 # before those declarations so older shells can report the requirement clearly.
@@ -41,7 +41,7 @@ CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Configuration
-GITHUB_REPO="TokenFlux/TokenRouter"
+GITHUB_REPO="${TOKENROUTER_GITHUB_REPO:-y1yyum/tokenrouter-custom-public}"
 INSTALL_DIR="/opt/tokenrouter"
 SERVICE_NAME="tokenrouter"
 BINARY_NAME="tokenrouter"
@@ -608,7 +608,7 @@ install_service() {
     cat > /etc/systemd/system/${SERVICE_NAME}.service << EOF
 [Unit]
 Description=TokenRouter - AI API Gateway Platform
-Documentation=https://github.com/TokenFlux/TokenRouter
+Documentation=https://github.com/${GITHUB_REPO}
 After=network.target postgresql.service redis.service
 Wants=postgresql.service redis.service
 

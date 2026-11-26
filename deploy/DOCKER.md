@@ -3,7 +3,7 @@
 TokenRouter publishes multi-architecture images to GitHub Container Registry:
 
 ```text
-ghcr.io/tokenflux/tokenrouter:latest
+ghcr.io/y1yyum/tokenrouter:latest
 ```
 
 The application requires PostgreSQL and Redis. Docker Compose provides installation inputs, persistent configuration storage, health checks, and dependency startup ordering.
@@ -57,8 +57,8 @@ Pin a version tag or image digest in production, and verify database backups bef
 
 ## Related links
 
-- [GitHub repository](https://github.com/TokenFlux/TokenRouter)
-- [Deployment guide](https://github.com/TokenFlux/TokenRouter/blob/main/docs/guides/deployment/index.md)
+- [GitHub repository](https://github.com/y1yyum/tokenrouter-custom-public)
+- [Deployment guide](https://github.com/y1yyum/tokenrouter-custom-public/blob/main/docs/guides/deployment/index.md)
 
 ## Versioned application configuration
 

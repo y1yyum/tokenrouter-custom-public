@@ -452,7 +452,7 @@ prepare_environment() {
 
     APP_IMAGE="$(read_env_value APPLE_CONTAINER_TOKENROUTER_IMAGE)"
     if [[ -z "${APP_IMAGE}" ]]; then
-        APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE ghcr.io/tokenflux/tokenrouter:latest)"
+        APP_IMAGE="$(read_env_value APPLE_CONTAINER_SUB2API_IMAGE ghcr.io/y1yyum/tokenrouter:latest)"
     fi
     POSTGRES_IMAGE="$(read_env_value APPLE_CONTAINER_POSTGRES_IMAGE postgres:18-alpine)"
     REDIS_IMAGE="$(read_env_value APPLE_CONTAINER_REDIS_IMAGE redis:8-alpine)"

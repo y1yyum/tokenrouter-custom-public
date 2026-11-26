@@ -24,7 +24,7 @@ services:
   # TokenRouter Application
   # ===========================================================================
   tokenrouter:
-    image: ghcr.io/tokenflux/tokenrouter:latest
+    image: ghcr.io/y1yyum/tokenrouter:latest
     # Refresh latest before recreation so an in-container update is not
     # replaced by an older locally cached image.
     pull_policy: always

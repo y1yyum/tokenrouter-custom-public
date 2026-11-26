@@ -60,7 +60,7 @@ grep -q '^GATEWAY_MAX_BODY_SIZE=' "${STATE_DIR}/tokenrouter-apple.env" && fail "
 grep -q '^UPDATE_GITHUB_TOKEN=fixture-reference-token$' "${STATE_DIR}/tokenrouter-apple.env" || fail "explicit-reference secret was dropped"
 grep -q '^DATABASE_PASSWORD=' "${STATE_DIR}/tokenrouter-apple.env" || fail "setup password was dropped"
 grep -q '^POSTGRES_PASSWORD=' "${STATE_DIR}/tokenrouter-apple.env" && fail "database service variable reached application environment"
-grep -Fq 'ghcr.io/tokenflux/tokenrouter:latest' "${STATE_DIR}/commands.log" || fail "up did not use the TokenRouter application image"
+grep -Fq 'ghcr.io/y1yyum/tokenrouter:latest' "${STATE_DIR}/commands.log" || fail "up did not use the TokenRouter application image"
 "${SCRIPT}" status >/dev/null
 
 "${SCRIPT}" up --recreate
