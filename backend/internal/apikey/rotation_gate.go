@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/ipmatch"
 )
@@ -107,14 +106,13 @@ type KeyRotationGate struct {
 // NewKeyRotationGate binds the current store and a process configuration snapshot.
 // Startup normally validates the configuration first. The gate retains validation
 // errors from direct construction so a malformed cutoff cannot permit deposits.
-func NewKeyRotationGate(store KeyRotationGateStore, security config.SecurityConfig) *KeyRotationGate {
-	cutoff, err := security.KeyRotationGateCutoff()
+func NewKeyRotationGate(store KeyRotationGateStore, cutoff time.Time, ackOn bool, ackHours int, cutoffErr error) *KeyRotationGate {
 	return &KeyRotationGate{
 		store:     store,
 		cutoff:    cutoff,
-		ackOn:     security.KeyRotationRiskAckEnabled,
-		ackHours:  security.KeyRotationRiskAckLifetimeHours(),
-		configErr: err,
+		ackOn:     ackOn,
+		ackHours:  ackHours,
+		configErr: cutoffErr,
 	}
 }
 

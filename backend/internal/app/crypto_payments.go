@@ -17,8 +17,10 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/addresses"
 	cryptohttp "github.com/TokenFlux/TokenRouter/internal/cryptopay/httpapi"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/TokenFlux/TokenRouter/internal/notification"
+	notificationpostgres "github.com/TokenFlux/TokenRouter/internal/notification/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	"github.com/TokenFlux/TokenRouter/internal/server/adminapi"
 )
@@ -51,13 +53,23 @@ func init() {
 // and deposit endpoints consult the same repository and decision rules.
 func provideDepositRotationGate(db *sql.DB, cfg *config.Config) *keyhttp.KeyRotationGateHandler {
 	store := keypostgres.NewKeyRotationGateStore(db)
-	return keyhttp.NewKeyRotationGateHandler(apikey.NewKeyRotationGate(store, cfg.Security))
+	cutoff, err := cfg.Security.KeyRotationGateCutoff()
+	return keyhttp.NewKeyRotationGateHandler(apikey.NewKeyRotationGate(store, cutoff, cfg.Security.KeyRotationRiskAckEnabled, cfg.Security.KeyRotationRiskAckLifetimeHours(), err))
+}
+
+// provideCryptoSecurity passes only the persistent encryption key to identity.
+func provideCryptoSecurity(totp *identity.TotpService, cfg *config.Config) *identity.CryptoSecurityService {
+	var key string
+	if cfg != nil {
+		key = mode.PersistentKey(cfg.Security.SecretEncryptionKey, cfg.Security.SecretEncryptionKeyConfigured)
+	}
+	return identity.NewCryptoSecurityService(totp, key)
 }
 
 // provideWalletBark binds encrypted device preferences to the same identity
 // encryption implementation used for account security secrets.
 func provideWalletBark(db *sql.DB, encryptor identity.SecretEncryptor) *notification.UserBarkService {
-	return notification.NewUserBarkService(db, notification.AdaptEncryptor(encryptor))
+	return notification.NewUserBarkService(notificationpostgres.NewBarkSettingsStore(db), notification.AdaptEncryptor(encryptor))
 }
 
 // provideDepositCreditor attaches the chain ledger to the existing order

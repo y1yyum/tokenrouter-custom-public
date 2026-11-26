@@ -568,7 +568,7 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	depositCreditor := provideDepositCreditor(client, runtime, db, eligibility, apiKeyService, userBarkService)
 	addressesService := cryptopay.NewAddressService(db)
 	cryptopayService := provideChainPayments(db, serviceSettingStore, depositCreditor, addressesService, cfg, redisClient, userBarkService, mailer, manager)
-	cryptoSecurityService := identity.NewCryptoSecurityService(totpService, cfg)
+	cryptoSecurityService := provideCryptoSecurity(totpService, cfg)
 	keyRotationGateHandler := provideDepositRotationGate(db, cfg)
 	appCryptoRouteMount := provideCryptoRouteMount(cryptopayService, addressesService, serviceSettingStore, cryptoSecurityService, cfg, userBarkService, keyRotationGateHandler)
 	appPaymentRouteMount := providePaymentRouteMount(paymentHandler, paymentWebhookHandler, httpapiAdminHandler, planHandler, appCryptoRouteMount)

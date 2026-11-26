@@ -3,10 +3,9 @@
 package app
 
 import (
-	"github.com/TokenFlux/TokenRouter/internal/cryptopay"
-	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/google/wire"
 
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
 	paymentpostgres "github.com/TokenFlux/TokenRouter/internal/payment/postgres"
 )
@@ -27,7 +26,7 @@ var (
 	paymentAssemblyProviders = wire.NewSet(
 		cryptopay.NewAddressService,
 		cryptopay.NewServiceSettingStore,
-		identity.NewCryptoSecurityService,
+		provideCryptoSecurity,
 		provideWalletBark,
 		provideDepositRotationGate,
 		provideDepositCreditor,

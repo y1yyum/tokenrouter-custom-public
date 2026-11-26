@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/TokenFlux/TokenRouter/internal/config"
 	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
 )
@@ -82,11 +81,9 @@ type CryptoSecurityService struct {
 // NewCryptoSecurityService joins the native authenticator to payment security
 // during application construction. Call it before serving requests. Missing
 // persistent key or shared storage leaves payment proof verification unavailable.
-func NewCryptoSecurityService(totp *TotpService, cfg *config.Config) *CryptoSecurityService {
+func NewCryptoSecurityService(totp *TotpService, persistentKey string) *CryptoSecurityService {
 	s := &CryptoSecurityService{totp: totp, operators: cryptoOperatorIDs(os.Getenv("CRYPTO_ADMIN_USER_IDS"))}
-	if cfg != nil {
-		s.key, _ = hex.DecodeString(mode.PersistentKey(cfg.Security.SecretEncryptionKey, cfg.Security.SecretEncryptionKeyConfigured))
-	}
+	s.key, _ = hex.DecodeString(persistentKey)
 	if totp != nil {
 		s.store, _ = totp.cache.(CryptoTotpStore)
 		totp.cryptoSecurity = s

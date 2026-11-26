@@ -2,12 +2,17 @@ package notification
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/TokenFlux/TokenRouter/internal/notification/bark"
+)
+
+var (
+	ErrBarkKeyRequired   = errors.New("configure a Bark device key before enabling notifications")
+	ErrBarkInvalidKey    = errors.New("invalid Bark device key")
+	ErrBarkNotConfigured = errors.New("wallet owner Bark notifications are not configured or enabled")
 )
 
 // DeviceKeyEncryptor encrypts/decrypts user-supplied Bark keys at rest.
@@ -26,11 +31,28 @@ type encryptorAdapter struct {
 	}
 }
 
+// BarkSettingsStore keeps encrypted device preferences and serializes updates
+// with delivery to the previously registered device. The callback runs while
+// storage holds the active user's row lock; an error cancels the change.
+type BarkSettingsStore interface {
+	Read(ctx context.Context, userID int64, activeAdminOnly bool) (encrypted string, enabled bool, err error)
+	Update(ctx context.Context, userID int64, change func(string, bool) (string, bool, error)) error
+}
+
+// UserBarkService reads per-user Bark settings and sends pushes.
+// The encrypted device key never leaves this layer in plaintext form.
+type UserBarkService struct {
+	store     BarkSettingsStore
+	encryptor DeviceKeyEncryptor
+	newSender func(string) bark.Sender
+}
+
 // AdaptEncryptor wraps any Encrypt/Decrypt pair for the Bark service.
 func AdaptEncryptor(inner interface {
 	Encrypt(plaintext string) (string, error)
 	Decrypt(ciphertext string) (string, error)
-}) DeviceKeyEncryptor {
+},
+) DeviceKeyEncryptor {
 	return &encryptorAdapter{inner: inner}
 }
 
@@ -42,34 +64,17 @@ func (a *encryptorAdapter) DecryptString(ciphertext string) (string, error) {
 	return a.inner.Decrypt(ciphertext)
 }
 
-// UserBarkService reads per-user Bark settings and sends pushes.
-// The encrypted device key never leaves this layer in plaintext form.
-type UserBarkService struct {
-	db        *sql.DB
-	encryptor DeviceKeyEncryptor
-	newSender func(string) bark.Sender
+func NewUserBarkService(store BarkSettingsStore, encryptor DeviceKeyEncryptor) *UserBarkService {
+	return &UserBarkService{store: store, encryptor: encryptor, newSender: func(key string) bark.Sender { return bark.New(key) }}
 }
-
-func NewUserBarkService(db *sql.DB, encryptor DeviceKeyEncryptor) *UserBarkService {
-	return &UserBarkService{db: db, encryptor: encryptor, newSender: func(key string) bark.Sender { return bark.New(key) }}
-}
-
-var (
-	ErrBarkKeyRequired   = errors.New("configure a Bark device key before enabling notifications")
-	ErrBarkInvalidKey    = errors.New("invalid Bark device key")
-	ErrBarkNotConfigured = errors.New("wallet owner Bark notifications are not configured or enabled")
-)
 
 // SendToUserRequired is for security alerts. A missing recipient is an error,
 // so callers keep the durable alert pending instead of silently acknowledging it.
 func (s *UserBarkService) SendToUserRequired(ctx context.Context, userID int64, n bark.Notification) error {
-	if s == nil || s.db == nil || s.encryptor == nil || s.newSender == nil {
+	if s == nil || s.store == nil || s.encryptor == nil || s.newSender == nil {
 		return ErrBarkNotConfigured
 	}
-	var encrypted string
-	var enabled bool
-	err := s.db.QueryRowContext(ctx, `SELECT bark_device_key_encrypted, bark_notify_enabled FROM users
-		WHERE id = $1 AND role = 'admin' AND status = 'active' AND deleted_at IS NULL`, userID).Scan(&encrypted, &enabled)
+	encrypted, enabled, err := s.store.Read(ctx, userID, true)
 	if err != nil {
 		return ErrBarkNotConfigured
 	}
@@ -89,10 +94,7 @@ func (s *UserBarkService) SendToUserRequired(ctx context.Context, userID int64, 
 
 // Status reports whether the user has a key configured (never the key).
 func (s *UserBarkService) Status(ctx context.Context, userID int64) (configured, enabled bool, err error) {
-	var encrypted string
-	err = s.db.QueryRowContext(ctx,
-		`SELECT bark_device_key_encrypted, bark_notify_enabled FROM users WHERE id = $1`,
-		userID).Scan(&encrypted, &enabled)
+	encrypted, enabled, err := s.store.Read(ctx, userID, false)
 	if err != nil {
 		return false, false, fmt.Errorf("read bark settings: %w", err)
 	}
@@ -101,11 +103,7 @@ func (s *UserBarkService) Status(ctx context.Context, userID int64) (configured,
 
 // SendToUser delivers a push if the user has Bark enabled.
 func (s *UserBarkService) SendToUser(ctx context.Context, userID int64, n bark.Notification) error {
-	var encrypted string
-	var enabled bool
-	err := s.db.QueryRowContext(ctx,
-		`SELECT bark_device_key_encrypted, bark_notify_enabled FROM users WHERE id = $1`,
-		userID).Scan(&encrypted, &enabled)
+	encrypted, enabled, err := s.store.Read(ctx, userID, false)
 	if err != nil {
 		return fmt.Errorf("read bark settings: %w", err)
 	}
