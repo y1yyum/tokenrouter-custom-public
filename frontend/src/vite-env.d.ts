@@ -8,6 +8,8 @@
 // ImportMetaEnv describes build-time paths supplied to frontend modules by Vite.
 interface ImportMetaEnv {
   readonly VITE_API_BASE_URL: string // Configured HTTP API root.
+  readonly VITE_RELEASE_REPO?: string // Optional GitHub release repository override.
+  readonly VITE_DOCKER_IMAGE?: string // Optional container image repository override.
   readonly BASE_URL: string // Vite application base path.
 }
 

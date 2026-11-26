@@ -589,5 +589,32 @@ describe('useAppStore', () => {
       expect(localStorage.getItem('table-page-size')).toBeNull()
       expect(localStorage.getItem('table-page-size-source')).toBeNull()
     })
+
+    // A release check returns server-provided repository and container coordinates.
+    // The store updates its exposed release coordinates and preserves them on cached
+    // reads so version dialogs and header links follow the running binary.
+    it('fetchVersion 同步服务端返回的发布仓库与容器镜像坐标', async () => {
+      const { checkUpdates } = await import('@/api/admin/system')
+      vi.mocked(checkUpdates).mockResolvedValueOnce({
+        current_version: '1.0.0',
+        latest_version: '1.0.1',
+        has_update: true,
+        cached: false,
+        build_type: 'release',
+        github_repo: 'custom-org/custom-repo',
+        docker_image: 'ghcr.io/custom-org/tokenrouter',
+      })
+
+      const store = useAppStore()
+      const fresh = await store.fetchVersion(true)
+      expect(fresh?.github_repo).toBe('custom-org/custom-repo')
+      expect(store.githubRepo).toBe('custom-org/custom-repo')
+      expect(store.dockerImage).toBe('ghcr.io/custom-org/tokenrouter')
+
+      const cached = await store.fetchVersion(false)
+      expect(cached?.cached).toBe(true)
+      expect(cached?.github_repo).toBe('custom-org/custom-repo')
+      expect(cached?.docker_image).toBe('ghcr.io/custom-org/tokenrouter')
+    })
   })
 })

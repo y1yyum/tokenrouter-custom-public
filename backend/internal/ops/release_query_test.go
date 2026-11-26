@@ -142,17 +142,19 @@ func TestReleaseQueryFetchLatestReleasePreservesChangelog(t *testing.T) {
 					Name:        "Release 1.2.0",
 					Body:        tc.body,
 					PublishedAt: "2026-11-01T04:05:06Z",
-					HTMLURL:     "https://github.com/TokenFlux/TokenRouter/releases/tag/v1.2.0",
+					HTMLURL:     "https://github.com/y1yyum/tokenrouter-custom-public/releases/tag/v1.2.0",
 					Assets: []Asset{{
 						Name:        "tokenrouter_linux_amd64.tar.gz",
-						DownloadURL: "https://github.com/TokenFlux/TokenRouter/releases/download/v1.2.0/tokenrouter_linux_amd64.tar.gz",
+						DownloadURL: "https://github.com/y1yyum/tokenrouter-custom-public/releases/download/v1.2.0/tokenrouter_linux_amd64.tar.gz",
 						Size:        4096,
 					}},
 				},
-				BuildType: "source",
+				BuildType:   "source",
+				GitHubRepo:  "y1yyum/tokenrouter-custom-public",
+				DockerImage: "ghcr.io/y1yyum/tokenrouter",
 			}, info)
 			require.Equal(t, 1, client.latestCalls)
-			require.Equal(t, "TokenFlux/TokenRouter", client.latestRepo)
+			require.Equal(t, "y1yyum/tokenrouter-custom-public", client.latestRepo)
 		})
 	}
 }
@@ -274,10 +276,10 @@ func changelogTestRelease(body string) *GitHubRelease {
 		Name:        "Release 1.2.0",
 		Body:        body,
 		PublishedAt: "2026-11-01T04:05:06Z",
-		HTMLURL:     "https://github.com/TokenFlux/TokenRouter/releases/tag/v1.2.0",
+		HTMLURL:     "https://github.com/y1yyum/tokenrouter-custom-public/releases/tag/v1.2.0",
 		Assets: []GitHubAsset{{
 			Name:               "tokenrouter_linux_amd64.tar.gz",
-			BrowserDownloadURL: "https://github.com/TokenFlux/TokenRouter/releases/download/v1.2.0/tokenrouter_linux_amd64.tar.gz",
+			BrowserDownloadURL: "https://github.com/y1yyum/tokenrouter-custom-public/releases/download/v1.2.0/tokenrouter_linux_amd64.tar.gz",
 			Size:               4096,
 		}},
 	}
@@ -382,4 +384,31 @@ func TestUpdateServiceListRollbackVersionsPropagatesFetchError(t *testing.T) {
 
 	require.Error(t, err)
 	require.Contains(t, err.Error(), "github unavailable")
+}
+
+// TestReleaseQueryTargetAndCacheRepoIsolation configures two queries with
+// distinct repositories sharing one cache store. It verifies cache hits stay
+// isolated per repository and remote failures still expose the configured coordinates.
+func TestReleaseQueryTargetAndCacheRepoIsolation(t *testing.T) {
+	cache := &updateServiceCacheStub{}
+	primaryClient := &updateServiceGitHubClientStub{release: changelogTestRelease("Primary notes")}
+	primary := NewReleaseQueryWithTarget(cache, primaryClient, "1.0.0", "release", "owner/primary", "ghcr.io/owner/primary")
+
+	first, err := primary.CheckUpdate(t.Context(), false)
+	require.NoError(t, err)
+	require.Equal(t, "owner/primary", first.GitHubRepo)
+	require.Equal(t, "ghcr.io/owner/primary", first.DockerImage)
+	require.Equal(t, "owner/primary", primaryClient.latestRepo)
+
+	secondaryClient := &updateServiceGitHubClientStub{latestErr: errors.New("network down")}
+	secondary := NewReleaseQueryWithTarget(cache, secondaryClient, "1.0.0", "release", "owner/secondary", "ghcr.io/owner/secondary")
+
+	fallback, err := secondary.CheckUpdate(t.Context(), false)
+	require.NoError(t, err)
+	require.False(t, fallback.Cached)
+	require.False(t, fallback.HasUpdate)
+	require.Equal(t, "network down", fallback.Warning)
+	require.Equal(t, "owner/secondary", fallback.GitHubRepo)
+	require.Equal(t, "ghcr.io/owner/secondary", fallback.DockerImage)
+	require.Equal(t, "owner/secondary", secondaryClient.latestRepo)
 }

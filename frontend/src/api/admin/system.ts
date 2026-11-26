@@ -30,6 +30,8 @@ export interface VersionInfo {
   cached: boolean // Cached version-check result.
   warning?: string // Server advisory message.
   build_type: string // "source" for manual builds, "release" for CI builds
+  github_repo?: string // Queried GitHub owner/repository identity.
+  docker_image?: string // Container image repository for manual commands.
 }
 
 /**

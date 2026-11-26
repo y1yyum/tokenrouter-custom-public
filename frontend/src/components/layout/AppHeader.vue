@@ -232,7 +232,7 @@
               <!-- Administrator actions expose the repository and guide replay. -->
               <div v-if="authStore.isAdmin" class="menu-section">
                 <a
-                  href="https://github.com/TokenFlux/TokenRouter"
+                  :href="repositoryUrl"
                   target="_blank"
                   rel="noopener noreferrer"
                   @click="closeDropdown"
@@ -361,6 +361,9 @@ const siteLogo = computed(() =>
   sanitizeUrl(appStore.siteLogo || '', { allowRelative: true, allowDataUrl: true }),
 )
 const siteVersion = computed(() => appStore.siteVersion)
+const repositoryUrl = computed(
+  () => `https://github.com/${appStore.githubRepo || 'y1yyum/tokenrouter-custom-public'}`,
+)
 const settingsLoaded = computed(() => appStore.publicSettingsLoaded)
 const dropdownOpen = ref(false)
 

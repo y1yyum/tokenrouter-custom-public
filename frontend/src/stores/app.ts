@@ -47,6 +47,13 @@ export const useAppStore = defineStore('app', () => {
   const cachedPublicSettings = ref<PublicSettings | null>(null)
   let publicSettingsRequest: Promise<PublicSettings | null> | null = null
 
+  // Build-time release defaults serve as fallbacks until checkUpdates returns
+  // server-configured coordinates.
+  const defaultReleaseRepo =
+    import.meta.env.VITE_RELEASE_REPO?.trim() || 'y1yyum/tokenrouter-custom-public'
+  const defaultDockerImage =
+    import.meta.env.VITE_DOCKER_IMAGE?.trim() || 'ghcr.io/y1yyum/tokenrouter'
+
   // Version refs retain the last successful release response and track whether callers
   // can reuse it or a request is currently active.
   const versionLoaded = ref<boolean>(false)
@@ -55,6 +62,8 @@ export const useAppStore = defineStore('app', () => {
   const latestVersion = ref<string>('')
   const hasUpdate = ref<boolean>(false)
   const buildType = ref<string>('source')
+  const githubRepo = ref<string>(defaultReleaseRepo)
+  const dockerImage = ref<string>(defaultDockerImage)
   const releaseInfo = ref<ReleaseInfo | null>(null)
 
   // toastIdCounter increases across resets so a delayed toast dismissal cannot
@@ -239,6 +248,8 @@ export const useAppStore = defineStore('app', () => {
         latest_version: latestVersion.value,
         has_update: hasUpdate.value,
         build_type: buildType.value,
+        github_repo: githubRepo.value,
+        docker_image: dockerImage.value,
         release_info: releaseInfo.value || undefined,
         cached: true,
       }
@@ -254,6 +265,12 @@ export const useAppStore = defineStore('app', () => {
       latestVersion.value = data.latest_version
       hasUpdate.value = data.has_update
       buildType.value = data.build_type || 'source'
+      if (data.github_repo?.trim()) {
+        githubRepo.value = data.github_repo.trim()
+      }
+      if (data.docker_image?.trim()) {
+        dockerImage.value = data.docker_image.trim()
+      }
       releaseInfo.value = data.release_info || null
       versionLoaded.value = true
       return data
@@ -399,6 +416,8 @@ export const useAppStore = defineStore('app', () => {
     latestVersion,
     hasUpdate,
     buildType,
+    githubRepo,
+    dockerImage,
     releaseInfo,
     hasActiveToasts,
     backendModeEnabled,

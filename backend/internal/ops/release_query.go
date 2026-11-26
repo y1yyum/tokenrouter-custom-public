@@ -27,13 +27,19 @@ import (
 // validate metadata completeness, so an available version alone can accompany
 // absent installer inputs.
 
-// Release queries share one repository target, a cached-response lifetime in
-// seconds, and fixed fetch/result limits for selecting rollback candidates.
+// Release queries share a cached-response lifetime in seconds and fixed fetch/result
+// limits for selecting rollback candidates.
 const (
-	updateCacheTTL        = 1200                    // cached release lifetime in seconds
-	githubRepo            = "TokenFlux/TokenRouter" // queried GitHub owner/repository identity
-	maxRollbackVersions   = 3                       // maximum displayed rollback candidate count
-	rollbackFetchPageSize = 15                      // requested recent release page count
+	updateCacheTTL        = 1200 // cached release lifetime in seconds
+	maxRollbackVersions   = 3    // maximum displayed rollback candidate count
+	rollbackFetchPageSize = 15   // requested recent release page count
+)
+
+// Release defaults identify the GitHub repository and container image queried for
+// updates and rollback commands; release builds override them via -ldflags.
+var (
+	defaultGitHubRepo  = "y1yyum/tokenrouter-custom-public" // default GitHub owner/repository identity
+	defaultDockerImage = "ghcr.io/y1yyum/tokenrouter"       // default container image repository path
 )
 
 // ReleaseQueryClient supplies latest and recent GitHub release records for
@@ -61,16 +67,17 @@ type ReleaseQuery struct {
 	// Latest-release success supplies a nonnil record, while rollback filtering
 	// permits nil entries in a recent list.
 	githubClient ReleaseQueryClient
-	// currentVersion and buildType are copied from construction and returned in
-	// every update view. They remain supplied strings while each query computes
-	// eligibility and cache-origin flags.
+	// currentVersion, buildType, githubRepo, and dockerImage are copied from
+	// construction and returned in every update view. They remain supplied strings
+	// while each query computes eligibility and cache-origin flags.
 	//
 	// currentVersion uses permissive comparison for updates, but invalid strict
 	// rollback spelling yields no candidates after a successful fetch. buildType
 	// is the supplied provenance label; selection does not validate it or use it
-	// to disable release queries.
-	// currentVersion: running version text. buildType: supplied provenance label.
+	// to disable release queries. githubRepo and dockerImage select the queried
+	// GitHub repository and displayed container image repository.
 	currentVersion, buildType string
+	githubRepo, dockerImage   string
 }
 
 // GitHubAsset carries one GitHub asset record before local download metadata
@@ -147,8 +154,10 @@ type UpdateInfo struct {
 	// Warning reports a remote-fetch failure in CheckUpdate, optionally prefixed
 	// when cached data is returned. SaveToCache does not store this diagnostic,
 	// and a normal cache hit starts with it empty.
-	Warning   string `json:"warning,omitempty"`
-	BuildType string `json:"build_type"` // supplied build provenance label
+	Warning     string `json:"warning,omitempty"`
+	BuildType   string `json:"build_type"`             // supplied build provenance label
+	GitHubRepo  string `json:"github_repo,omitempty"`  // queried GitHub repository identity
+	DockerImage string `json:"docker_image,omitempty"` // associated container image repository
 }
 
 // UpdateCache stores serialized latest-release data for update reads across
@@ -166,12 +175,27 @@ type UpdateCache interface {
 }
 
 // NewReleaseQuery retains the cache and metadata client with supplied running
-// version and build label, performing no fetch or normalization. Callers
-// provide usable dependencies before querying; cache reads recompute
-// eligibility for this retained version.
+// version and build label, performing no fetch or normalization. It binds the
+// build-configured repository and container image defaults; callers provide
+// usable dependencies before querying, and cache reads recompute eligibility.
 // @project-doc docs/operations/ops_monitoring_and_alerting.md#ops_release_and_maintenance
 func NewReleaseQuery(cache UpdateCache, client ReleaseQueryClient, version, buildType string) *ReleaseQuery {
-	return &ReleaseQuery{cache, client, version, buildType}
+	return NewReleaseQueryWithTarget(cache, client, version, buildType, defaultGitHubRepo, defaultDockerImage)
+}
+
+// NewReleaseQueryWithTarget retains the cache, metadata client, running build
+// metadata, and explicit GitHub repository and container image targets. Blank
+// targets fall back to the build-configured defaults before queries run.
+func NewReleaseQueryWithTarget(cache UpdateCache, client ReleaseQueryClient, version, buildType, githubRepo, dockerImage string) *ReleaseQuery {
+	repo := strings.TrimSpace(githubRepo)
+	if repo == "" {
+		repo = strings.TrimSpace(defaultGitHubRepo)
+	}
+	image := strings.TrimSpace(dockerImage)
+	if image == "" {
+		image = strings.TrimSpace(defaultDockerImage)
+	}
+	return &ReleaseQuery{cache, client, version, buildType, repo, image}
 }
 
 // parseVersion returns up to three numeric components for permissive update
@@ -227,13 +251,15 @@ func compareVersions(current, latest string) int {
 // are suppressed.
 func (s *ReleaseQuery) SaveToCache(ctx context.Context, info *UpdateInfo) {
 	cacheData := struct {
-		Latest string `json:"latest"` // cached latest version text
+		Repo   string `json:"repo,omitempty"` // queried repository identity
+		Latest string `json:"latest"`         // cached latest version text
 		// ReleaseInfo is the supplied metadata pointer saved in cache JSON. Encoding
 		// reads its asset list during this call; callers leave that data stable until
 		// encoding returns.
 		ReleaseInfo *ReleaseInfo `json:"release_info"`
 		Timestamp   int64        `json:"timestamp"` // Unix seconds
 	}{
+		Repo:        s.githubRepo,
 		Latest:      info.LatestVersion,
 		ReleaseInfo: info.ReleaseInfo,
 		Timestamp:   time.Now().Unix(),
@@ -248,10 +274,10 @@ func (s *ReleaseQuery) SaveToCache(ctx context.Context, info *UpdateInfo) {
 }
 
 // GetFromCache decodes a stored release response and combines it with this
-// query running version and build label. Cache and JSON errors are returned.
-// Age is checked with direct signed Unix-second subtraction, expiring only a
-// difference above 1,200; equality and future timestamps can pass, and
-// timestamp origin/range is not validated.
+// query running version and build label. Cache, repository-mismatch, and JSON
+// errors are returned. Age is checked with direct signed Unix-second
+// subtraction, expiring only a difference above 1,200; equality and future
+// timestamps can pass, and timestamp origin/range is not validated.
 //
 // Latest text and release metadata are accepted after decoding without a
 // completeness check. Missing or null ReleaseInfo can therefore accompany
@@ -266,7 +292,8 @@ func (s *ReleaseQuery) GetFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 
 	var cached struct {
-		Latest string `json:"latest"` // cached latest version text
+		Repo   string `json:"repo,omitempty"` // cached repository identity
+		Latest string `json:"latest"`         // cached latest version text
 		// ReleaseInfo is decoded metadata for this cache hit. Missing or null values
 		// remain nil, while the update flag is computed independently from latest
 		// version text.
@@ -275,6 +302,11 @@ func (s *ReleaseQuery) GetFromCache(ctx context.Context) (*UpdateInfo, error) {
 	}
 	if err := json.Unmarshal([]byte(data), &cached); err != nil {
 		return nil, err
+	}
+	// Reject cached payloads from a different repository (or unkeyed legacy cache)
+	// so switching forks or mirrors cannot return stale release metadata.
+	if cached.Repo != s.githubRepo {
+		return nil, fmt.Errorf("cache repository mismatch")
 	}
 
 	// The stored write time supplies a second age check beside backend expiry.
@@ -291,16 +323,18 @@ func (s *ReleaseQuery) GetFromCache(ctx context.Context) (*UpdateInfo, error) {
 		ReleaseInfo:    cached.ReleaseInfo,
 		Cached:         true,
 		BuildType:      s.buildType,
+		GitHubRepo:     s.githubRepo,
+		DockerImage:    s.dockerImage,
 	}, nil
 }
 
-// FetchLatestRelease reads the fixed GitHub repository under context and
+// FetchLatestRelease reads the configured GitHub repository under context and
 // returns a fresh local update view on success. The client supplies a nonnil
 // release. It removes one lowercase v prefix, copies all assets without
 // platform filtering, and compares the remaining tag permissively against this
 // running version.
 func (s *ReleaseQuery) FetchLatestRelease(ctx context.Context) (*UpdateInfo, error) {
-	release, err := s.githubClient.FetchLatestRelease(ctx, githubRepo)
+	release, err := s.githubClient.FetchLatestRelease(ctx, s.githubRepo)
 	if err != nil {
 		return nil, err
 	}
@@ -327,8 +361,10 @@ func (s *ReleaseQuery) FetchLatestRelease(ctx context.Context) (*UpdateInfo, err
 			HTMLURL:     release.HTMLURL,
 			Assets:      assets,
 		},
-		Cached:    false,
-		BuildType: s.buildType,
+		Cached:      false,
+		BuildType:   s.buildType,
+		GitHubRepo:  s.githubRepo,
+		DockerImage: s.dockerImage,
 	}, nil
 }
 
@@ -381,7 +417,7 @@ func NormalizeRollbackVersion(raw string) (string, bool) { return normalizeRollb
 // returned slice is new but retained release records and their asset slices
 // remain shared with the client result, so callers treat them as stable.
 func (s *ReleaseQuery) FetchRollbackCandidates(ctx context.Context) ([]*GitHubRelease, error) {
-	releases, err := s.githubClient.FetchRecentReleases(ctx, githubRepo, rollbackFetchPageSize)
+	releases, err := s.githubClient.FetchRecentReleases(ctx, s.githubRepo, rollbackFetchPageSize)
 	if err != nil {
 		return nil, err
 	}
@@ -493,6 +529,8 @@ func (s *ReleaseQuery) CheckUpdate(ctx context.Context, force bool) (*UpdateInfo
 			HasUpdate:      false,
 			Warning:        err.Error(),
 			BuildType:      s.buildType,
+			GitHubRepo:     s.githubRepo,
+			DockerImage:    s.dockerImage,
 		}, nil
 	}
 

@@ -687,11 +687,13 @@ import { sanitizeUrl } from '@/utils/url'
 // reloading the page, while manual rollback commands render v-prefixed script
 // tags and unprefixed container image tags.
 
-// Release repository and container image coordinates build the manual rollback
-// commands shown for the selected version.
-const GITHUB_REPO = 'TokenFlux/TokenRouter'
+// Build-time repository and container image defaults supply fallback rollback
+// coordinates when cached server version metadata omits them.
+const DEFAULT_GITHUB_REPO =
+  import.meta.env.VITE_RELEASE_REPO?.trim() || 'y1yyum/tokenrouter-custom-public'
 // Container release tags omit the v prefix that installer commands use for GitHub release tags.
-const DOCKER_IMAGE = 'ghcr.io/tokenflux/tokenrouter'
+const DEFAULT_DOCKER_IMAGE =
+  import.meta.env.VITE_DOCKER_IMAGE?.trim() || 'ghcr.io/y1yyum/tokenrouter'
 
 // The translation function supplies version status, action labels, and
 // installation command guidance in the active locale.
@@ -727,6 +729,8 @@ const latestVersion = computed(() => appStore.latestVersion)
 const hasUpdate = computed(() => appStore.hasUpdate)
 const releaseInfo = computed(() => appStore.releaseInfo)
 const buildType = computed(() => appStore.buildType)
+const githubRepo = computed(() => appStore.githubRepo || DEFAULT_GITHUB_REPO)
+const dockerImage = computed(() => appStore.dockerImage || DEFAULT_DOCKER_IMAGE)
 
 // Update and restart state drive operation feedback, prevent duplicate requests,
 // and show the countdown before service health checks.
@@ -767,14 +771,14 @@ const manualTabs = computed(() => [
 const scriptRollbackCommand = computed(() => {
   if (!selectedRollbackVersion.value) return ''
   const tag = `v${selectedRollbackVersion.value}`
-  return `curl -sSL https://raw.githubusercontent.com/${GITHUB_REPO}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
+  return `curl -sSL https://raw.githubusercontent.com/${githubRepo.value}/${tag}/deploy/install.sh | sudo bash -s -- rollback ${tag}`
 })
 
 const dockerRollbackCommand = computed(() => {
   if (!selectedRollbackVersion.value) return ''
   return [
     `# ${t('version.dockerEditCompose')}`,
-    `image: ${DOCKER_IMAGE}:${selectedRollbackVersion.value}`,
+    `image: ${dockerImage.value}:${selectedRollbackVersion.value}`,
     '',
     `# ${t('version.dockerRecreate')}`,
     'docker compose up -d',
