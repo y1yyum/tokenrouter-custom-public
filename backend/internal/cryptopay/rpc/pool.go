@@ -311,7 +311,7 @@ func (p *Pool) CallEndpoint(ctx context.Context, method string, params any) (jso
 			}
 		}
 		start := int(p.next.Add(1)-1) % len(candidates)
-		for i := 0; i < len(candidates); i++ {
+		for i := range candidates {
 			endpoint := candidates[(start+i)%len(candidates)]
 			result, err := p.callOne(ctx, endpoint, method, params)
 			if err == nil && policy != nil && needsIndependentEvidence(method) {
