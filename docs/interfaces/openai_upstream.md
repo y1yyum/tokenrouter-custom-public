@@ -111,6 +111,10 @@ Messages 转 OpenAI 的提示缓存摘要按提供商与 API Key 隔离命名空
 
 路由与透传要点：
 
+- 前台同步 `POST /v1/responses` 在原生 OpenAI API Key 的普通转发入口返回 JSON。透传提供商可在 `extra` 设置布尔值 `openai_passthrough_allow_rewrite: true` 采用同一约定。上游误标媒体类型时，网关识别实际正文；可提取终态的 SSE 转为 JSON，无法形成 JSON 的流返回 502。旧透传配置继续使用原有报文策略。
+- 同步转流式试点默认关闭。候选完成模型与 URL 映射后，按生效组、提供商、实际模型和实际出站路径匹配规则，首次命中固定灰度臂并在等待聚合名额前登记。普通和可改写透传都在发送前复核规则，排队结束、字段重发及换候选均适用。[聚合名额与时限](../architecture/gateway_request_lifecycle.md#responses_aggregation_capacity)
+- 获准转换的请求发出 `stream:true`、唯一的 `Accept: text/event-stream` 与 `Content-Type: application/json`，并禁用自动重定向。撤销转换时，发送当前候选已映射的同步正文和唯一的 `Accept: application/json`，使用同步读取器和时钟。已发尝试按它的原模式和截止时间收尾。客户端响应与用量采用同步模式。[试点设置](configuration.md#responses_request_compatibility)
+
 - 透传仅控制报文与传输方式，手动配置的提供商模型映射仍执行一次；HTTP 出站只局部替换 `model`，保留原始请求模型与最终上游模型用于响应回填、日志和计费。
 - OAuth 硬能力限制不会因透传或 `*` 白名单关闭。
 - `/backend-api/codex` 和裸路径别名同样经过 API Key 鉴权、分组准入、调度和结算。Responses WebSocket 不支持 Qoder。
@@ -280,6 +284,8 @@ TokenRouter 同时支持原生 Remote Compaction V2 与旧版 `/responses/compac
 - CAS 状态保护：提供商健康更新携带凭据快照与 CAS，令牌刷新后旧请求无法封禁提供商。
 - 分类与 HTML 403 例外：401/403、429、endpoint 不支持、内容策略、网络错误与 5xx 分别处理。代理或 CDN 返回的 HTML 403 允许 failover，但不累增连续 403 计数、不临时停调或禁用提供商；结构化 JSON/纯文本 403 走正常提供商策略。
 - 池模式重试与确定性 400：API Key passthrough 池模式将命中 `pool_mode_retry_status_codes`（默认 401/403/429，空列表关闭）的错误先做未提交前同提供商重试，用完预算再换号。原生 Responses 的确定性 400 在未命中重试/改写规则时直接透传脱敏后的 `message` 与 `type`/`code`/`param`。
+- 试点同步转流式请求在前一响应读完并关闭、客户端仍连接且尚未提交响应时，才允许重放。过载或限流还须在结构化错误中明确声明 `execution_started: false`。可见输出、工具执行、可信正用量或执行结果不明都会禁止重放。完整 HTTP 400 若明确指出可修复字段，可改写后重发一次并消耗一份额度。普通与可改写透传共用同一逻辑请求最多 6 次字段修复额度，同一候选不会重复发送已采用的修复正文。
+- 转换后的最终失败在响应仍可写时返回一份 JSON。已确认的上游过载为 503，读取超时为 504，协议错误为 502。客户端与 Ops 使用同一状态，只传递最终失败响应中唯一且有效的 `Retry-After`。已确定过载后读停顿仍按 503 处理。断连或已有响应时结束写入，原生流在实际提交 SSE 后最多追加一个终态。
 - 端点错用与加密密文恢复：图片模型在 Codex 文本端点收到 plan-gated 400 时只换号、不写模型冷却（专用 Images 端点同类拒绝与 `404 model_not_found` 照常冷却）。Responses 遇 `invalid_encrypted_content` 时在同提供商内最多清理绑定密文并重试 1 次，保留未加密 compaction。
 - 瞬时失败累计：按提供商+模型组合累计（第 1 次仅计数、第 2 次短冷却、第 3 次及以上长冷却），任意成功立即清零；TTL 仅回收长期不活跃条目，不作为短时间重置条件。
 - 流内错误与静默拒绝：

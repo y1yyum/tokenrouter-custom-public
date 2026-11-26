@@ -425,6 +425,13 @@ func (c *OutputContext) Status(status int) { c.Writer.WriteHeader(status) }
 // already-started sinkWriter retains its current status. The encoding error
 // is discarded, and Err exposes sink failures.
 func (c *OutputContext) JSON(status int, value any) {
+	c.JSONObserved(status, value, nil)
+}
+
+// JSONObserved writes the same encoded document as JSON and calls observe
+// only after complete delivery. A protocol bridge can therefore count the
+// exact client representation without marshalling a second copy for metrics.
+func (c *OutputContext) JSONObserved(status int, value any, observe func([]byte)) {
 	body, err := json.Marshal(value)
 	if err != nil {
 		// Encoding failure leaves no JSON payload to emit. Request metadata
@@ -435,6 +442,9 @@ func (c *OutputContext) JSON(status int, value any) {
 		return
 	}
 	c.Data(status, "application/json; charset=utf-8", body)
+	if observe != nil && c.Err() == nil {
+		observe(body)
+	}
 }
 
 // Err returns the stored Begin or Emit failure from this context's sink

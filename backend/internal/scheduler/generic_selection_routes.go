@@ -122,7 +122,7 @@ func (s *GenericSelector) SelectPlatform(ctx context.Context, groupID *int64, se
 	// available.
 	needsUpstreamCheck := s.ports.NeedsUpstreamGroupRestrictionCheck(ctx, groupID)
 	isUpstreamAllowed := func(provider *FlowProvider) bool {
-		return !needsUpstreamCheck || !s.ports.IsUpstreamModelRestrictedByGroup(ctx, *groupID, provider, requestedModel)
+		return s.allowsUpstreamRoute(ctx, groupID, provider, requestedModel, needsUpstreamCheck)
 	}
 
 	var providers []FlowProvider
@@ -389,4 +389,14 @@ func (s *GenericSelector) SelectPlatform(ctx context.Context, groupID *int64, se
 	}
 
 	return selected, nil
+}
+
+// allowsUpstreamRoute checks the group's upstream restrictions before the
+// optional request-specific capability port. Unauthorized routes cannot
+// contribute evidence about fields even when affinity previously named them.
+func (s *GenericSelector) allowsUpstreamRoute(ctx context.Context, groupID *int64, provider *FlowProvider, model string, needsUpstreamCheck bool) bool {
+	if needsUpstreamCheck && s.ports.IsUpstreamModelRestrictedByGroup(ctx, *groupID, provider, model) {
+		return false
+	}
+	return s.ports.AllowsRequestParameters == nil || s.ports.AllowsRequestParameters(ctx, groupID, provider, model)
 }

@@ -230,6 +230,8 @@ type openAIExecutionDependencies struct {
 		streamStarted *bool,
 		reqLog *zap.Logger,
 	) (func(), bool)
+	// responsesReadmission supplies wait limits for yielded prefetched capacity.
+	responsesReadmission scheduler.ProviderWaitPlan
 	// Messages streaming-aware error writer
 	anthropicStreamingAwareError func(c *gin.Context, status int, errType, message string, streamStarted bool)
 	// deriveOpenAIForwardAttemptBody derives current-provider input from
@@ -267,9 +269,8 @@ type openAIExecutionDependencies struct {
 	// error chain. Its true result does not establish durable recording
 	// success.
 	recordOpenAIForwardErrorCyberWarning func(c *gin.Context, reqLog *zap.Logger, apiKey *apikey.APIKey, provider *gatewaycapture.ExecutionProvider, model string, statusCode int, err error) bool
-	// submitOpenAIUsageRecordTask receives a pre-captured usage task and
-	// current image count. The bound Submission service decides queueing
-	// and fallback execution.
+	// submitOpenAIUsageRecordTask receives a pre-captured usage task. Converted
+	// Responses submit only trusted positive metering and require queue fallback.
 	submitOpenAIUsageRecordTask func(c *gin.Context, result *forwardcore.OpenAIResult, task completion.UsageRecordTask)
 }
 
@@ -298,6 +299,7 @@ func New(b Bindings) *Runtime {
 		selectProviderWithSchedulerForCapabilityAndRoutingModel: b.Selection.SelectProviderWithSchedulerForCapabilityAndRoutingModel,
 		updateCodexUsageSnapshotFromHeaders:                     b.Selection.UpdateCodexUsageSnapshotFromHeaders,
 		acquireResponsesProviderSlot:                            support.AcquireResponsesProviderSlot,
+		responsesReadmission:                                    support.ResponsesReadmission,
 		ensureAnthropicErrorResponse:                            support.EnsureAnthropicErrorResponse,
 		ensureOpenAIStreamReadErrorResponse:                     support.EnsureOpenAIStreamReadErrorResponse,
 		handleAnthropicFailoverExhausted:                        support.HandleAnthropicFailoverExhausted,
@@ -314,6 +316,10 @@ func New(b Bindings) *Runtime {
 			return support.RecordCyberPolicyIfMarked(c, key, provider, sub, model, failed, body, fields, hash, compact...)
 		},
 		submitOpenAIUsageRecordTask: func(c *gin.Context, result *forwardcore.OpenAIResult, task completion.UsageRecordTask) {
+			if result != nil && result.ResponsesSettlement != nil {
+				support.Submission.SubmitMandatory(c, task)
+				return
+			}
 			images := 0
 			if result != nil {
 				images = result.ImageCount

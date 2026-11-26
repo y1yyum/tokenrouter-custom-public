@@ -12,6 +12,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/egress"
 	egressprovider "github.com/TokenFlux/TokenRouter/internal/egress/provider"
 	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	protocolopenai "github.com/TokenFlux/TokenRouter/internal/protocol/openai"
 	"github.com/TokenFlux/TokenRouter/internal/upstream"
 )
@@ -34,6 +35,8 @@ import (
 // use LocalEvent so they cannot establish upstream delivery milestones. Timed
 // streaming conversion prepares metadata in a deferred output context, preserving
 // downstream header-wait heartbeats until the first converted event is ready.
+// Direct converted Responses output restores an omitted tool limit before
+// writing bytes. Deferred output delegates the same operation to its sink.
 
 // The interface assertion verifies that conversion output implements the shared
 // synchronous header, body, event and diagnostic callbacks used by forwarders.
@@ -96,12 +99,29 @@ func (o ForwardConversionOutput) ReverseTools(body []byte) []byte { return o.Rev
 // handled. Write errors attach to Gin; short writes with no error leave Commit
 // uncalled. The request writer and Commit callback are required.
 func (o ForwardConversionOutput) JSONBytes(body []byte) {
+	if o.Responses {
+		if limit := NewResponseSink(o.Context).omittedToolLimit(); limit > 0 {
+			var err error
+			body, err = requestpolicy.RestoreToolLimit(body, limit)
+			if err != nil {
+				_ = o.Context.Error(err)
+				return
+			}
+			o.Context.Writer.Header().Del("Content-Length")
+		}
+	}
 	o.BeginJSON()
 	o.Context.Writer.WriteHeader(http.StatusOK)
 	if n, err := o.Context.Writer.Write(body); err != nil {
 		_ = o.Context.Error(err)
 	} else if n == len(body) {
 		o.Commit()
+		// A fallback can finish an already enrolled Responses request through
+		// a different protocol adapter. Classify the delivered Responses JSON
+		// on the original arm after the entire representation reached its writer.
+		if compatibilityCohortFrom(o.Context, responsesCohortKey) != nil {
+			recordResponsesCohortDelivery(o.Context, responseJSONOutcome(body))
+		}
 	}
 }
 
@@ -138,6 +158,15 @@ func (o ForwardConversionOutput) ChatJSON(value *protocolopenai.ChatCompletionsR
 // The source scope ends on every return, including short writes and failures.
 func (o ForwardConversionOutput) Event(kind string, body []byte) (int, error) {
 	sink := NewResponseSink(o.Context)
+	if o.Responses && o.streamWriter == nil {
+		if limit := sink.omittedToolLimit(); limit > 0 {
+			var err error
+			body, err = requestpolicy.RestoreToolLimit(body, limit)
+			if err != nil {
+				return 0, err
+			}
+		}
+	}
 	if sink.timing != nil {
 		// Scope the existing writer chain so conversion keeps its exact write
 		// count and error while timing observes only successful upstream bytes.

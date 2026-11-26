@@ -8,6 +8,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	gatewayadapter "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/modelidentity"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/infra/httpclient/tlsfingerprint"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/timing"
@@ -50,10 +51,16 @@ func (r *Runtime) exchangeOptions(output HTTPBoundary, state *AttemptState, targ
 	options.ShouldRectify = func(ctx context.Context, body []byte) bool {
 		return r.shouldRectify(ctx, target, body, model)
 	}
+	options.AllowRepair = func(ctx context.Context, initial, proposed []byte) bool {
+		return gatewayadapter.AllowMessagesParameterRepair(ctx, target.Record.ID, initial, proposed)
+	}
 	options.IsSignatureError = func(ctx context.Context, body []byte) bool {
 		return r.signaturePattern(ctx, target, body)
 	}
-	options.BudgetEnabled = func(ctx context.Context) bool { return r.dependencies.Settings.IsBudgetRectifierEnabled(ctx) }
+	options.BudgetEnabled = func(ctx context.Context) bool {
+		intent, strict := requestpolicy.StrictIntent(ctx)
+		return (!strict || intent.Lookup("thinking", "budget_tokens").Origin != requestpolicy.OriginExplicit) && r.dependencies.Settings.IsBudgetRectifierEnabled(ctx)
+	}
 	options.ShouldRetry = func(status int) bool { return forward.ShouldRetry(target.View().IsOAuth(), status) }
 	options.FilterThinking = func(body []byte) []byte { return gatewayadapter.FilterThinkingBlocksForRetry(body, model) }
 	options.FilterTools = func(body []byte) []byte { return gatewayadapter.FilterSignatureSensitiveBlocksForRetry(body, model) }

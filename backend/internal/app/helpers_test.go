@@ -55,6 +55,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/gateway/promptpolicy"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/selection"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/telemetry"
@@ -174,6 +175,7 @@ type fixtureRetryStore struct {
 // gatewayHTTPFixtureInput supplies mutable handler dependencies and
 // provider-switch options for HTTP tests.
 type gatewayHTTPFixtureInput struct {
+	ParameterPolicy       *requestpolicy.Service                     // optional request parameter rollout
 	PlanModelRestrictions gatewayprovider.PlanModelRestrictionReader // committed quality verdicts for text and WS fixtures
 	// Request credential execution component.
 	Credentials *gatewayhttp.RequestCredentialExecutor
@@ -1067,7 +1069,7 @@ func newGatewayHTTPEndpoints(input gatewayHTTPFixtureInput) *gatewayHTTPEndpoint
 	}
 	f := &gatewayHTTPEndpointsFixture{Input: &input}
 	resources := func() *gatewayhttp.OpenAIHTTPResources {
-		return &gatewayhttp.OpenAIHTTPResources{Concurrency: input.Concurrency, Images: input.Images, ImageOptions: openAIImageAdmissionOptions(input.Config)}
+		return &gatewayhttp.OpenAIHTTPResources{Concurrency: input.Concurrency, Images: input.Images, ImageOptions: openAIImageAdmissionOptions(input.Config), ResponsesReadmission: openAIResponsesReadmission(input.Config)}
 	}
 	base := func() (openaiattempt.Bindings, *gatewayhttp.CyberHandler, *session.CyberBlocks) {
 		recorder := input.Recorder
@@ -1103,6 +1105,10 @@ func newGatewayHTTPEndpoints(input gatewayHTTPFixtureInput) *gatewayHTTPEndpoint
 	text := func() *gatewayhttp.OpenAITextHandler {
 		common, cyber, _ := base()
 		options := openAITextOptions(input.Config)
+		options.ParameterPolicy = input.ParameterPolicy
+		if responses != nil {
+			options.CompatibilityCohorts = responses.Cohorts
+		}
 		if input.Config != nil && input.Config.Gateway.OpenAI.PlanModelRestrictions {
 			options.PlanModelRestrictions = input.PlanModelRestrictions
 		}
@@ -2952,7 +2958,7 @@ func newOpenAIExecutionAndSelectionFixture(
 	lineage := provideOpenAIEncryptedLineage(stateStore, choices)
 	imagePolicy := provideOpenAIImageBridgePolicy(cfg)
 	sockets := provideOpenAIWebSockets(nil, cfg, connections, text, prompts, choices, lineage, imagePolicy, cache)
-	responses := provideOpenAIResponses(text, choices, lineage, imagePolicy)
+	responses := provideOpenAIResponses(text, choices, lineage, imagePolicy, nil, nil)
 	var read func(context.Context) (bool, time.Duration)
 	if settingService != nil {
 		read = settingService.Moderation.GetCyberSessionBlockRuntime
@@ -3672,7 +3678,7 @@ func RegisterGatewayRoutes(
 	mediaRuntime := provideMediaRuntime(nil, nil, nil, nil, nil, commonOpenAI, nil, nil, nil, nil, nil, nil, nil, nil, nil)
 	openAITextHTTP := h.OpenAITextHTTP
 	if openAITextHTTP == nil && h.OpenAIEnabled {
-		openAITextHTTP = provideOpenAITextHTTP(nil, nil, nil, nil, nil, nil, nil, nil, nil, openAIRuntime, activity, nil, nil, nil, nil, nil)
+		openAITextHTTP = provideOpenAITextHTTP(nil, nil, nil, nil, nil, nil, nil, nil, nil, openAIRuntime, activity, nil, nil, nil, nil, nil, nil)
 	}
 	responsesWSHTTP := h.ResponsesWSHTTP
 	if responsesWSHTTP == nil && h.OpenAIEnabled {

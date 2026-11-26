@@ -7,16 +7,20 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/gateway"
 	gatewaydto "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi/dto"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/server/adminapi"
 	"github.com/TokenFlux/TokenRouter/internal/server/httpx"
 )
 
 // runtime_settings.go exposes admin reads and replacements for request
-// correction settings and beta policy rules.
+// correction settings, beta policy rules, and Responses rollout controls.
 // Gateway correction switches and beta rules are runtime settings stored
 // through one shared service. Admin updates validate their supplied shape, save
 // the complete configuration and read it back for response DTOs; empty pattern
 // or rule lists are presented as JSON arrays.
+// Responses rollout has a separate revision and reports both its saved policy
+// and the version published by the serving instance.
 
 // GatewaySettingsEndpoints declares HTTP operations for the gateway settings service.
 type GatewaySettingsEndpoints interface {
@@ -36,12 +40,22 @@ type GatewaySettingsEndpoints interface {
 	// in JSON. Implementations persist before reading the response state again; a
 	// failed readback cannot imply that the preceding save was rolled back.
 	UpdateBetaPolicySettings(*gin.Context)
+	// GetResponsesCompatibilitySettings returns persisted policy and local publication status.
+	GetResponsesCompatibilitySettings(*gin.Context)
+	// UpdateResponsesCompatibilitySettings compares the supplied revision before saving a replacement.
+	UpdateResponsesCompatibilitySettings(*gin.Context)
+	// GetParameterPolicySettings returns the saved entry policy and its local revision.
+	GetParameterPolicySettings(*gin.Context)
+	// UpdateParameterPolicySettings replaces entry rules at the supplied saved revision.
+	UpdateParameterPolicySettings(*gin.Context)
 }
 
 // RuntimeSettingsHandler reads and replaces gateway policy settings through the
 // shared service.
 type RuntimeSettingsHandler struct {
-	settingService *gateway.RuntimeSettings // shared gateway settings service
+	settingService         *gateway.RuntimeSettings // shared correction and beta policy settings
+	responsesCompatibility *responsecompat.Service  // versioned Responses rollout settings
+	parameterPolicy        *requestpolicy.Service   // independently versioned entry settings
 }
 
 // UpdateRectifierSettingsRequest binds complete correction switches and custom
@@ -65,7 +79,24 @@ type UpdateBetaPolicySettingsRequest struct {
 	Rules []gatewaydto.BetaPolicyRule `json:"rules"` // ordered replacement beta rules
 }
 
-// RegisterGatewaySettingsRoutes binds rectifier and beta policy reads and
+// UpdateResponsesCompatibilitySettingsRequest replaces the policy at an explicit
+// revision. The pointer accepts a supplied zero for a missing saved policy
+// while letting validation reject an omitted revision.
+type UpdateResponsesCompatibilitySettingsRequest struct {
+	Revision *int64                `json:"revision" binding:"required"` // current saved revision
+	Mode     responsecompat.Mode   `json:"mode"`                        // global rollout cap, defaults off
+	Rules    []responsecompat.Rule `json:"rules"`                       // full rule list, defaults empty
+}
+
+// UpdateParameterPolicySettingsRequest binds a complete entry policy replacement.
+// Revision is required even when the first persisted replacement expects zero.
+type UpdateParameterPolicySettingsRequest struct {
+	Revision *int64               `json:"revision" binding:"required"` // current saved revision
+	Mode     requestpolicy.Mode   `json:"mode"`                        // global rollout cap
+	Rules    []requestpolicy.Rule `json:"rules"`                       // complete entry rule list
+}
+
+// RegisterGatewaySettingsRoutes binds rectifier, beta policy, and rollout reads and
 // updates below adminSettings. Assembly installs authentication and auditing on
 // that parent group before registration; these routes reuse the supplied
 // settings endpoint implementation.
@@ -74,11 +105,16 @@ func RegisterGatewaySettingsRoutes(adminSettings *gin.RouterGroup, endpoint Gate
 	adminapi.Register(adminSettings, ManagementOperations["settings.rectifier.update"], endpoint.UpdateRectifierSettings)
 	adminapi.Register(adminSettings, ManagementOperations["settings.beta_policy.list"], endpoint.GetBetaPolicySettings)
 	adminapi.Register(adminSettings, ManagementOperations["settings.beta_policy.update"], endpoint.UpdateBetaPolicySettings)
+	adminapi.Register(adminSettings, ManagementOperations["settings.responses_request_compatibility.list"], endpoint.GetResponsesCompatibilitySettings)
+	adminapi.Register(adminSettings, ManagementOperations["settings.responses_request_compatibility.update"], endpoint.UpdateResponsesCompatibilitySettings)
+	adminapi.Register(adminSettings, ManagementOperations["settings.request_parameter_policy.list"], endpoint.GetParameterPolicySettings)
+	adminapi.Register(adminSettings, ManagementOperations["settings.request_parameter_policy.update"], endpoint.UpdateParameterPolicySettings)
 }
 
-// NewRuntimeSettingsHandler binds the shared service used for gateway settings.
-func NewRuntimeSettingsHandler(settings *gateway.RuntimeSettings) *RuntimeSettingsHandler {
-	return &RuntimeSettingsHandler{settingService: settings}
+// NewRuntimeSettingsHandler binds the services used for gateway settings and
+// the two independently versioned compatibility rollouts.
+func NewRuntimeSettingsHandler(settings *gateway.RuntimeSettings, compatibility *responsecompat.Service, parameters *requestpolicy.Service) *RuntimeSettingsHandler {
+	return &RuntimeSettingsHandler{settingService: settings, responsesCompatibility: compatibility, parameterPolicy: parameters}
 }
 
 // GetRectifierSettings returns stored or service-default request-correction
@@ -229,4 +265,66 @@ func (h *RuntimeSettingsHandler) UpdateBetaPolicySettings(c *gin.Context) {
 		outRules[i] = gatewaydto.BetaPolicyRule(r)
 	}
 	httpx.Success(c, gatewaydto.BetaPolicySettings{Rules: outRules})
+}
+
+// GetResponsesCompatibilitySettings reports the saved configuration and this
+// instance's applied revision. A missing database setting reports off at revision zero.
+func (h *RuntimeSettingsHandler) GetResponsesCompatibilitySettings(c *gin.Context) {
+	status, err := h.responsesCompatibility.Get(c.Request.Context())
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	httpx.Success(c, status)
+}
+
+// UpdateResponsesCompatibilitySettings rejects unknown fields and requires an
+// explicit revision. A conflict asks the caller to reload and a post-commit
+// application error tells the caller that the replacement has already persisted.
+func (h *RuntimeSettingsHandler) UpdateResponsesCompatibilitySettings(c *gin.Context) {
+	var request UpdateResponsesCompatibilitySettingsRequest
+	if err := httpx.BindJSONStrict(c, &request); err != nil {
+		httpx.BadRequest(c, "Supply a valid compatibility policy and its current revision.")
+		return
+	}
+	status, err := h.responsesCompatibility.Update(c.Request.Context(), responsecompat.Config{
+		Revision: *request.Revision,
+		Mode:     request.Mode,
+		Rules:    request.Rules,
+	})
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	httpx.Success(c, status)
+}
+
+// GetParameterPolicySettings reports the saved entry policy and the instance's
+// applied revision and freshness. An absent setting appears as revision zero and off.
+func (h *RuntimeSettingsHandler) GetParameterPolicySettings(c *gin.Context) {
+	status, err := h.parameterPolicy.Get(c.Request.Context())
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	httpx.Success(c, status)
+}
+
+// UpdateParameterPolicySettings replaces entry rules after strict JSON binding.
+// An outdated revision produces a conflict, and errors after persistence retain
+// the settings coordinator's publication details for the administrator.
+func (h *RuntimeSettingsHandler) UpdateParameterPolicySettings(c *gin.Context) {
+	var request UpdateParameterPolicySettingsRequest
+	if err := httpx.BindJSONStrict(c, &request); err != nil {
+		httpx.BadRequest(c, "Supply a valid parameter policy and its current revision.")
+		return
+	}
+	status, err := h.parameterPolicy.Update(c.Request.Context(), requestpolicy.Config{
+		Revision: *request.Revision, Mode: request.Mode, Rules: request.Rules,
+	})
+	if err != nil {
+		httpx.ErrorFrom(c, err)
+		return
+	}
+	httpx.Success(c, status)
 }

@@ -60,26 +60,36 @@ func TestOpenAIRecoverResponsesPanic_NoPanicNoWrite(t *testing.T) {
 	assert.Equal(t, "", w.Body.String())
 }
 
-// TestOpenAIRecoverResponsesPanic_AppendsResponseFailedAfterWritten panics
-// after text has committed HTTP 418 on the Responses route. It checks retained
-// prior text and status plus an appended response.failed event.
-func TestOpenAIRecoverResponsesPanic_AppendsResponseFailedAfterWritten(t *testing.T) {
-	w := httptest.NewRecorder()
-	c, _ := gin.CreateTestContext(w)
-	c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
-	c.String(http.StatusTeapot, "already written")
-
-	h := &OpenAITextHandler{backend: openAITextHTTPBackend{}}
-	streamStarted := false
-	require.NotPanics(t, func() {
-		func() {
-			defer h.recoverResponsesPanic(c, &streamStarted)
-			panic("test panic")
-		}()
-	})
-
-	require.Equal(t, http.StatusTeapot, w.Code)
-	body := w.Body.String()
-	assert.Contains(t, body, "already written")
-	assert.Contains(t, body, "event: response.failed\n")
+// TestOpenAIRecoverResponsesPanicUsesCommittedProtocol exercises panic recovery
+// after unary JSON and native SSE have both committed. The JSON remains intact,
+// while the genuine stream receives one terminal despite its unset marker.
+func TestOpenAIRecoverResponsesPanicUsesCommittedProtocol(t *testing.T) {
+	for _, tc := range []struct {
+		name, media, body string
+		status            int
+	}{
+		{name: "json", media: "application/json", body: `{"original":true}`, status: http.StatusTeapot},
+		{name: "native_sse", media: "text/event-stream", body: ": ready\n\n", status: http.StatusOK},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(w)
+			c.Request = httptest.NewRequest(http.MethodPost, "/v1/responses", nil)
+			c.Data(tc.status, tc.media, []byte(tc.body))
+			h := &OpenAITextHandler{backend: openAITextHTTPBackend{}}
+			streamStarted := false
+			require.NotPanics(t, func() {
+				func() {
+					defer h.recoverResponsesPanic(c, &streamStarted)
+					panic("test panic")
+				}()
+			})
+			require.Equal(t, tc.status, w.Code)
+			if tc.media == "application/json" {
+				require.Equal(t, tc.body, w.Body.String())
+				return
+			}
+			require.Contains(t, w.Body.String(), tc.body+"event: response.failed\n")
+		})
+	}
 }

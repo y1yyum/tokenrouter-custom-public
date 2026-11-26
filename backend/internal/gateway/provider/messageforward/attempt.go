@@ -14,6 +14,7 @@ import (
 	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/modelidentity"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/searchtools"
 	"github.com/TokenFlux/TokenRouter/internal/infra/httpclient/tlsfingerprint"
@@ -283,6 +284,9 @@ func (a *attempt) NormalizeDateline(ctx context.Context, body []byte) ([]byte, b
 // CacheLimit delegates Anthropic cache breakpoint limit enforcement for
 // prepared bytes.
 func (a *attempt) CacheLimit(body []byte) []byte {
+	if requestpolicy.HasClientCache(a.ctx) {
+		return body
+	}
 	return claude.EnforceCacheControlLimit(body)
 }
 

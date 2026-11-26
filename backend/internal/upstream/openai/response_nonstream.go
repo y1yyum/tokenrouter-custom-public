@@ -25,8 +25,8 @@ import (
 // A final SSE response can reconstruct missing output from earlier deltas
 // before model and tool identities are restored. Terminal error paths run
 // compact recovery and provider failure policy before output commitment. When
-// no extractable final JSON exists, the reader can retain SSE bytes and its
-// parsed usage instead of creating a successful terminal object. Usage and
+// no extractable final JSON exists, JSON-only requests report a protocol error.
+// Other callers can retain the stream and its usage. Usage and
 // media/search counts come from upstream observations, while client-visible
 // model and tools are restored in a defined order before ordinary or
 // compact-bridge output is written.
@@ -46,6 +46,20 @@ type NonStreamingResult struct {
 // NonStreamOptions supplies buffered response conversion, identity restoration,
 // and failure callbacks.
 type NonStreamOptions struct {
+	// Compatibility selects strict resolution for one actually converted
+	// Responses attempt. Both adapters share its snapshots with the executor.
+	Compatibility *ResponsesStreamAttempt
+
+	// JSONOnly preserves the synchronous JSON wire format on a rewrite-enabled
+	// foreground Responses route. It does not require response IDs or validate
+	// terminal semantics on providers outside the conversion trial.
+	JSONOnly bool
+	// JSONDelivered observes the actual client document after a successful
+	// sink write. A failed write or Compact bridge retains its own semantics.
+	JSONDelivered func([]byte)
+	// CompatibilityDelivered receives the strict resolution and any sink error
+	// after the converted response's single write attempt.
+	CompatibilityDelivered func(ResponsesStreamResolution, error)
 	// OAuthProvider enables pre-JSON SSE framing detection, GrokCompact selects
 	// vendor compact conversion, and PreserveContentType retains a nonempty
 	// upstream JSON media type. These prepared flags control distinct buffered
@@ -81,6 +95,42 @@ func IsEventStreamResponse(header http.Header) bool {
 	return strings.Contains(strings.ToLower(header.Get("Content-Type")), "text/event-stream")
 }
 
+// prepareJSONHeaders replaces upstream representation metadata after header
+// filtering. OutputContext.Data preserves previously copied headers, so an
+// upstream SSE media type or length would otherwise describe the wrong body.
+func (o NonStreamOptions) prepareJSONHeaders(header http.Header) {
+	if o.JSONOnly {
+		header.Set("Content-Type", "application/json")
+		header.Del("Content-Length")
+	}
+}
+
+// deliverBuffered writes through the sink before classifying client-visible
+// output. Legacy raw streams and failed writes cannot establish a completed
+// synchronous generation for a rollout arm.
+func (o NonStreamOptions) deliverBuffered(c *upstream.OutputContext, status int, media string, body []byte) {
+	c.Data(status, media, body)
+	if o.JSONDelivered != nil && c.Err() == nil && gjson.ValidBytes(body) {
+		o.JSONDelivered(body)
+	}
+}
+
+// bufferedStream chooses the representation before any headers are committed.
+// On JSON-only routes a complete JSON document wins over mislabeled headers;
+// a non-JSON body must contain physical event framing to reach the SSE reader.
+func (o NonStreamOptions) bufferedStream(resp *http.Response, body []byte) (bool, error) {
+	if !o.JSONOnly {
+		return IsEventStreamResponse(resp.Header), nil
+	}
+	if gjson.ValidBytes(body) {
+		return false, nil
+	}
+	if wire.BodyHasSSEFraming(body) {
+		return true, nil
+	}
+	return false, o.ProtocolError(resp, "Upstream returned neither JSON nor a Responses event stream")
+}
+
 // ReadNonStreamingResponse reads a complete response and emits JSON or
 // dispatches buffered SSE conversion. The caller supplies response/body
 // ownership, output context, and required option callbacks, and closes the
@@ -93,7 +143,14 @@ func IsEventStreamResponse(header http.Header) bool {
 // RestoreNamespace, and RestoreToolNames run in that order before output.
 // Dispatch to ReadSSEAsJSON can observe the same complete SSE body again, so
 // observation callbacks tolerate repeated inspection.
+// A pilot compatibility attempt instead reads bounded events through EOF and
+// returns partial evidence with typed errors before downstream commitment.
 func ReadNonStreamingResponse(ctx context.Context, resp *http.Response, c *upstream.OutputContext, options NonStreamOptions, originalModel, mappedModel string) (*NonStreamingResult, error) {
+	if options.Compatibility != nil {
+		return readResponsesCompatibility(ctx, resp, c, options, originalModel, func(body []byte) ([]byte, error) {
+			return restoreBufferedResponseTools(body, options)
+		})
+	}
 	body, err := options.ReadBody(resp.Body)
 	if err != nil {
 		return nil, err
@@ -102,7 +159,11 @@ func ReadNonStreamingResponse(ctx context.Context, resp *http.Response, c *upstr
 
 	// Compatible upstreams can return SSE even when stream=false was requested;
 	// recognize their Content-Type for every provider type.
-	if IsEventStreamResponse(resp.Header) {
+	stream, err := options.bufferedStream(resp, body)
+	if err != nil {
+		return nil, err
+	}
+	if stream {
 		options.ObserveSSE(string(body))
 		return ReadSSEAsJSON(ctx, resp, c, options, body, originalModel, mappedModel)
 	}
@@ -146,16 +207,17 @@ func ReadNonStreamingResponse(ctx context.Context, resp *http.Response, c *upstr
 		return nil, err
 	}
 	options.ResponseHeaders(c.Writer.Header(), resp.Header)
+	options.prepareJSONHeaders(c.Writer.Header())
 
 	contentType := "application/json"
-	if options.PreserveContentType {
+	if options.PreserveContentType && !options.JSONOnly {
 		if upstreamType := resp.Header.Get("Content-Type"); upstreamType != "" {
 			contentType = upstreamType
 		}
 	}
 
 	if !options.WriteCompactBridge(resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
+		options.deliverBuffered(c, resp.StatusCode, contentType, body)
 	}
 
 	return &NonStreamingResult{
@@ -204,6 +266,9 @@ func ReadSSEAsJSON(ctx context.Context, resp *http.Response, c *upstream.OutputC
 		return nil, options.ProtocolError(resp, msg)
 	}
 	finalResponse, ok := wire.ExtractCodexFinalResponse(bodyText)
+	if options.JSONOnly && ok && !gjson.ValidBytes(finalResponse) {
+		return nil, options.ProtocolError(resp, "Upstream event stream has an invalid final JSON response")
+	}
 
 	usage := &wire.ForwardUsage{}
 	if ok {
@@ -247,6 +312,11 @@ func ReadSSEAsJSON(ctx context.Context, resp *http.Response, c *upstream.OutputC
 			}
 			return nil, options.FailedTerminal(resp, mappedModel, terminalPayload, msg)
 		}
+		if options.JSONOnly {
+			// A buffered caller has no event decoder. Reject a truncated stream
+			// before copying upstream headers or committing any of its frames.
+			return nil, options.ProtocolError(resp, "Upstream event stream has no final JSON response")
+		}
 		usage = wire.ParseSSEUsageFromBody(bodyText)
 		if originalModel != mappedModel {
 			bodyText = wire.ReplaceModelInSSEBody(bodyText, mappedModel, originalModel)
@@ -255,6 +325,7 @@ func ReadSSEAsJSON(ctx context.Context, resp *http.Response, c *upstream.OutputC
 	}
 
 	options.ResponseHeaders(c.Writer.Header(), resp.Header)
+	options.prepareJSONHeaders(c.Writer.Header())
 
 	contentType := "application/json; charset=utf-8"
 	if !ok {
@@ -264,7 +335,7 @@ func ReadSSEAsJSON(ctx context.Context, resp *http.Response, c *upstream.OutputC
 		}
 	}
 	if !options.WriteCompactBridge(resp.StatusCode, body) {
-		c.Data(resp.StatusCode, contentType, body)
+		options.deliverBuffered(c, resp.StatusCode, contentType, body)
 	}
 
 	served := wire.ResponseBodyHasVisibleOutput(body)

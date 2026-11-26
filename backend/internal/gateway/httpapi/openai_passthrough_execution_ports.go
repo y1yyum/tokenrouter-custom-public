@@ -14,6 +14,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/gateway/media"
 	gatewayadapter "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	forward "github.com/TokenFlux/TokenRouter/internal/gateway/provider/openaiforward"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/tierpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	protocolbridge "github.com/TokenFlux/TokenRouter/internal/protocol/bridge"
@@ -40,9 +41,21 @@ import (
 // The output sink records turn-state provenance only while response metadata
 // remains applicable. The runner owns each body across retries and final output.
 
-// openAIResponsesRejectedFieldRetryBudgetContextKey identifies the request-wide repair allowance
-// reused by per-provider body-deduplication states during passthrough recovery.
-const openAIResponsesRejectedFieldRetryBudgetContextKey = "openai_responses_rejected_field_retry_budget"
+// openAIResponsesRejectedFieldRetriesContextKey identifies the shared request
+// repair budget and the independent body histories for its routing candidates.
+const openAIResponsesRejectedFieldRetriesContextKey = "openai_responses_rejected_field_retries"
+
+// openAIResponsesRepairCandidate identifies one provider within an effective group.
+type openAIResponsesRepairCandidate struct {
+	groupID    int64 // effective route group
+	providerID int64 // selected provider record
+}
+
+// openAIResponsesFieldRetries keeps a shared allowance and candidate-local histories.
+type openAIResponsesFieldRetries struct {
+	budget     openai.ResponsesRejectedFieldRetryBudget                                    // shared repair allowance
+	candidates map[openAIResponsesRepairCandidate]*openai.ResponsesRejectedFieldRetryState // body histories by candidate
+}
 
 // openAIPassthroughExecutionAdapter binds passthrough Responses execution to
 // shared text attempt services.
@@ -275,7 +288,7 @@ func (p *openAIPassthroughExecutionAdapter) MarkPassthrough() {
 // sequential; each new state remembers its own initial body while sharing
 // later retry allowance across provider attempts.
 func (p *openAIPassthroughExecutionAdapter) RetryState(body []byte) *openai.ResponsesRejectedFieldRetryState {
-	return openAIResponsesRejectedFieldRetryStateForRequest(p.c, body)
+	return openAIResponsesRejectedFieldRetryStateForRequest(p.c, p.provider.Record.ID, body)
 }
 
 // UpstreamModelObserved records the currently prepared upstream model in
@@ -297,6 +310,9 @@ func (p *openAIPassthroughExecutionAdapter) BuildPass(ctx context.Context, body 
 // retry/error handling.
 func (p *openAIPassthroughExecutionAdapter) SendPass(r *http.Request) (*http.Response, error) {
 	resetResponseModel(p.c)
+	if !p.provider.Record.AllowsResponsesRequestRewrite() {
+		r = r.WithContext(requestpolicy.WithoutRewrite(r.Context()))
+	}
 	return p.s.Requests.Transport.DoWithTLS(r, p.proxyURL, p.provider.Record.ID, p.provider.Record.Concurrency, p.s.Requests.TLSProfile(p.provider, p.tls...))
 }
 
@@ -434,33 +450,33 @@ func openAIRequestGroup(c *gin.Context) *routing.Group {
 	return key.Group
 }
 
-// openAIResponsesRejectedFieldRetryStateForRequest creates fresh body
-// deduplication state with a request-shared field-repair budget. It reuses a
-// correctly typed budget from Gin or installs a new one when unavailable; nil
-// contexts receive a fresh budget for this call.
-//
-// Callers initialize states sequentially for one HTTP request, because the
-// context lookup and budget publication are separate operations. The upstream
-// state and budget implement their own locking after construction. Distinct
-// provider states can therefore admit the same transformed body while
-// consuming one combined request allowance, and each state remembers its own
-// supplied initial body.
-func openAIResponsesRejectedFieldRetryStateForRequest(c *gin.Context, initialBody []byte) *openai.ResponsesRejectedFieldRetryState {
-	var budget *openai.ResponsesRejectedFieldRetryBudget
-	if c != nil {
-		if existing, ok := c.Get(openAIResponsesRejectedFieldRetryBudgetContextKey); ok {
-			budget, _ = existing.(*openai.ResponsesRejectedFieldRetryBudget)
+// openAIResponsesRejectedFieldRetryStateForRequest binds body history to the
+// effective group and provider while sharing the allowance across dispatches.
+// Both runners call it in the serial request loop, including reentry into an
+// earlier candidate. A nil context receives a standalone recovery state.
+func openAIResponsesRejectedFieldRetryStateForRequest(c *gin.Context, providerID int64, initialBody []byte) *openai.ResponsesRejectedFieldRetryState {
+	if c == nil {
+		return openai.NewOpenAIResponsesRejectedFieldRetryState(initialBody)
+	}
+	if c.Request != nil {
+		if state := gatewayadapter.ParameterRepairState(c.Request.Context(), providerID, requestpolicy.EndpointResponses, initialBody); state != nil {
+			return state
 		}
 	}
-	// A fresh provider state needs local body history but shares the request
-	// allowance; sequential initialization prevents installing competing budget handles in Gin.
-	if budget == nil {
-		budget = &openai.ResponsesRejectedFieldRetryBudget{}
-		if c != nil {
-			c.Set(openAIResponsesRejectedFieldRetryBudgetContextKey, budget)
-		}
+	existing, _ := c.Get(openAIResponsesRejectedFieldRetriesContextKey)
+	retries, _ := existing.(*openAIResponsesFieldRetries)
+	if retries == nil {
+		retries = &openAIResponsesFieldRetries{candidates: make(map[openAIResponsesRepairCandidate]*openai.ResponsesRejectedFieldRetryState)}
+		c.Set(openAIResponsesRejectedFieldRetriesContextKey, retries)
 	}
-	return openai.NewOpenAIResponsesRejectedFieldRetryStateWithBudget(initialBody, budget)
+	candidate := openAIResponsesRepairCandidate{groupID: OpenAIResponseGroupID(c), providerID: providerID}
+	if state := retries.candidates[candidate]; state != nil {
+		state.Remember(initialBody)
+		return state
+	}
+	state := openai.NewOpenAIResponsesRejectedFieldRetryStateWithBudget(initialBody, &retries.budget)
+	retries.candidates[candidate] = state
+	return state
 }
 
 // ModelAttributes resolves final passthrough capabilities before permission

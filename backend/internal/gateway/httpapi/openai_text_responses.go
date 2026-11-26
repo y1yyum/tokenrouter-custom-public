@@ -35,9 +35,10 @@ import (
 // Continuation ownership is checked in the effective group before moderation
 // and selection. Explicit image intent chooses permission, image admission and
 // capability requirements, while broad intent supplies transformation hints.
-// User-slot acquisition can change request context and output state, so its
-// lease is copied into the earlier selection context and eligibility is
-// checked after waiting. The admitted client model, mapped attempt model and
+// User-slot acquisition can change request context and output state. Synchronous
+// Responses give provider selection a completion-owned lease so cancellation
+// can return the user slot without cutting short the provider's usage drain.
+// Eligibility is checked after waiting. The admitted client model, mapped attempt model and
 // prepared route then reach synchronous execution with image, user and request
 // cleanup held until handler return.
 
@@ -64,6 +65,7 @@ func (h *OpenAITextHandler) Responses(c *gin.Context) {
 	// Keep the HTTP request admitted through image/user cleanup and synchronous
 	// execution so shutdown cannot release shared services before this handler finishes.
 	defer done()
+	defer finishCompatibilityCohorts(c)
 
 	// Recovery uses the mutable output state because slot waits or Compact
 	// keepalives may have committed a format before a later admission callback panics.
@@ -142,6 +144,13 @@ func (h *OpenAITextHandler) Responses(c *gin.Context) {
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", RequestBodyParseErrorMessage(err))
 		return
 	}
+	// Compact normalization passes ordinary generation bytes through unchanged.
+	// Capture that validated original before prompt policy can rewrite it.
+	if !legacyCompact && !nativeCompactionV2 && IsBareOpenAIResponsesPath(c) && !strings.HasPrefix(c.Request.URL.Path, "/backend-api/codex/") &&
+		h.rejectByParameterPolicy(c, apiKey, EndpointResponses, rawClientBody) {
+		recordIngressValidate()
+		return
+	}
 	if err := wirejson.ValidateRequestObject(body); err != nil {
 		recordIngressValidate()
 		LogRequestBodyParseFailure(reqLog, body, err)
@@ -217,6 +226,16 @@ func (h *OpenAITextHandler) Responses(c *gin.Context) {
 		recordIngressValidate()
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", InvalidStreamFieldTypeMessage)
 		return
+	}
+	// Preserve the original foreground contract across candidate changes.
+	// Compact, background and bridged requests retain their own output rules.
+	if c.Request.Method == http.MethodPost && c.Request.URL.Path == EndpointResponses && !legacyCompact && !nativeCompactionV2 {
+		clientStream, valid := ParseOpenAICompatibleStream(rawClientBody)
+		background := wirejson.ParseView(rawClientBody).Get("background")
+		if valid && !clientStream && (!background.Exists() || background.Type == gjson.False) {
+			c.Set(responsesForegroundJSONKey, true)
+			c.Set(responsesRequestStartKey, requestStart)
+		}
 	}
 	if err := h.backend.ValidateTier(body); err != nil {
 		recordIngressValidate()
@@ -343,15 +362,24 @@ func (h *OpenAITextHandler) Responses(c *gin.Context) {
 	if !acquired {
 		return
 	}
-	// The image-selection context was captured before user waiting. Carry its
-	// acquired lease into selection so provider admission uses this request's current resource handle.
-	if lease := scheduler.RequestLease(c.Request.Context()); lease != nil {
-		selectionCtx = scheduler.WithRequestLease(selectionCtx, lease)
-	}
 	// The resource binding already observes cancellation; retain completion
 	// cleanup here so successful or rejected synchronous handling also releases the user slot.
 	if userReleaseFunc != nil {
 		defer userReleaseFunc()
+	}
+	providerLease := scheduler.RequestLease(c.Request.Context())
+	if c.GetBool(responsesForegroundJSONKey) {
+		// The scheduler registers prefetched and queued provider slots with
+		// the request owner. Give these slots completion ownership before
+		// selection so user cancellation cannot release them during usage drain.
+		providerLease = scheduler.NewLease(c.Request.Context(), scheduler.ReleaseOnCompletion)
+		defer providerLease.Release()
+		c.Request = c.Request.WithContext(scheduler.WithRequestLease(c.Request.Context(), providerLease))
+	}
+	// The selection context predates user waiting. Carry the current provider
+	// owner into both initial selection and later attempts on this request.
+	if providerLease != nil {
+		selectionCtx = scheduler.WithRequestLease(selectionCtx, providerLease)
 	}
 
 	// Waiting can change funding eligibility. Invoke the configured admission

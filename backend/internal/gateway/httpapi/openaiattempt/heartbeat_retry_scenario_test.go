@@ -199,6 +199,7 @@ func TestTextAttemptsHeartbeatCommitEmitsSSEErrorOnFailure(t *testing.T) {
 					c:                       c,
 					reqLog:                  zap.NewNop(),
 					provider:                &gatewayprovider.ExecutionProvider{},
+					reqStream:               true,
 					streamStarted:           &streamStarted,
 					writerSizeBeforeForward: gatewayhttp.HeartbeatAdjustedWrittenSize(c),
 					fixed:                   fixed,
@@ -231,6 +232,87 @@ func TestTextAttemptsHeartbeatCommitEmitsSSEErrorOnFailure(t *testing.T) {
 				require.Equal(t, http.StatusBadGateway, streamErr.IntendedStatus)
 			})
 		}
+	}
+}
+
+// TestResponsesRetryDenialLeavesOneTerminal checks the real attempt adapter's
+// two decisions independently. Retry readiness must never write. Exhaustion can
+// write JSON or one native SSE terminal, depending on actual client output.
+func TestResponsesRetryDenialLeavesOneTerminal(t *testing.T) {
+	for _, tc := range []struct {
+		name, media           string
+		clientStream, started bool
+		terminal, canceled    bool
+		wantStatus            int
+		wantNew               string
+	}{
+		{name: "pending_sync_with_stale_marker", started: true, wantStatus: 503, wantNew: `"type":"upstream_error"`},
+		{name: "already_json", media: "application/json", clientStream: true, started: true, wantStatus: 200},
+		{name: "unexpected_sse_on_sync", media: "text/event-stream", started: true, wantStatus: 200},
+		{name: "native_sse_without_marker", media: "text/event-stream", clientStream: true, wantStatus: 200, wantNew: "event: response.failed\n"},
+		{name: "native_sse_terminal_sent", media: "text/event-stream", clientStream: true, terminal: true, wantStatus: 200},
+		{name: "canceled_sync", canceled: true, wantStatus: gatewayhttp.StatusClientClosedRequest},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			rec := httptest.NewRecorder()
+			c, _ := gin.CreateTestContext(rec)
+			req := httptest.NewRequest(http.MethodPost, gatewayhttp.EndpointResponses, nil)
+			ctx, cancel := context.WithCancel(requeststate.WithClientProtocol(req.Context(), protocol.ProtocolOpenAIResponses))
+			defer cancel()
+			c.Request = req.WithContext(ctx)
+			started := tc.started
+			support := &Support{}
+			bridge := &responsesAttemptBridge{
+				c: c, reqLog: zap.NewNop(), provider: &gatewayprovider.ExecutionProvider{},
+				reqStream: tc.clientStream, streamStarted: &started, writerSizeBeforeForward: c.Writer.Size(),
+				fixed: &openAIExecutionDependencies{
+					handleFailoverExhausted: support.HandleFailoverExhausted,
+					recordOpenAICyberWarning: func(*gin.Context, *zap.Logger, *apikey.APIKey, *gatewayprovider.ExecutionProvider, string, int, []byte, string) {
+					},
+					observeOpenAIProviderHealthFailure: func(context.Context, *gatewayprovider.ExecutionProvider, error) bool { return false },
+					reportOpenAIProviderScheduleResult: func(*gatewayprovider.ExecutionProvider, string, bool, *int, ...error) bool { return true },
+				},
+			}
+			if tc.media == "application/json" {
+				c.Data(http.StatusOK, tc.media, []byte(`{"original":true}`))
+			}
+			if tc.media == "text/event-stream" {
+				c.Header("Content-Type", tc.media)
+				_, err := c.Writer.WriteString("data: {\"type\":\"response.output_text.delta\"}\n\n")
+				require.NoError(t, err)
+				c.Writer.Flush()
+			}
+			if tc.terminal {
+				require.True(t, gatewayhttp.WriteResponsesFailedSSE(c, "upstream_error", "", "original failure", "resp_original", "fixture"))
+			}
+			if tc.canceled {
+				cancel()
+			}
+			before := rec.Body.String()
+			failure := &forwardcore.UpstreamFailoverError{StatusCode: http.StatusBadGateway}
+			if tc.media == "" {
+				failure.StatusCode = http.StatusServiceUnavailable
+				failure.Reason = forwardcore.OpenAIResponsesCompatibilityReason
+				// Force a retry denial for the otherwise writable synchronous case.
+				bridge.writerSizeBeforeForward--
+			}
+			attempt := &textflow.AttemptFailure{Cause: failure, Policy: failure.RetryFailure()}
+			require.False(t, bridge.RetryReady(attempt))
+			require.Equal(t, before, rec.Body.String())
+			bridge.Exhausted(attempt)
+			bridge.Exhausted(attempt)
+			require.Equal(t, tc.wantStatus, c.Writer.Status())
+			if tc.wantNew == "" {
+				require.Equal(t, before, rec.Body.String())
+				return
+			}
+			require.Equal(t, 1, strings.Count(rec.Body.String(), tc.wantNew))
+			if tc.clientStream {
+				assertValidSSEStreamOnly(t, rec.Body.String())
+			} else {
+				require.True(t, json.Valid(rec.Body.Bytes()))
+			}
+		})
 	}
 }
 

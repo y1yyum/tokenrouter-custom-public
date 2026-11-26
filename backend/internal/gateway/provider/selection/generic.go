@@ -74,6 +74,7 @@ func (s *Generic) SelectProviderForModel(ctx context.Context, groupID *int64, se
 // unoccupied.
 func (s *Generic) SelectProviderForModelWithExclusions(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*gatewayprovider.ExecutionProvider, error) {
 	ctx = withSelectionRequest(ctx, groupID, requestedModel)
+	ctx, parameters := withParameterSelection(ctx, len(excludedIDs))
 	ctx, capabilities := withCapabilitySelection(ctx)
 	core, scope := s.genericSelector()
 	selected, err := core.SelectOnly(ctx, schedulercore.SelectionInput{GroupID: groupID, SessionHash: sessionHash, RequestedModel: requestedModel, ExcludedIDs: excludedIDs})
@@ -81,6 +82,9 @@ func (s *Generic) SelectProviderForModelWithExclusions(ctx context.Context, grou
 		if local := capabilities.failure(); local != nil {
 			err = local
 		}
+	}
+	if err != nil || selected == nil {
+		err = parameters.failure(err)
 	}
 	return scope.oldProvider(selected), err
 }
@@ -92,6 +96,7 @@ func (s *Generic) SelectProviderForModelWithExclusions(ctx context.Context, grou
 // @project-doc docs/architecture/gateway_request_lifecycle.md#account_selection_and_failover
 func (s *Generic) SelectProviderWithLoadAwareness(ctx context.Context, groupID *int64, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}) (*gatewayprovider.SelectionResult, error) {
 	ctx = withSelectionRequest(ctx, groupID, requestedModel)
+	ctx, parameters := withParameterSelection(ctx, len(excludedIDs))
 	ctx, capabilities := withCapabilitySelection(ctx)
 	core, scope := s.genericSelector()
 	plan, _ := requeststate.RoutePlanFromContext(ctx)
@@ -100,6 +105,9 @@ func (s *Generic) SelectProviderWithLoadAwareness(ctx context.Context, groupID *
 		if local := capabilities.failure(); local != nil {
 			err = local
 		}
+	}
+	if err != nil || result == nil {
+		err = parameters.failure(err)
 	}
 	return scope.restore(result), err
 }
@@ -290,8 +298,12 @@ func (s *Generic) listSchedulableProviders(ctx context.Context, groupID *int64, 
 	if err != nil {
 		return nil, false, err
 	}
+	count := len(providers)
 	providers = s.filterProvidersBySchedulingThreshold(ctx, providers)
 	providers = s.filterGrokFreeQuotaProvidersForGateway(ctx, providers)
+	if len(providers) < count {
+		observeParameterUnavailable(ctx)
+	}
 	return providers, false, nil
 }
 
@@ -648,6 +660,9 @@ func (s *Generic) hydrateSelectedProvider(ctx context.Context, provider *gateway
 		model := s.groupMappedModelForGroup(ctx, groupID, input.model)
 		policy := gatewayprovider.ExecutionModelPolicy(hydrated)
 		if !openAIStickyProviderMatchesGroup(hydrated, groupID) || !policy.Schedulable(ctx, model) || !policy.Supports(ctx, model) {
+			return nil, schedulercore.ErrNoAvailableProviders
+		}
+		if parameterCandidateReason(ctx, hydrated, model) != "" {
 			return nil, schedulercore.ErrNoAvailableProviders
 		}
 	}

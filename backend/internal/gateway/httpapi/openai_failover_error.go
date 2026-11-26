@@ -7,8 +7,11 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 
 	"github.com/TokenFlux/TokenRouter/internal/gateway/errorpolicy"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
+	upstreamopenai "github.com/TokenFlux/TokenRouter/internal/upstream/openai"
 )
 
 // openai_failover_error.go selects final OpenAI failover error presentation
@@ -65,6 +68,9 @@ type OpenAIFailoverError struct {
 	// SilentRefusal: empty usable output classified.
 	// CyberWarning: upstream cyber warning classified.
 	TooLarge, ContinuationUnsupported, Credential, CapacityShed, SilentRefusal, CyberWarning bool
+	// ResponsesCompatibility identifies the strict reader's classified failure.
+	// Its status survives exhaustion and administrator presentation overrides.
+	ResponsesCompatibility bool
 }
 
 // ErrorRuleMatcher supplies final presentation rules for upstream failure
@@ -94,12 +100,85 @@ type FailoverErrorHooks struct {
 // it. Rules match platform openai against the original Status and Body and can
 // replace display status, message or monitoring behavior. An unmatched
 // ordinary failure records its upstream message before using the default
-// status mapping.
+// status mapping. A converted policy refusal retains its existing 400
+// presentation and records the explicit refusal after successful JSON delivery.
 func WriteOpenAIFailoverExhausted(c *gin.Context, failure *OpenAIFailoverError, started bool, rules ErrorRuleMatcher, hooks FailoverErrorHooks, write func(*gin.Context, int, string, string, bool)) {
 	if failure == nil {
 		status, kind, message := MapOpenAIUpstreamError(http.StatusBadGateway)
 		write(c, status, kind, message, started)
 		return
+	}
+	if failure.ResponsesCompatibility {
+		outcome := responsesCompatibilityErrorOutcome(failure.Status)
+		kind := "upstream_error"
+		message := strings.TrimSpace(failure.ClientMessage)
+		if failure.Status == http.StatusBadRequest && failure.CyberWarning {
+			outcome = responsecompat.OutcomeRefused
+			kind = "invalid_request_error"
+			message = strings.TrimSpace(failure.CyberMessage)
+		}
+		if message == "" {
+			message = http.StatusText(failure.Status)
+		}
+		if outcome != "" {
+			hooks.Upstream(c, failure.Status, message)
+		}
+		// Converted output is always unary. An existing response, including an
+		// unexpected SSE commit, cannot accept a replacement JSON document.
+		gone := FailoverClientGone(c)
+		if c.Writer.Written() || TerminalSSEDelivered(c) {
+			RequestLogger(c, "gateway.responses_compatibility").Debug("openai.responses_error_output_already_committed")
+			return
+		}
+		if gone {
+			recordResponsesCohortDelivery(c, responsecompat.OutcomeClientGone)
+			return
+		}
+		// A previous candidate may have left retry guidance on this writer.
+		// Replace it only with a single validated value from the final attempt.
+		c.Writer.Header().Del("Retry-After")
+		if values := failure.Headers.Values("Retry-After"); len(values) == 1 && !strings.ContainsAny(values[0], "\r\n") {
+			CopyFailoverRetryAfter(c, failure.Headers)
+		}
+		if outcome != "" {
+			// These statuses bypass presentation rules and generic stream framing.
+			// Gin records render/write errors on the active context synchronously.
+			c.Writer.Header().Del("Content-Length")
+			c.Header("Content-Type", "application/json")
+			priorErrors := len(c.Errors)
+			c.JSON(failure.Status, gin.H{"error": gin.H{"type": kind, "message": message}})
+			if len(c.Errors) != priorErrors {
+				outcome = responsecompat.OutcomeClientGone
+			}
+			recordResponsesCohortDelivery(c, outcome)
+			return
+		}
+		started = false
+	}
+	if !failure.ResponsesCompatibility && compatibilityCohortFrom(c, responsesCohortKey) != nil {
+		original := write
+		write = func(c *gin.Context, status int, kind, message string, started bool) {
+			before := len(c.Errors)
+			original(c, status, kind, message, started)
+			if started || !c.Writer.Written() || c.Writer.Status() != status || c.Writer.Size() <= 0 {
+				return
+			}
+			if len(c.Errors) != before {
+				recordResponsesCohortDelivery(c, responsecompat.OutcomeClientGone)
+				return
+			}
+			// Presentation rules can preserve or change the upstream status.
+			// Classify the delivered result using both that status and evidence
+			// from this final attempt, never from an earlier recovered candidate.
+			if status == http.StatusGatewayTimeout && failure.Status == http.StatusGatewayTimeout {
+				recordResponsesCohortDelivery(c, responsecompat.OutcomeTimeout504)
+			}
+			if status == http.StatusServiceUnavailable && (failure.CapacityShed ||
+				upstreamopenai.IsOpenAIRequestScopedCapacityShed(failure.UpstreamMessage, failure.Body) ||
+				gjson.GetBytes(failure.Body, "error.type").String() == "overloaded_error") {
+				recordResponsesCohortDelivery(c, responsecompat.OutcomeOverload503)
+			}
+		}
 	}
 	if failure.TooLarge {
 		hooks.Upstream(c, http.StatusRequestEntityTooLarge, failure.TooLargeMessage)
@@ -114,7 +193,9 @@ func WriteOpenAIFailoverExhausted(c *gin.Context, failure *OpenAIFailoverError, 
 		write(c, http.StatusBadRequest, "invalid_request_error", message, started)
 		return
 	}
-	CopyFailoverRetryAfter(c, failure.Headers)
+	if !failure.ResponsesCompatibility {
+		CopyFailoverRetryAfter(c, failure.Headers)
+	}
 	if failure.Credential {
 		write(c, failure.CredentialStatus, "upstream_error", failure.CredentialMessage, started)
 		return
@@ -161,6 +242,22 @@ func WriteOpenAIFailoverExhausted(c *gin.Context, failure *OpenAIFailoverError, 
 	hooks.Upstream(c, failure.Status, failure.UpstreamMessage)
 	status, kind, message := MapOpenAIUpstreamError(failure.Status)
 	write(c, status, kind, message, started)
+}
+
+// responsesCompatibilityErrorOutcome projects the reader's classified failures
+// into client-visible rollout outcomes. Other statuses follow the existing
+// presentation rules and stay classified by the final HTTP response.
+func responsesCompatibilityErrorOutcome(status int) string {
+	switch status {
+	case http.StatusServiceUnavailable:
+		return responsecompat.OutcomeOverload503
+	case http.StatusGatewayTimeout:
+		return responsecompat.OutcomeTimeout504
+	case http.StatusBadGateway:
+		return responsecompat.OutcomeProtocol502
+	default:
+		return ""
+	}
 }
 
 // CopyFailoverRetryAfter relays a trimmed, bounded upstream Retry-After value

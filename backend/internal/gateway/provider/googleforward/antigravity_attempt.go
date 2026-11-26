@@ -9,6 +9,7 @@ import (
 	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/media"
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/ops"
@@ -235,7 +236,8 @@ func (a *geminiExecutionAdapter) Recover(ctx context.Context, in forwardcore.Gem
 		},
 
 		SignatureEnabled: func(ctx context.Context) bool {
-			return a.s.Gateway != nil && a.s.Gateway.IsSignatureRectifierEnabled(ctx)
+			_, strict := requestpolicy.StrictIntent(ctx)
+			return !strict && a.s.Gateway != nil && a.s.Gateway.IsSignatureRectifierEnabled(ctx)
 		},
 
 		FallbackModel: func(ctx context.Context) string {

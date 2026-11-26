@@ -61,7 +61,7 @@ func (r *Runtime) bedrock(
 	if attributesErr != nil {
 		return nil, attributesErr
 	}
-	body, err = gatewayprovider.ApplyModelAttributeParameters(body, attributes)
+	body, err = gatewayprovider.ApplyRequestModelAttributeParameters(ctx, body, attributes)
 	if err != nil {
 		return nil, err
 	}

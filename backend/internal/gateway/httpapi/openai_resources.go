@@ -36,6 +36,9 @@ type OpenAIImageAdmissionOptions struct {
 type OpenAIHTTPResources struct {
 	Concurrency *ConcurrencyHelper                 // shared user-slot admission helper
 	Images      *scheduler.ImageConcurrencyLimiter // process-local image-slot admission limiter
+	// ResponsesReadmission supplies normal provider wait limits when a conversion
+	// surrenders a prefetched slot whose selection carried no wait plan.
+	ResponsesReadmission scheduler.ProviderWaitPlan
 	// ImageOptions supplies the limiter's startup rules. A nil value
 	// bypasses image admission, independently of whether Images has been
 	// installed.

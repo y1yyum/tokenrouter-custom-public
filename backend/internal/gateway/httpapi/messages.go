@@ -236,11 +236,24 @@ func NewMessagesHandler(options MessagesHTTPOptions, backend MessagesBackend, pr
 // pass parsed Messages input. The shared executor owns provider attempts and
 // completion using the captured route, funding and client state.
 func (h *MessagesHandler) Messages(c *gin.Context) {
+	h.serveMessages(c, nil)
+}
+
+// serveMessages uses the shared entry policy when the registered route
+// supplies it. It captures the authenticated group and validated input before
+// prompt replacement or client-specific group fallback. This handler owns
+// cohort finalization for that route through all exits after request admission.
+func (h *MessagesHandler) serveMessages(c *gin.Context, admitParameters func(*gin.Context, *apikey.APIKey, string, []byte) bool) {
 	done, accepted := h.BeginRequest(c, "anthropic")
 	if !accepted {
 		return
 	}
 	defer done()
+	if admitParameters != nil {
+		// Register finalization before policy admission so a strict entry rejection
+		// and a completed provider attempt both reach the same request cleanup.
+		defer finishCompatibilityCohorts(c)
+	}
 
 	// Authentication middleware supplies the key and user context.
 	apiKey, ok := h.backend.Access(c)
@@ -287,6 +300,10 @@ func (h *MessagesHandler) Messages(c *gin.Context) {
 		recordIngressValidate()
 		LogRequestBodyParseFailure(reqLog, body, err)
 		h.errorResponse(c, http.StatusBadRequest, "invalid_request_error", RequestBodyParseErrorMessage(err))
+		return
+	}
+	if admitParameters != nil && admitParameters(c, apiKey, EndpointMessages, body) {
+		recordIngressValidate()
 		return
 	}
 
@@ -492,7 +509,8 @@ func (h *MessagesHandler) Messages(c *gin.Context) {
 	// The bound executor is responsible for completion and terminal protocol
 	// output. This admission adapter supplies active HTTP output and discards
 	// the returned result and error after execution finishes.
-	_, _ = h.executor.Execute(c.Request.Context(), request, output)
+	result, executionErr := h.executor.Execute(c.Request.Context(), request, output)
+	recordParameterExecution(c, result, executionErr)
 }
 
 // errorResponse writes the supplied Anthropic JSON error through shared

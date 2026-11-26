@@ -228,24 +228,29 @@ func ApplyRateMultipliers(cmd *billing.UsageBillingCommand, p *usageBillingParam
 // and then runs Settled effects. Callers write analysis data afterward and retry
 // its persistence independently of this transaction.
 func (s *Recorder) Apply(ctx context.Context, requestID string, usageLog *UsageLog, p *usageBillingParams) (bool, error) {
+	return s.applyCommand(ctx, BuildCommand(requestID, usageLog, p), usageLog, p)
+}
+
+// applyCommand applies the already priced and normalized command. The store can
+// normalize its copy again without changing the prepared replay identity.
+func (s *Recorder) applyCommand(ctx context.Context, cmd *billing.UsageBillingCommand, usageLog *UsageLog, p *usageBillingParams) (bool, error) {
 	if p == nil || s.effects == nil {
 		return false, nil
 	}
-
-	cmd := BuildCommand(requestID, usageLog, p)
 	if s.store == nil {
 		return false, fmt.Errorf("usage billing repository is required")
 	}
 	if cmd == nil || cmd.RequestID == "" {
 		return false, fmt.Errorf("usage billing command is invalid")
 	}
+	command := *cmd
 
 	billingCtx, cancel := detachedBillingContext(ctx)
 	defer cancel()
 
 	// Financial deduplication and allocation commit before row mutation or cache
 	// effects, so later log persistence can fail without repeating the funds command.
-	result, err := s.store.Apply(billingCtx, cmd)
+	result, err := s.store.Apply(billingCtx, &command)
 	if err != nil {
 		return false, err
 	}

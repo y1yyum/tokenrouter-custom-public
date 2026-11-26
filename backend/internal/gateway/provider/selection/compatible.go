@@ -221,6 +221,7 @@ func (s *Compatible) selectProviderForModelWithExclusions(ctx context.Context, g
 // admission, honors a nonblank forced platform from context, and captures
 // sticky eligibility inputs for provider rechecks.
 func (s *Compatible) selectProviderForModelWithExclusionsForRouting(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, routingModel string, excludedIDs map[int64]struct{}, requireCompact bool, stickyProviderID int64, requiredCapability providercore.OpenAIEndpointCapability) (*gatewayprovider.ExecutionProvider, error) {
+	ctx, parameters := withParameterSelection(ctx, len(excludedIDs))
 	resolvedCtx, _, groupErr := s.resolveOpenAISchedulerGroup(ctx, groupID)
 	if groupErr != nil {
 		return nil, groupErr
@@ -232,6 +233,9 @@ func (s *Compatible) selectProviderForModelWithExclusionsForRouting(ctx context.
 	ctx = s.withCandidatePolicy(ctx, groupID, sessionHash)
 	core, scope := (&compatiblePicker{service: s}).platformSelectorForContext(ctx)
 	selected, err := core.SelectBasicOnly(ctx, schedulercore.PlatformSelectionInput{GroupID: groupID, Platform: platform, SessionHash: sessionHash, RequestedModel: requestedModel, RoutingModel: routingModel, ExcludedIDs: excludedIDs, RequireCompact: requireCompact, StickyProviderID: stickyProviderID, RequiredCapability: requiredCapability})
+	if selected == nil || err != nil {
+		err = parameters.failure(err)
+	}
 	return scope.oldProvider(selected), err
 }
 
@@ -248,8 +252,13 @@ func (s *Compatible) SelectProviderWithLoadAwareness(ctx context.Context, groupI
 // requirements, and endpoint capability through so provider eligibility uses
 // the same dispatch identity.
 func (s *Compatible) selectProviderWithLoadAwareness(ctx context.Context, groupID *int64, platform string, sessionHash string, requestedModel string, excludedIDs map[int64]struct{}, requireCompact bool, requiredCapability providercore.OpenAIEndpointCapability) (*gatewayprovider.SelectionResult, error) {
+	ctx, parameters := withParameterSelection(ctx, len(excludedIDs))
 	routingModel := s.resolveGroupRoutingModel(ctx, groupID, requestedModel)
-	return s.selectProviderWithLoadAwarenessForRouting(ctx, groupID, platform, sessionHash, requestedModel, routingModel, excludedIDs, requireCompact, requiredCapability)
+	selected, err := s.selectProviderWithLoadAwarenessForRouting(ctx, groupID, platform, sessionHash, requestedModel, routingModel, excludedIDs, requireCompact, requiredCapability)
+	if selected == nil || err != nil {
+		err = parameters.failure(err)
+	}
+	return selected, err
 }
 
 // selectProviderWithLoadAwarenessForRouting invokes basic load-aware selection
@@ -292,8 +301,13 @@ func (s *Compatible) listSchedulableProviders(ctx context.Context, groupID *int6
 	if err != nil {
 		return nil, fmt.Errorf("query providers failed: %w", err)
 	}
+	count := len(providers)
 	providers = s.filterOpenAIProvidersBySchedulingThreshold(ctx, providers)
-	return s.filterGrokFreeQuotaProvidersForOpenAI(ctx, providers), nil
+	providers = s.filterGrokFreeQuotaProvidersForOpenAI(ctx, providers)
+	if len(providers) < count {
+		observeParameterUnavailable(ctx)
+	}
+	return providers, nil
 }
 
 // tryAcquireProviderSlot delegates capacity acquisition to the compatible
@@ -355,7 +369,7 @@ func (s *Compatible) resolveFreshSchedulableOpenAIProvider(ctx context.Context, 
 		return nil
 	}
 	state, _ := ctx.Value(candidatePolicyKey{}).(candidatePolicy)
-	if s.chatToolEligibilityReason(ctx, fresh, state.groupID, requestedModel, requireCompact, chatToolFresh) != "" {
+	if s.textParameterEligibilityReason(ctx, fresh, state.groupID, requestedModel, requireCompact, chatToolFresh) != "" {
 		return nil
 	}
 	return fresh
@@ -414,7 +428,7 @@ func (s *Compatible) recheckSelectedOpenAIProviderFromDB(ctx context.Context, pr
 		if s.isOpenAIProxyStreamQuarantined(ctx, provider) {
 			return nil
 		}
-		if s.chatToolEligibilityReason(ctx, provider, groupID, requestedModel, requireCompact, chatToolRechecked) != "" {
+		if s.textParameterEligibilityReason(ctx, provider, groupID, requestedModel, requireCompact, chatToolRechecked) != "" {
 			return nil
 		}
 		return provider
@@ -449,7 +463,7 @@ func (s *Compatible) recheckSelectedOpenAIProviderFromDB(ctx context.Context, pr
 	if s.isOpenAIProxyStreamQuarantined(ctx, latest) {
 		return nil
 	}
-	if s.chatToolEligibilityReason(ctx, latest, groupID, requestedModel, requireCompact, chatToolRechecked) != "" {
+	if s.textParameterEligibilityReason(ctx, latest, groupID, requestedModel, requireCompact, chatToolRechecked) != "" {
 		return nil
 	}
 	return latest

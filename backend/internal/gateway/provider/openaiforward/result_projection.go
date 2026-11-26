@@ -2,6 +2,7 @@ package openaiforward
 
 import (
 	forwardcore "github.com/TokenFlux/TokenRouter/internal/gateway/forward"
+	wire "github.com/TokenFlux/TokenRouter/internal/protocol/openai"
 	"github.com/TokenFlux/TokenRouter/internal/upstream/openai"
 )
 
@@ -20,6 +21,29 @@ import (
 // compatibility consumers; completion selects the native observation as a whole
 // to keep cache tokens from contributing twice to the billable input count.
 
+// attachResponsesSettlement projects the final reader evidence after recovery
+// has made its replay decision. The strict reader's selected usage and tier
+// replace observations from the ordinary response wrapper, which can include
+// provisional data from a rejected terminal.
+func attachResponsesSettlement(result *Result, attempt *openai.ResponsesStreamAttempt, sentTier *string) {
+	if result == nil || attempt == nil {
+		return
+	}
+	snapshot := attempt.Snapshot()
+	result.ResponsesSettlement = &forwardcore.ResponsesSettlementEvidence{
+		State:         string(snapshot.Usage.State),
+		Source:        string(snapshot.Usage.Source),
+		Resolution:    string(snapshot.Resolution),
+		ReplayAllowed: snapshot.ReplayAllowed,
+	}
+	result.ServiceTier = sentTier
+	result.UpstreamResponseServiceTier = snapshot.ServiceTier
+	result.Usage = wire.ForwardUsage{}
+	if snapshot.Usage.State == openai.ResponsesUsageReported || snapshot.Usage.State == openai.ResponsesUsageZero {
+		result.Usage = snapshot.Usage.Usage
+	}
+}
+
 // ToForwardResult converts a package result into gateway completion data,
 // returning nil for nil input. Header maps, slices, and pointers other than
 // NativeUsage retain their storage. A warning gets a new outer record with its
@@ -33,6 +57,7 @@ func ToForwardResult(result *Result) *forwardcore.OpenAIResult {
 		return nil
 	}
 	value := &forwardcore.OpenAIResult{
+		ResponsesSettlement:         result.ResponsesSettlement,
 		UpstreamEndpoint:            result.UpstreamEndpoint,
 		RequestedReasoningEffort:    result.RequestedReasoningEffort,
 		OpenAIWSMode:                result.OpenAIWSMode,
@@ -91,6 +116,7 @@ func FromForwardResult(r *forwardcore.OpenAIResult) *Result {
 		return nil
 	}
 	value := &Result{
+		ResponsesSettlement:         r.ResponsesSettlement,
 		UpstreamEndpoint:            r.UpstreamEndpoint,
 		RequestedReasoningEffort:    r.RequestedReasoningEffort,
 		OpenAIWSMode:                r.OpenAIWSMode,

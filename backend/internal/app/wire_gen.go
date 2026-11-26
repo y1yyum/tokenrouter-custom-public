@@ -27,6 +27,8 @@ import (
 	postgres10 "github.com/TokenFlux/TokenRouter/internal/gateway/postgres"
 	provider5 "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	rediscache7 "github.com/TokenFlux/TokenRouter/internal/gateway/rediscache"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/session"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	httpapi4 "github.com/TokenFlux/TokenRouter/internal/identity/httpapi"
@@ -426,7 +428,9 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	opsAggregationService := provideOpsAggregation(opsRepository, store, db, redisClient, opsOptions, preAggregationSettingsService)
 	preAggregationHandler := providePreAggregationHTTP(preAggregationSettingsService, dashboardAggregationService, opsAggregationService)
 	settingsHandler := provideCreativeSettingsHTTP(public, creativeWorkerRuntime)
-	runtimeSettingsHandler := httpapi7.NewRuntimeSettingsHandler(gatewayRuntimeSettings)
+	responsecompatService := responsecompat.New(store)
+	requestpolicyService := requestpolicy.New(store)
+	runtimeSettingsHandler := httpapi7.NewRuntimeSettingsHandler(gatewayRuntimeSettings, responsecompatService, requestpolicyService)
 	adminKeySettingsHandler := httpapi4.NewAdminKeySettingsHandler(runtimeSettings)
 	httpapiRuntimeSettingsHandler := httpapi6.NewRuntimeSettingsHandler(providerRuntimeSettings)
 	panelSettings := providePanelSettings(store)
@@ -513,7 +517,8 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	geminiNativeHandler := provideGeminiNativeHTTP(appMessageHTTPBindings, digestSessionStore, textattemptRuntime, appGatewayRequestActivity, generic)
 	openAIEncryptedLineage := provideOpenAIEncryptedLineage(openAIWSStateStore, compatible)
 	responseImagePolicy := provideOpenAIImageBridgePolicy(cfg)
-	openAIResponsesExecutor := provideOpenAIResponses(openAITextExecutor, compatible, openAIEncryptedLineage, responseImagePolicy)
+	compatibilityCohorts := postgres10.NewCompatibilityCohorts(db)
+	openAIResponsesExecutor := provideOpenAIResponses(openAITextExecutor, compatible, openAIEncryptedLineage, responseImagePolicy, responsecompatService, compatibilityCohorts)
 	openAIHTTPResources := provideOpenAIHTTPResources(concurrencyService, cfg)
 	cyberBlocks := provideCyberBlocks(gatewayCache, moderationRuntimeSettings)
 	errorLogQueue := provideOpsErrorQueue(manager)
@@ -524,7 +529,7 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	unifiedTextExecutor := provideUnifiedTextExecutor(openAIResponsesExecutor, messagesExecutor, geminiExecutor, antigravityExecutor, qoderRuntime, appQoderRequestActivity, qoderRequestRefresh, userMessageQueueService, cfg, priceResolver)
 	bindings := provideOpenAIAttemptBindings(openAIResponsesExecutor, apiKeyService, openAIHTTPResources, cyberHandler, errorPassthroughService, contentModerationService, gatewayCompletionRecorders, usageRecordWorkerPool, appGatewayModelAvailability, compatible, unifiedTextExecutor, generic, fundingAdmission, subscriptionService, routePlanner, gatewayCache)
 	openaiattemptRuntime := provideOpenAITextAttemptRuntime(bindings)
-	openAITextHandler := provideOpenAITextHTTP(openAIResponsesExecutor, fundingAdmission, apiKeyService, openAIHTTPResources, cyberHandler, errorPassthroughService, contentModerationService, promptpolicyService, cfg, openaiattemptRuntime, appGatewayRequestActivity, routePlanner, gatewayCache, appMessageHTTPBindings, subscriptionService, providerStore)
+	openAITextHandler := provideOpenAITextHTTP(openAIResponsesExecutor, fundingAdmission, apiKeyService, openAIHTTPResources, cyberHandler, errorPassthroughService, contentModerationService, promptpolicyService, cfg, openaiattemptRuntime, appGatewayRequestActivity, routePlanner, gatewayCache, appMessageHTTPBindings, subscriptionService, providerStore, requestpolicyService)
 	openAITokensHandler := provideOpenAITokensHTTP(openAIAuxiliary, fundingAdmission, apiKeyService, concurrencyService, errorPassthroughService, cfg, appGatewayRequestActivity, promptpolicyService, appGatewayModelAvailability, compatible, routePlanner)
 	openAIWebSocketExecutor := provideOpenAIWebSockets(wsRuntime, cfg, openAIWSConnections, openAITextExecutor, promptpolicyService, compatible, openAIEncryptedLineage, responseImagePolicy, gatewayCache)
 	requestCredentialExecutor := provideRequestCredentialExecutor(requestCredentials)
@@ -594,7 +599,7 @@ func initializeApplication(ctx context.Context, cfg *config.Config, info BuildIn
 	httpServer := server.ProvideHTTPServer(options, engine)
 	appBstatsRuntimeReady := provideBStatsRuntime(manager, bstatsService)
 	appModelCatalogRuntimeReady := provideModelCatalogRuntime(providerService, manager)
-	appSettingsRuntimeReady := provideSettingsRuntime(manager, gatewayRuntimeSettings, forwardedSettings)
+	appSettingsRuntimeReady := provideSettingsRuntime(manager, gatewayRuntimeSettings, forwardedSettings, responsecompatService, requestpolicyService)
 	appAuthRuntimeReady := provideAuthRuntime(apiKeyService, errorPassthroughService, claudeAuthorization, openAIAuthorization, geminiAuthorization, antigravityAuthorization, qoderAuthorization, qoderTokenProvider, grokAuthorization, tlsFingerprintProfileService, tlsFingerprintRouterService, manager)
 	expiryService := provideProviderExpiry(providerStore)
 	proxyExpiryService := provideProxyExpiry(proxyStore)

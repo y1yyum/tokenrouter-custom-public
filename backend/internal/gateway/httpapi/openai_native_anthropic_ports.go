@@ -10,6 +10,7 @@ import (
 	gatewayprovider "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/provider/modelidentity"
 	forward "github.com/TokenFlux/TokenRouter/internal/gateway/provider/openaiforward"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/searchtools"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	protocolanthropic "github.com/TokenFlux/TokenRouter/internal/protocol/anthropic"
@@ -98,6 +99,9 @@ func (p *openAINativeAnthropicAdapter) FilterSearch(body []byte, model string) [
 // excess tool, message and system anchors in its defined order before native
 // execution.
 func (p *openAINativeAnthropicAdapter) CacheLimit(body []byte) []byte {
+	if p.c != nil && requestpolicy.HasClientCache(p.c.Request.Context()) {
+		return body
+	}
 	return anthropic.EnforceCacheControlLimit(body)
 }
 
@@ -182,7 +186,8 @@ func (p *openAINativeAnthropicAdapter) AdaptResponsesTools(body []byte) ([]byte,
 // request preparation, and subsequent model and protocol policies remain with
 // that runner and its adapter.
 func (p *openAINativeAnthropicAdapter) ResponsesToAnthropic(r *protocolopenai.ResponsesRequest) (*protocolanthropic.AnthropicRequest, error) {
-	return bridge.ResponsesToAnthropicRequest(r)
+	keepCache := p.c != nil && requestpolicy.HasClientCache(p.c.Request.Context())
+	return bridge.ResponsesToAnthropicRequest(r, keepCache)
 }
 
 // ChatToResponses delegates Chat conversion using model-derived conversion

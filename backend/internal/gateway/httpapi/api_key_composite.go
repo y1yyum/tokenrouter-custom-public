@@ -386,6 +386,7 @@ func RewriteCompositeRequestModel(request *http.Request, actualModel string) err
 		// before installing an unsuccessful primary-model rewrite or selecting its provider.
 		return apikey.ErrCompositeKeyPrefixRequired
 	}
+	retainParameterOriginalBody(request, body)
 	SetRequestBody(request, rewritten)
 	return nil
 }
@@ -436,6 +437,9 @@ func RewriteCompositeAdditionalModels(request *http.Request, apiKey *apikey.APIK
 			// preventing partial replacements from being installed for a selected group.
 			return apikey.ErrCompositeKeyUnsupported
 		}
+	}
+	if !bytes.Equal(body, rewritten) {
+		retainParameterOriginalBody(request, body)
 	}
 	SetRequestBody(request, rewritten)
 	return nil

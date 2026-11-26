@@ -9,6 +9,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/gateway/forward"
 	gatewayadapter "github.com/TokenFlux/TokenRouter/internal/gateway/provider"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/infra/httpclient"
 	"github.com/TokenFlux/TokenRouter/internal/ops"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/logredact"
@@ -41,8 +42,8 @@ type UpstreamTransportFailure struct {
 // activity and apply persistent transport health when configured; persistent
 // writes require a nonnil context, and this helper writes no client body.
 func (p *UpstreamTransportFailure) Handle(ctx context.Context, c *gin.Context, target *gatewayadapter.ExecutionProvider, err error, passthrough bool) error {
-	if err == nil {
-		return nil
+	if err == nil || requestpolicy.IsWireMismatch(err) {
+		return err
 	}
 	safe := logredact.SanitizeUpstreamQueries(err.Error())
 	platform, name := "", ""

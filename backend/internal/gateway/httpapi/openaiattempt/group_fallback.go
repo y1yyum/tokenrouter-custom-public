@@ -9,6 +9,7 @@ import (
 	keyhttp "github.com/TokenFlux/TokenRouter/internal/apikey/httpapi"
 	"github.com/TokenFlux/TokenRouter/internal/billing"
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/requeststate"
 	"github.com/TokenFlux/TokenRouter/internal/protocol"
 	"github.com/TokenFlux/TokenRouter/internal/routing"
@@ -56,6 +57,11 @@ type GroupFallbackPorts struct {
 func (b *responsesAttemptBridge) TryGroupFallback(cause error) (handled, retry bool) {
 	var tooLong *antigravity.PromptTooLongError
 	if !errors.As(cause, &tooLong) || b.groupFallbackUsed || b.apiKey == nil || b.apiKey.Group == nil || !b.CanAttempt() || b.c.Writer.Written() || (b.streamStarted != nil && *b.streamStarted) {
+		return false, false
+	}
+	if intent, ok := requestpolicy.FromContext(b.Context()); ok && intent.Mode == requestpolicy.ModeStrict && b.previousResponseID != "" {
+		// The response reference names state in the original provider and group.
+		// Destination admission cannot grant that group ownership of the same reference.
 		return false, false
 	}
 	target := b.apiKey.Group.FallbackGroupIDOnInvalidRequest

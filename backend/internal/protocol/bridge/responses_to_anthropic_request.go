@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+
+	"github.com/TokenFlux/TokenRouter/internal/protocol/anthropic"
 )
 
 // responses_to_anthropic_request.go converts Responses requests into Messages
@@ -23,6 +25,12 @@ import (
 // effort budgets, and selector translation prepare request fields; callers
 // still validate raw arguments and retained unknown forms.
 
+// responsesMessagePart reads cache hints only for the Messages bridge.
+type responsesMessagePart struct {
+	ResponsesContentPart                 // base Responses content fields
+	CacheControl         json.RawMessage `json:"cache_control"` // optional block cache hint
+}
+
 // ResponsesToAnthropicRequest builds Messages fields from a nonnil Responses
 // request. It delegates history filtering/pairing, copies model/stream and
 // sampling pointers, maps priority/fast service tiers to speed, and supplies
@@ -36,8 +44,10 @@ import (
 // request is not complete validation: raw argument encoding, scalar blank
 // input, retained unknown content, and downstream effort/budget policy remain
 // caller concerns.
-func ResponsesToAnthropicRequest(req *ResponsesRequest) (*AnthropicRequest, error) {
-	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input)
+// An optional true cache flag carries compatible text-block cache directives
+// into Messages. The caller checks the finished document for any lost scope.
+func ResponsesToAnthropicRequest(req *ResponsesRequest, preserveCache ...bool) (*AnthropicRequest, error) {
+	system, messages, err := convertResponsesInputToAnthropic(req.Instructions, req.Input, preserveCache...)
 	if err != nil {
 		return nil, err
 	}
@@ -144,7 +154,8 @@ func mapResponsesEffortToAnthropic(effort string) string {
 // next to results while allowing parallel groups; raw argument encode errors
 // can leave nil content because those marshal errors are discarded, so callers
 // validate argument JSON before relying on the resulting history.
-func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMessage) (json.RawMessage, []AnthropicMessage, error) {
+func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMessage, preserveCache ...bool) (json.RawMessage, []AnthropicMessage, error) {
+	keepCache := len(preserveCache) > 0 && preserveCache[0]
 	var systemParts []string
 	if strings.TrimSpace(instructions) != "" {
 		systemParts = append(systemParts, strings.TrimSpace(instructions))
@@ -222,7 +233,7 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			// before content fallback can inspect it.
 
 		case item.Role == "user":
-			content, err := convertResponsesUserToAnthropicContent(item.Content)
+			content, err := convertResponsesUserToAnthropicContent(item.Content, keepCache)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -238,7 +249,7 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			})
 
 		case item.Role == "assistant":
-			content, err := convertResponsesAssistantToAnthropicContent(item.Content)
+			content, err := convertResponsesAssistantToAnthropicContent(item.Content, keepCache)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -258,7 +269,7 @@ func convertResponsesInputToAnthropic(instructions string, inputRaw json.RawMess
 			if item.Content == nil {
 				continue
 			}
-			content, err := convertResponsesUserToAnthropicContent(item.Content)
+			content, err := convertResponsesUserToAnthropicContent(item.Content, false)
 			if err != nil {
 				return nil, nil, err
 			}
@@ -523,7 +534,7 @@ func anthropicContentIsOnlyBlankText(content json.RawMessage) bool {
 // fully filtered array become scalar empty text. Failed array decoding returns
 // raw bytes for downstream validation; image payload encoding is not verified
 // here.
-func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessage, error) {
+func convertResponsesUserToAnthropicContent(raw json.RawMessage, preserveCache bool) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.Marshal("")
 	}
@@ -533,7 +544,7 @@ func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessag
 		return json.Marshal(s)
 	}
 
-	var parts []ResponsesContentPart
+	var parts []responsesMessagePart
 	if err := json.Unmarshal(raw, &parts); err != nil {
 		// A failed typed-part decode can represent an unfamiliar content shape.
 		// Retain raw bytes for downstream validation rather than publishing guessed
@@ -547,8 +558,8 @@ func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessag
 		case "input_text", "text":
 			if strings.TrimSpace(p.Text) != "" {
 				blocks = append(blocks, AnthropicContentBlock{
-					Type: "text",
-					Text: p.Text,
+					Type: "text", Text: p.Text,
+					CacheControl: responsesTextCacheControl(p.CacheControl, preserveCache),
 				})
 			}
 		case "input_image":
@@ -572,7 +583,7 @@ func convertResponsesUserToAnthropicContent(raw json.RawMessage) (json.RawMessag
 // nonblank output_text/text array parts. Empty bytes or a fully filtered array
 // become one empty text block, which the owning history converter filters.
 // Failed array decoding retains raw bytes for downstream validation.
-func convertResponsesAssistantToAnthropicContent(raw json.RawMessage) (json.RawMessage, error) {
+func convertResponsesAssistantToAnthropicContent(raw json.RawMessage, preserveCache bool) (json.RawMessage, error) {
 	if len(raw) == 0 {
 		return json.Marshal([]AnthropicContentBlock{{Type: "text", Text: ""}})
 	}
@@ -582,7 +593,7 @@ func convertResponsesAssistantToAnthropicContent(raw json.RawMessage) (json.RawM
 		return json.Marshal([]AnthropicContentBlock{{Type: "text", Text: s}})
 	}
 
-	var parts []ResponsesContentPart
+	var parts []responsesMessagePart
 	// An unfamiliar assistant content shape cannot be filtered as typed parts.
 	// Retain its raw bytes so the caller or upstream can validate that supplied
 	// representation.
@@ -596,8 +607,8 @@ func convertResponsesAssistantToAnthropicContent(raw json.RawMessage) (json.RawM
 		case "output_text", "text":
 			if strings.TrimSpace(p.Text) != "" {
 				blocks = append(blocks, AnthropicContentBlock{
-					Type: "text",
-					Text: p.Text,
+					Type: "text", Text: p.Text,
+					CacheControl: responsesTextCacheControl(p.CacheControl, preserveCache),
 				})
 			}
 		}
@@ -610,6 +621,20 @@ func convertResponsesAssistantToAnthropicContent(raw json.RawMessage) (json.RawM
 		blocks = append(blocks, AnthropicContentBlock{Type: "text", Text: ""})
 	}
 	return json.Marshal(blocks)
+}
+
+// responsesTextCacheControl maps the shared wire spelling for a text block.
+// Unknown members are detected by the caller comparing the final directive
+// against the complete original object before the request is sent.
+func responsesTextCacheControl(raw json.RawMessage, enabled bool) *anthropic.AnthropicCacheControl {
+	if !enabled || len(raw) == 0 {
+		return nil
+	}
+	var cache *anthropic.AnthropicCacheControl
+	if err := json.Unmarshal(raw, &cache); err != nil {
+		return nil
+	}
+	return cache
 }
 
 // fromResponsesCallIDToAnthropic removes fc_ only from known toolu_/call_

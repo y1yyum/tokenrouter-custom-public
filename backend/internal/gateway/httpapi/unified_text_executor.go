@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/gin-gonic/gin"
+	"github.com/tidwall/gjson"
 
 	"github.com/TokenFlux/TokenRouter/internal/egress"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/admission"
@@ -205,6 +206,9 @@ func (e *UnifiedTextExecutor) prepare(c *gin.Context, target *gatewayadapter.Exe
 			updatedCtx = requeststate.WithRoutePlan(updatedCtx, plan.WithReasoningEffort(effectiveEffort))
 		}
 		c.Request = c.Request.WithContext(updatedCtx)
+	}
+	if err := RecheckTextParameterCandidate(c.Request.Context(), c, target, gjson.GetBytes(result, "model").String(), source, CommittedSSE(c)); err != nil {
+		return nil, nil, err
 	}
 	target, err := gatewayadapter.ProviderForProtocolAttempt(c.Request.Context(), target)
 	if err != nil {

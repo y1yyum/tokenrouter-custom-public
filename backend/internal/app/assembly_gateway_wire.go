@@ -8,6 +8,8 @@ import (
 	gatewayhttp "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
 	gatewaypg "github.com/TokenFlux/TokenRouter/internal/gateway/postgres"
 	gatewayredis "github.com/TokenFlux/TokenRouter/internal/gateway/rediscache"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/requestpolicy"
+	"github.com/TokenFlux/TokenRouter/internal/gateway/responsecompat"
 	gatewaysession "github.com/TokenFlux/TokenRouter/internal/gateway/session"
 )
 
@@ -16,7 +18,8 @@ import (
 // Text, media, and live requests reach platform execution through handlers
 // assembled around shared request activity and completion records. Persisted
 // error rules and their Redis cache join the same graph, connecting gateway
-// failure handling to administrator rule editing.
+// failure handling to administrator rule editing. The Responses compatibility
+// service owns the saved rollout policy and its local publication for matching.
 
 var (
 	// gatewayAssemblyProviders supplies gateway HTTP handlers, platform execution
@@ -61,6 +64,9 @@ var (
 		provideGatewayAdminRules,
 		provideGatewaySettings,
 		provideGatewayRuntimeReaders,
+		responsecompat.New,
+		requestpolicy.New,
+		gatewaypg.NewCompatibilityCohorts,
 		gatewayhttp.NewRuntimeSettingsHandler,
 	)
 

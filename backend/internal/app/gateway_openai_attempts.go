@@ -43,6 +43,7 @@ func provideOpenAIAttemptBindings(
 	support := &openaiattempt.Support{Rules: rules, Cyber: cyber, Submission: gatewayhttp.NewCompletionSubmission(worker, true)}
 	if resources != nil {
 		support.Concurrency = resources.Concurrency
+		support.ResponsesReadmission = resources.ResponsesReadmission
 	}
 	if keys != nil {
 		support.Quota = keys
