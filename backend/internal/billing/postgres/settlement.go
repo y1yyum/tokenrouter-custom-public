@@ -31,9 +31,12 @@ import (
 // conflicting inputs.
 //
 // Each write attempt owns a fresh SQL transaction, claims its financial
-// identity, locks the payer before subscriptions and commits funding with
-// counters and task metadata. PostgreSQL deadlocks restart the complete
-// attempt. Task allowance refunds use a savepoint so a failed refund can
+// identity and commits funding with counters and task metadata. Usage checks
+// the archive together with the payer operation. A balance-only debit locks
+// the wallet through its update, while subscription work locks the payer
+// before selecting grants. Concurrent personal balance-only calls can share
+// a wallet update through wallet_batch.go. PostgreSQL deadlocks restart
+// individual attempts. Task allowance refunds use a savepoint so a failed refund can
 // retain conservative counts while completed funding remains committable.
 // Provider threshold crossings require an outbox write on that same
 // transaction; analysis logs and later notifications have separate delivery
@@ -65,6 +68,9 @@ type SettlementStore struct {
 	// task attempt. Keep the stored map immutable after publication; each factory
 	// receives that attempt's new transaction and task reference.
 	taskProjections TaskProjectionFactories // scope-indexed transaction writer factories
+	// walletBatches coordinates concurrent eligible requests for each payer.
+	// Its zero value is ready for use by this store and must stay local to it.
+	walletBatches usageWalletBatcher // per-payer batch coordination
 }
 
 // ProviderQuotaOutbox writes a provider scheduling event on the supplied
@@ -153,8 +159,9 @@ func NewSettlementStore(sqlDB *sql.DB, calendar timezone.Calendar, outbox Provid
 }
 
 // Apply normalizes an exclusively owned usage command and applies its funding
-// effects in a store-owned SQL transaction. Nil commands return an empty
-// result; a missing database or normalized empty action key fails.
+// effects in a store-owned SQL transaction, possibly shared with concurrent
+// personal balance-only calls. Nil commands return an empty result. A missing
+// database or normalized empty action key fails.
 // Context-carried Ent transactions are independent, and SQLSTATE 40P01 permits
 // two complete retries under the caller's context.
 func (r *SettlementStore) Apply(ctx context.Context, cmd *billing.UsageBillingCommand) (_ *billing.UsageBillingApplyResult, err error) {
@@ -170,6 +177,16 @@ func (r *SettlementStore) Apply(ctx context.Context, cmd *billing.UsageBillingCo
 		return nil, billing.ErrUsageBillingRequestIDRequired
 	}
 
+	if debit := usageWalletBatchDebit(cmd); debit > 0 {
+		return r.enqueueUsageWallet(ctx, cmd, debit)
+	}
+	return r.applyUsageBillingWithRetry(ctx, cmd)
+}
+
+// applyUsageBillingWithRetry runs normalized usage through the individual
+// transaction path. This handles ineligible requests and retries a failed
+// batch as separate transactions when the batch never attempted commit.
+func (r *SettlementStore) applyUsageBillingWithRetry(ctx context.Context, cmd *billing.UsageBillingCommand) (*billing.UsageBillingApplyResult, error) {
 	// A deadlock aborts its transaction. RetryDeadlock creates at most two
 	// further complete attempts through applyOnce, while the supplied context
 	// governs their SQL and backoff.
@@ -184,11 +201,12 @@ func (r *SettlementStore) Apply(ctx context.Context, cmd *billing.UsageBillingCo
 // claim can insert a live row before discovering an archive match, so that
 // replay path leaves the attempt for deferred rollback.
 //
-// The payer lock precedes subscription locks, and funding, team/Key counters
-// and provider outbox writes precede commit. Failures return to cleanup with
-// the transaction retained. Successful commit clears that cleanup handle; a
-// commit error is reported without asserting whether the database's final
-// outcome is known.
+// The archive check and payer operation share the statement after the claim.
+// When a debit can be priced without reading subscriptions, that statement
+// obtains the payer lock by updating the wallet. Otherwise the payer lock
+// precedes subscription reads. Funding, counters, and provider outbox writes
+// must all succeed before commit. A commit error does not establish the final
+// database outcome.
 func (r *SettlementStore) applyOnce(ctx context.Context, cmd *billing.UsageBillingCommand) (_ *billing.UsageBillingApplyResult, err error) {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -206,19 +224,34 @@ func (r *SettlementStore) applyOnce(ctx context.Context, cmd *billing.UsageBilli
 	// Claim before payer or subscription changes so matching financial identities
 	// exit as replay. An archive match leaves this attempt's earlier live
 	// insertion for deferred rollback.
-	applied, err := r.claimUsageBillingKey(ctx, tx, cmd)
+	applied, err := insertUsageBillingClaim(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
 	if err != nil {
 		return nil, err
 	}
 	if !applied {
 		return &billing.UsageBillingApplyResult{Applied: false}, nil
 	}
-	if err := lockUsageBillingUser(ctx, tx, cmd.UserID); err != nil {
+	amount, needsSubscriptions, allocationErr := billing.SubscriptionAllocationRequest(cmd)
+	var walletDebit sql.NullFloat64
+	if allocationErr == nil && !needsSubscriptions && cmd.UserID > 0 {
+		if debit := usageBillingWalletCost(cmd, amount); debit > 0 {
+			// A positive cost can round to zero and still refresh the wallet timestamp.
+			walletDebit = sql.NullFloat64{Float64: billing.QuantizeUsageBillingAmount(debit), Valid: true}
+		}
+	}
+	result, err := prepareUsageBillingPayer(ctx, tx, cmd, walletDebit)
+	if err != nil {
 		return nil, err
 	}
-
-	result := &billing.UsageBillingApplyResult{Applied: true}
-	if err := r.applyUsageBillingEffects(ctx, tx, cmd, result); err != nil {
+	if !result.Applied {
+		return result, nil
+	}
+	if !walletDebit.Valid {
+		if err := r.applyUsageBillingFunding(ctx, tx, cmd, result); err != nil {
+			return nil, err
+		}
+	}
+	if err := r.applyUsageBillingCounters(ctx, tx, cmd, result); err != nil {
 		return nil, err
 	}
 
@@ -229,6 +262,60 @@ func (r *SettlementStore) applyOnce(ctx context.Context, cmd *billing.UsageBilli
 		return nil, err
 	}
 	tx = nil
+	return result, nil
+}
+
+// prepareUsageBillingPayer checks archive replay and acquires the payer row
+// lock after a successful live insert. The separate statement sees an archive
+// entry committed while the insert waited for deletion of the old live row.
+// A valid walletDebit is already quantized and means that funding needs no
+// subscription selection. Its update acquires the payer lock, and subsequent
+// counters keep that lock through commit. An archive match blocks either payer
+// operation and leaves the caller to roll back the provisional claim.
+func prepareUsageBillingPayer(ctx context.Context, tx *sql.Tx, cmd *billing.UsageBillingCommand, walletDebit sql.NullFloat64) (*billing.UsageBillingApplyResult, error) {
+	const archive = `
+		WITH archived AS (
+			SELECT request_fingerprint
+			FROM usage_billing_dedup_archive
+			WHERE request_id = $1 AND api_key_id = $2
+		)`
+	var archivedFingerprint sql.NullString
+	var balance sql.NullFloat64
+	var err error
+	if walletDebit.Valid {
+		err = tx.QueryRowContext(ctx, archive+`, debited AS (
+			UPDATE users
+			SET balance = balance - $4::numeric, updated_at = NOW()
+			WHERE id = $3 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM archived)
+			RETURNING balance
+		)
+		SELECT (SELECT request_fingerprint FROM archived), (SELECT balance FROM debited)
+		`, cmd.RequestID, cmd.APIKeyID, cmd.UserID, walletDebit.Float64).Scan(&archivedFingerprint, &balance)
+	} else {
+		err = tx.QueryRowContext(ctx, archive+`
+		SELECT (SELECT request_fingerprint FROM archived), (
+			SELECT balance FROM users
+			WHERE id = $3 AND id > 0 AND deleted_at IS NULL AND NOT EXISTS (SELECT 1 FROM archived)
+			FOR NO KEY UPDATE
+		)
+		`, cmd.RequestID, cmd.APIKeyID, cmd.UserID).Scan(&archivedFingerprint, &balance)
+	}
+	if err != nil {
+		return nil, err
+	}
+	if archivedFingerprint.Valid {
+		if err := checkUsageBillingFingerprint(archivedFingerprint.String, cmd.RequestFingerprint); err != nil {
+			return nil, err
+		}
+		return &billing.UsageBillingApplyResult{}, nil
+	}
+	if cmd.UserID > 0 && !balance.Valid {
+		return nil, billing.ErrUserNotFound
+	}
+	result := &billing.UsageBillingApplyResult{Applied: true}
+	if walletDebit.Valid {
+		recordUsageBillingWallet(result, balance.Float64, walletDebit.Float64)
+	}
 	return result, nil
 }
 
@@ -402,14 +489,6 @@ func (r *SettlementStore) resolveUsableSubscriptionForGroup(ctx context.Context,
 	return nil, billing.ErrSubscriptionNotFound
 }
 
-// claimUsageBillingKey forwards the normalized command's action key, API Key
-// and fingerprint to the transactional deduplication check. Callers interpret
-// false as replay and leave this attempt uncommitted, including a possible
-// live insert preceding an archive match.
-func (r *SettlementStore) claimUsageBillingKey(ctx context.Context, tx *sql.Tx, cmd *billing.UsageBillingCommand) (bool, error) {
-	return r.claimUsageBillingRequest(ctx, tx, cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint)
-}
-
 // claimUsageBillingRequest claims the action-key/API-Key pair in the supplied
 // transaction and reports whether funding should proceed. A duplicate live
 // pair compares trimmed fingerprints; a mismatch returns
@@ -422,6 +501,32 @@ func (r *SettlementStore) claimUsageBillingKey(ctx context.Context, tx *sql.Tx, 
 // inserted the live claim, the transaction owner rolls back replay and failure
 // attempts before publishing financial results.
 func (r *SettlementStore) claimUsageBillingRequest(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64, requestFingerprint string) (bool, error) {
+	inserted, err := insertUsageBillingClaim(ctx, tx, requestID, apiKeyID, requestFingerprint)
+	if err != nil || !inserted {
+		return false, err
+	}
+	var archivedFingerprint string
+	err = tx.QueryRowContext(ctx, `
+		SELECT request_fingerprint
+		FROM usage_billing_dedup_archive
+		WHERE request_id = $1 AND api_key_id = $2
+	`, requestID, apiKeyID).Scan(&archivedFingerprint)
+	if errors.Is(err, sql.ErrNoRows) {
+		return true, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return false, checkUsageBillingFingerprint(archivedFingerprint, requestFingerprint)
+}
+
+// insertUsageBillingClaim attempts the live identity insert and resolves an
+// insert conflict in a fresh statement. Reading both tables in one snapshot
+// lets the comparison find an identity moved by retention after the insert
+// reported a conflict. A successful insert still requires its own archive
+// check before funding, including when retention freed the live key while
+// the insert was waiting.
+func insertUsageBillingClaim(ctx context.Context, tx *sql.Tx, requestID string, apiKeyID int64, requestFingerprint string) (bool, error) {
 	// Stored fingerprints can retain surrounding whitespace through command
 	// normalization. Apply trimmed equality when either table already holds this
 	// identity, so those retained characters do not create a replay conflict.
@@ -433,41 +538,33 @@ func (r *SettlementStore) claimUsageBillingRequest(ctx context.Context, tx *sql.
 		RETURNING id
 	`, requestID, apiKeyID, requestFingerprint).Scan(&id)
 	if errors.Is(err, sql.ErrNoRows) {
-		var existingFingerprint string
+		var existingFingerprint sql.NullString
 		if err := tx.QueryRowContext(ctx, `
-			SELECT request_fingerprint
-			FROM usage_billing_dedup
-			WHERE request_id = $1 AND api_key_id = $2
+			SELECT COALESCE((
+				SELECT request_fingerprint FROM usage_billing_dedup
+				WHERE request_id = $1 AND api_key_id = $2
+			), (
+				SELECT request_fingerprint FROM usage_billing_dedup_archive
+				WHERE request_id = $1 AND api_key_id = $2
+			))
 		`, requestID, apiKeyID).Scan(&existingFingerprint); err != nil {
 			return false, err
 		}
-		if strings.TrimSpace(existingFingerprint) != strings.TrimSpace(requestFingerprint) {
-			return false, billing.ErrUsageBillingRequestConflict
+		if !existingFingerprint.Valid {
+			return false, sql.ErrNoRows
 		}
-		return false, nil
+		return false, checkUsageBillingFingerprint(existingFingerprint.String, requestFingerprint)
 	}
-	if err != nil {
-		return false, err
+	return err == nil, err
+}
+
+// checkUsageBillingFingerprint compares stored and supplied identity digests
+// under the same whitespace rules for live and archived claims.
+func checkUsageBillingFingerprint(stored, supplied string) error {
+	if strings.TrimSpace(stored) != strings.TrimSpace(supplied) {
+		return billing.ErrUsageBillingRequestConflict
 	}
-	// The live insert can succeed for an aged-out action. Compare its archive
-	// identity before funding, leaving the owner to roll back the inserted row on
-	// replay or conflict.
-	var archivedFingerprint string
-	err = tx.QueryRowContext(ctx, `
-		SELECT request_fingerprint
-		FROM usage_billing_dedup_archive
-		WHERE request_id = $1 AND api_key_id = $2
-	`, requestID, apiKeyID).Scan(&archivedFingerprint)
-	if err == nil {
-		if strings.TrimSpace(archivedFingerprint) != strings.TrimSpace(requestFingerprint) {
-			return false, billing.ErrUsageBillingRequestConflict
-		}
-		return false, nil
-	}
-	if !errors.Is(err, sql.ErrNoRows) {
-		return false, err
-	}
-	return true, nil
+	return nil
 }
 
 // Reserve applies a task's subscription-first reservation, wallet hold, task
@@ -1066,20 +1163,14 @@ func chargeTaskAPIKey(ctx context.Context, tx *sql.Tx, apiKeyID int64, amount fl
 	return err
 }
 
-// applyUsageBillingEffects allocates completed usage to locked subscriptions,
+// applyUsageBillingFunding allocates completed usage to locked subscriptions,
 // then deducts uncovered wallet cost even when the wallet becomes negative.
 // Base-priced commands convert uncovered base at the balance rate; legacy
 // commands use the uncovered billable amount directly. The returned
 // allocations record actual subscription charges and the wallet's quantized
-// deduction.
-//
-// Team member totals use the combined actual charge. Positive Key quota and
-// rolling-cost fields enable their writes, with base-priced commands replacing
-// those amounts by the combined charge. Positive provider cost is counted for
-// API Key and Bedrock provider types. All writes and any threshold outbox
-// event use the caller's transaction, which recovers earlier effects after a
-// later error.
-func (r *SettlementStore) applyUsageBillingEffects(ctx context.Context, tx *sql.Tx, cmd *billing.UsageBillingCommand, result *billing.UsageBillingApplyResult) error {
+// deduction. The caller already holds the positive payer's row lock and rolls
+// back any subscription changes if the debit or a later counter fails.
+func (r *SettlementStore) applyUsageBillingFunding(ctx context.Context, tx *sql.Tx, cmd *billing.UsageBillingCommand, result *billing.UsageBillingApplyResult) error {
 	remainingAmount, subscriptionAmount, allocations, err := allocateUsageBillingSubscriptions(ctx, tx, cmd, r.calendar.Now())
 	if err != nil {
 		return err
@@ -1090,35 +1181,31 @@ func (r *SettlementStore) applyUsageBillingEffects(ctx context.Context, tx *sql.
 	// Completed upstream usage needs a full monetary settlement. The planner caps
 	// subscription counters, and uncovered base uses the wallet rate even when
 	// the payer's available balance becomes debt.
-	balanceAmount := remainingAmount
-	if usageBillingUsesBaseAmount(cmd) {
-		balanceAmount = remainingAmount * usageBillingNonNegativeRate(cmd.BalanceRateMultiplier)
-	}
+	balanceAmount := usageBillingWalletCost(cmd, remainingAmount)
 	if balanceAmount > 0 {
 		newBalance, deductedAmount, err := deductUsageBillingBalance(ctx, tx, cmd.UserID, balanceAmount)
 		if err != nil {
 			return err
 		}
-		result.BalanceAmountUSD = deductedAmount
-		if deductedAmount > 0 {
-			result.NewBalance = &newBalance
-			result.BillingAllocations = append(result.BillingAllocations, billing.BillingAllocation{
-				Type:      billing.BillingAllocationTypeBalance,
-				AmountUSD: deductedAmount,
-			})
-		}
+		recordUsageBillingWallet(result, newBalance, deductedAmount)
 	}
+	return nil
+}
 
+// applyUsageBillingCounters records team member, Key and provider effects
+// from completed funding. Team member totals use the combined actual charge.
+// Positive Key quota and rolling-cost fields enable their writes, with
+// base-priced commands using the combined charge for both. Positive provider
+// cost is counted for API Key and Bedrock provider types. The caller owns the
+// transaction and rolls back funding and counters together after a failure.
+func (r *SettlementStore) applyUsageBillingCounters(ctx context.Context, tx *sql.Tx, cmd *billing.UsageBillingCommand, result *billing.UsageBillingApplyResult) error {
 	billableAmount := result.SubscriptionAmountUSD + result.BalanceAmountUSD
 	if cmd.TeamID != nil && cmd.ActorUserID > 0 && cmd.ActorUserID != cmd.UserID {
 		if err := r.incrementUsageBillingTeamMember(ctx, tx, *cmd.TeamID, cmd.ActorUserID, billableAmount, time.Now()); err != nil {
 			return err
 		}
 	}
-	if usageBillingUsesBaseAmount(cmd) && cmd.BaseAmountUSD > 0 {
-		effectiveRate := billableAmount / cmd.BaseAmountUSD
-		result.EffectiveRateMultiplier = &effectiveRate
-	}
+	recordUsageBillingEffectiveRate(cmd, result, billableAmount)
 	if cmd.APIKeyQuotaCost > 0 {
 		quotaCost := cmd.APIKeyQuotaCost
 		if usageBillingUsesBaseAmount(cmd) {
@@ -1150,6 +1237,39 @@ func (r *SettlementStore) applyUsageBillingEffects(ctx context.Context, tx *sql.
 	}
 
 	return nil
+}
+
+// recordUsageBillingEffectiveRate reports the actual charge divided by a
+// positive base. Legacy and nonpositive or NaN base amounts leave the rate
+// absent, using the same basis test as the allocation planner.
+func recordUsageBillingEffectiveRate(cmd *billing.UsageBillingCommand, result *billing.UsageBillingApplyResult, billableAmount float64) {
+	if usageBillingUsesBaseAmount(cmd) {
+		effectiveRate := billableAmount / cmd.BaseAmountUSD
+		result.EffectiveRateMultiplier = &effectiveRate
+	}
+}
+
+// usageBillingWalletCost converts uncovered base usage at the wallet rate or
+// preserves the uncovered monetary amount for legacy commands.
+func usageBillingWalletCost(cmd *billing.UsageBillingCommand, remaining float64) float64 {
+	if usageBillingUsesBaseAmount(cmd) {
+		return remaining * usageBillingNonNegativeRate(cmd.BalanceRateMultiplier)
+	}
+	return remaining
+}
+
+// recordUsageBillingWallet adds the quantized debit to the result and exposes
+// the post-update balance and wallet allocation only for a positive charge.
+// The caller publishes this observation after commit.
+func recordUsageBillingWallet(result *billing.UsageBillingApplyResult, newBalance, deductedAmount float64) {
+	result.BalanceAmountUSD = deductedAmount
+	if deductedAmount > 0 {
+		result.NewBalance = &newBalance
+		result.BillingAllocations = append(result.BillingAllocations, billing.BillingAllocation{
+			Type:      billing.BillingAllocationTypeBalance,
+			AmountUSD: deductedAmount,
+		})
+	}
 }
 
 // incrementUsageBillingTeamMember counts positive completed usage in an active
@@ -1547,9 +1667,9 @@ func nullTimePtr(value *time.Time) sql.NullTime {
 // debt is permitted, and a missing payer returns ErrUserNotFound. The caller
 // owns the transaction and locks the payer before subscription work.
 //
-// The CTE retains FOR NO KEY UPDATE so a later wallet write does not upgrade
-// to a lock conflicting with usage-log foreign-key checks. Amounts use
-// billing's decimal eight-place rounding before NUMERIC arithmetic.
+// The UPDATE changes only non-key columns, which keeps the wallet write
+// compatible with usage-log foreign-key checks. Amounts use billing's decimal
+// eight-place rounding before NUMERIC arithmetic.
 // ScanSingleRow closes its result before subsequent SQL and reports cleanup
 // errors alongside row failures.
 func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, amount float64) (float64, float64, error) {
@@ -1558,22 +1678,10 @@ func deductUsageBillingBalance(ctx context.Context, tx *sql.Tx, userID int64, am
 	// rounding the same raw half tie.
 	amount = billing.QuantizeUsageBillingAmount(amount)
 	const query = `
-		WITH locked_user AS (
-			SELECT id, balance
-			FROM users
-			WHERE id = $2
-				AND deleted_at IS NULL
-				FOR NO KEY UPDATE
-		), updated AS (
-			UPDATE users
-			SET balance = locked_user.balance - $1,
-				updated_at = NOW()
-			FROM locked_user
-			WHERE users.id = locked_user.id
-			RETURNING users.balance
-		)
-		SELECT updated.balance, $1::numeric AS deducted_amount
-		FROM updated
+		UPDATE users
+		SET balance = balance - $1::numeric, updated_at = NOW()
+		WHERE id = $2 AND deleted_at IS NULL
+		RETURNING balance, $1::numeric AS deducted_amount
 	`
 
 	var (

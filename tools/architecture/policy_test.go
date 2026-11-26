@@ -21,6 +21,9 @@ func TestDependencyBoundaries(t *testing.T) {
 		imported string // candidate dependency import path
 		allowed  bool   // expected dependency admission result
 	}{
+		{"internal/billing/postgres/wallet_batch.go", "github.com/shopspring/decimal", true},
+		{"internal/billing/postgres/settlement.go", "github.com/shopspring/decimal", false},
+		{"internal/billing/postgres/wallet_batch.go", "github.com/shopspring/decimal/other", false},
 		{"migrations/platform_independent_pricing_integration_test.go", modulePath + "/internal/billing/pricing", false},
 		{"migrations/helpers_test.go", modulePath + "/internal/billing/pricing", false},
 		{"migrations/pricing_merge_test.go", modulePath + "/internal/billing/pricing", false},

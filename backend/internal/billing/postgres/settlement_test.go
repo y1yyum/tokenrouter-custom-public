@@ -33,13 +33,14 @@ const (
 	releaseBatchImageHoldSQL = `(?s)UPDATE users\s+SET balance = balance \+ \$1,\s+frozen_balance = COALESCE\(frozen_balance, 0\) - \$1,\s+updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL AND COALESCE\(frozen_balance, 0\) >= \$1\s+RETURNING balance, frozen_balance`
 	userExistsForBillingSQL  = `(?s)SELECT 1\s+FROM users\s+WHERE id = \$1 AND deleted_at IS NULL`
 
-	// Usage SQL patterns recognize action claiming, archived identities, payer
-	// locking, decimal wallet deduction and Key quota addition. Deadlock and
-	// rounding tests use them to check the ordered calls.
+	// Usage SQL patterns distinguish identity claims and replays, payer locking,
+	// combined archive and wallet updates, and separate subscriber wallet and Key writes.
 	usageBillingClaimSQL         = `(?s)INSERT INTO usage_billing_dedup.*ON CONFLICT.*RETURNING id`
-	usageBillingArchiveSQL       = `(?s)SELECT request_fingerprint.*FROM usage_billing_dedup_archive`
+	usageBillingReplaySQL        = `(?s)SELECT COALESCE.*FROM usage_billing_dedup\s+WHERE.*FROM usage_billing_dedup_archive`
+	usageBillingArchiveLockSQL   = `(?s)WITH archived AS.*FROM usage_billing_dedup_archive.*FROM users.*NOT EXISTS \(SELECT 1 FROM archived\)\s+FOR NO KEY UPDATE`
+	usageBillingArchiveDebitSQL  = `(?s)WITH archived AS.*FROM usage_billing_dedup_archive.*UPDATE users\s+SET balance = balance - \$4::numeric.*NOT EXISTS \(SELECT 1 FROM archived\).*SELECT balance FROM debited`
 	usageBillingUserLockSQL      = `(?s)SELECT id\s+FROM users\s+WHERE id = \$1 AND deleted_at IS NULL\s+FOR NO KEY UPDATE`
-	usageBillingBalanceDeductSQL = `(?s)WITH locked_user AS.*FOR NO KEY UPDATE.*UPDATE users.*RETURNING users.balance`
+	usageBillingBalanceDeductSQL = `(?s)^UPDATE users\s+SET balance = balance - \$1::numeric, updated_at = NOW\(\)\s+WHERE id = \$2 AND deleted_at IS NULL\s+RETURNING balance, \$1::numeric AS deducted_amount`
 	usageBillingAPIKeyQuotaSQL   = `(?s)UPDATE api_keys.*quota_used = quota_used \+ \$1.*RETURNING quota > 0`
 )
 
@@ -281,13 +282,13 @@ func TestApplyUsageBillingEffects_StrictSubscriptionChargesOverflowToBalance(t *
 	mock.ExpectExec(`(?s)UPDATE user_subscriptions\s+SET.*WHERE id = \$7`).
 		WithArgs(sqlmock.AnyArg(), sqlmock.AnyArg(), sqlmock.AnyArg(), 1.0, 1.0, 1.0, preferredID).
 		WillReturnResult(sqlmock.NewResult(0, 1))
-	mock.ExpectQuery(`(?s)WITH locked_user AS \(.*SELECT updated.balance, \$1::numeric AS deducted_amount`).
+	mock.ExpectQuery(usageBillingBalanceDeductSQL).
 		WithArgs(1.2, int64(42)).
 		WillReturnRows(sqlmock.NewRows([]string{"balance", "deducted_amount"}).AddRow(-1.2, 1.2))
 	mock.ExpectCommit()
 
 	result := &billing.UsageBillingApplyResult{}
-	err = (&SettlementStore{}).applyUsageBillingEffects(ctx, tx, &billing.UsageBillingCommand{
+	cmd := &billing.UsageBillingCommand{
 		UserID:                          42,
 		BillableAmountUSD:               0.5,
 		BaseAmountUSD:                   1,
@@ -296,9 +297,11 @@ func TestApplyUsageBillingEffects_StrictSubscriptionChargesOverflowToBalance(t *
 		BalanceRateMultiplier:           2,
 		APIKeyBillingMode:               billing.APIKeyBillingModeSubscription,
 		PreferredSubscriptionID:         &preferredID,
-	}, result)
+	}
 
-	require.NoError(t, err)
+	store := &SettlementStore{}
+	require.NoError(t, store.applyUsageBillingFunding(ctx, tx, cmd, result))
+	require.NoError(t, store.applyUsageBillingCounters(ctx, tx, cmd, result))
 	// Compare floating allocations and effective rate within 1e-6, while the
 	// selected subscription ID retains its exact assertion.
 	require.InDelta(t, 0.2, result.SubscriptionAmountUSD, 0.000001)
@@ -350,7 +353,7 @@ func TestApplyUsageBillingEffects_StrictSubscriptionWithoutGroupFiltersRestricte
 		}))
 	mock.ExpectRollback()
 
-	err = (&SettlementStore{}).applyUsageBillingEffects(ctx, tx, &billing.UsageBillingCommand{
+	err = (&SettlementStore{}).applyUsageBillingFunding(ctx, tx, &billing.UsageBillingCommand{
 		UserID:                  42,
 		BillableAmountUSD:       1,
 		APIKeyBillingMode:       billing.APIKeyBillingModeSubscription,
@@ -654,16 +657,13 @@ func TestUsageBillingRepositoryApply_DeadlockRestartsWholeTransaction(t *testing
 		mock.ExpectQuery(usageBillingClaimSQL).
 			WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.RequestFingerprint).
 			WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(int64(attempt)))
-		mock.ExpectQuery(usageBillingArchiveSQL).
-			WithArgs(cmd.RequestID, cmd.APIKeyID).
-			WillReturnError(sql.ErrNoRows)
-		userLock := mock.ExpectQuery(usageBillingUserLockSQL).WithArgs(cmd.UserID)
+		userLock := mock.ExpectQuery(usageBillingArchiveLockSQL).WithArgs(cmd.RequestID, cmd.APIKeyID, cmd.UserID)
 		if attempt < 3 {
 			userLock.WillReturnError(&pq.Error{Code: "40P01"})
 			mock.ExpectRollback()
 			continue
 		}
-		userLock.WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(cmd.UserID))
+		userLock.WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint", "balance"}).AddRow(nil, 9.0))
 		mock.ExpectCommit()
 	}
 
@@ -674,6 +674,75 @@ func TestUsageBillingRepositoryApply_DeadlockRestartsWholeTransaction(t *testing
 	require.NotNil(t, result)
 	require.True(t, result.Applied)
 	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUsageBillingRepositoryApply_BalanceOnly uses two data statements for a
+// personal wallet charge. It checks the rounded amount, returned wallet debt
+// and effective rate, with the result published only after the required commit.
+func TestUsageBillingRepositoryApply_BalanceOnly(t *testing.T) {
+	db, mock, err := sqlmock.New()
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = db.Close() })
+	cmd := &billing.UsageBillingCommand{
+		RequestID: "wallet", APIKeyID: 7, RequestFingerprint: "fingerprint", UserID: 42,
+		APIKeyBillingMode: billing.APIKeyBillingModeBalance,
+		BaseAmountUSD:     1, BalanceRateMultiplier: 0.000078125,
+	}
+	const debit = 0.00007813
+	mock.ExpectBegin()
+	mock.ExpectQuery(usageBillingClaimSQL).WithArgs("wallet", int64(7), "fingerprint").
+		WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+	mock.ExpectQuery(usageBillingArchiveDebitSQL).WithArgs("wallet", int64(7), int64(42), debit).
+		WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint", "balance"}).AddRow(nil, -debit))
+	mock.ExpectCommit()
+
+	result, err := (&SettlementStore{db: db}).Apply(context.Background(), cmd)
+	require.NoError(t, err)
+	require.True(t, result.Applied)
+	require.Equal(t, debit, result.BalanceAmountUSD)
+	require.Equal(t, -debit, *result.NewBalance)
+	require.Equal(t, debit, *result.EffectiveRateMultiplier)
+	require.Equal(t, []billing.BillingAllocation{{Type: billing.BillingAllocationTypeBalance, AmountUSD: debit}}, result.BillingAllocations)
+	require.NoError(t, mock.ExpectationsWereMet())
+}
+
+// TestUsageBillingRepositoryApply_IdentityReplay covers matching and conflicting
+// fingerprints after a live conflict or a provisional insert followed by an
+// archive hit. Each case must roll back without publishing a wallet result.
+func TestUsageBillingRepositoryApply_IdentityReplay(t *testing.T) {
+	for _, archived := range []bool{false, true} {
+		for _, stored := range []string{"\tfingerprint  ", "other"} {
+			db, mock, err := sqlmock.New()
+			require.NoError(t, err)
+			t.Cleanup(func() { _ = db.Close() })
+			cmd := &billing.UsageBillingCommand{
+				RequestID: "wallet", APIKeyID: 7, RequestFingerprint: "fingerprint", UserID: 42,
+				APIKeyBillingMode: billing.APIKeyBillingModeBalance, BillableAmountUSD: 1,
+			}
+			mock.ExpectBegin()
+			claim := mock.ExpectQuery(usageBillingClaimSQL).WithArgs("wallet", int64(7), "fingerprint")
+			if archived {
+				claim.WillReturnRows(sqlmock.NewRows([]string{"id"}).AddRow(1))
+				mock.ExpectQuery(usageBillingArchiveDebitSQL).WithArgs("wallet", int64(7), int64(42), 1.0).
+					WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint", "balance"}).AddRow(stored, nil))
+			} else {
+				claim.WillReturnRows(sqlmock.NewRows([]string{"id"}))
+				mock.ExpectQuery(usageBillingReplaySQL).WithArgs("wallet", int64(7)).
+					WillReturnRows(sqlmock.NewRows([]string{"request_fingerprint"}).AddRow(stored))
+			}
+			mock.ExpectRollback()
+
+			result, err := (&SettlementStore{db: db}).Apply(context.Background(), cmd)
+			if stored == "other" {
+				require.ErrorIs(t, err, billing.ErrUsageBillingRequestConflict)
+				require.Nil(t, result)
+			} else {
+				require.NoError(t, err)
+				require.Equal(t, &billing.UsageBillingApplyResult{}, result)
+			}
+			require.NoError(t, mock.ExpectationsWereMet())
+		}
+	}
 }
 
 // TestLockUsageBillingUser_ReturnsUserNotFound makes a positive payer's
@@ -707,12 +776,10 @@ func TestLockUsageBillingUser_ReturnsUserNotFound(t *testing.T) {
 	require.NoError(t, mock.ExpectationsWereMet())
 }
 
-// TestDeductUsageBillingBalance_KeepsForeignKeyCompatibleUserLock matches the
-// deduction CTE containing FOR NO KEY UPDATE. A 1.25-dollar charge must return
-// the supplied 8.75 balance and 1.25 deduction; these SQL expectations
-// establish the lock clause rather than running a concurrent foreign-key
-// scenario.
-func TestDeductUsageBillingBalance_KeepsForeignKeyCompatibleUserLock(t *testing.T) {
+// TestDeductUsageBillingBalance_UpdatesWalletDirectly requires an arithmetic
+// UPDATE of only non-key columns. The result includes both the post-update
+// wallet balance and charged amount from that statement.
+func TestDeductUsageBillingBalance_UpdatesWalletDirectly(t *testing.T) {
 	db, mock, err := sqlmock.New()
 	require.NoError(t, err)
 	// Close this mock after the lock-clause match, deduction result and owner
@@ -736,9 +803,8 @@ func TestDeductUsageBillingBalance_KeepsForeignKeyCompatibleUserLock(t *testing.
 	// independently of the deduction SQL's exact supplied parameters.
 	require.InDelta(t, 8.75, newBalance, 0.000001)
 	require.InDelta(t, 1.25, deductedAmount, 0.000001)
-	// Close this caller-owned statement fixture with rollback after reading its
-	// mocked numeric result. The SQL regex checks lock compatibility while no
-	// concurrent database workload runs here.
+	// Roll back this caller-owned statement fixture after verifying the values
+	// returned by its direct wallet update.
 	require.NoError(t, tx.Rollback())
 	require.NoError(t, mock.ExpectationsWereMet())
 }
@@ -971,7 +1037,7 @@ func TestSettlementStore_UsesConfiguredCalendarForDailyRollover(t *testing.T) {
 
 	groupID := int64(7)
 	applyResult := &billing.UsageBillingApplyResult{}
-	err = store.applyUsageBillingEffects(ctx, tx, &billing.UsageBillingCommand{
+	err = store.applyUsageBillingFunding(ctx, tx, &billing.UsageBillingCommand{
 		UserID:                  42,
 		GroupID:                 &groupID,
 		BillableAmountUSD:       1.5,

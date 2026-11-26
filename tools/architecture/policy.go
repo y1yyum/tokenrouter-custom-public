@@ -254,6 +254,11 @@ func rulesFor(filename, standardLibrary string) []*dependencyRule {
 	if filename == "tests/integration/mcp/management_authorization_scenario_test.go" {
 		external = append(external, expression("github.com/modelcontextprotocol/go-sdk/mcp"))
 	}
+	// The wallet batch adapter sums quantized debits and reads PostgreSQL NUMERIC
+	// balances with the same decimal library used by the billing domain.
+	if filename == "internal/billing/postgres/wallet_batch.go" {
+		external = append(external, expression("github.com/shopspring/decimal"))
+	}
 	rules := []*dependencyRule{{ShouldOnlyDependsOn: &dependencies{
 		Internal: []string{"^" + regexp.QuoteMeta(modulePath) + "(/|$)"},
 		External: closed(external), Standard: standard,
