@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/testutil/assertion"
 )
 
 // TestLocalRoots routes archive operations through internal and external directory
@@ -18,7 +20,7 @@ func TestLocalRoots(t *testing.T) {
 	root, outside := t.TempDir(), t.TempDir()
 	s := NewLocalBackupStore(root)
 	require.NoError(t, os.WriteFile(filepath.Join(outside, "fixture"), []byte("outside"), 0o600))
-	require.NoError(t, os.Symlink(outside, filepath.Join(root, "outside")))
+	assertion.Symlink(t, outside, filepath.Join(root, "outside"))
 	_, err := s.Download(context.Background(), "outside/fixture")
 	require.Error(t, err)
 	_, err = s.Upload(context.Background(), "outside/new", bytes.NewBufferString("escaped"), "")
@@ -28,7 +30,7 @@ func TestLocalRoots(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, "outside", string(data))
 	require.NoError(t, os.Mkdir(filepath.Join(root, "inside"), 0o700))
-	require.NoError(t, os.Symlink(filepath.Join(root, "inside"), filepath.Join(root, "alias")))
+	assertion.Symlink(t, filepath.Join(root, "inside"), filepath.Join(root, "alias"))
 	_, err = s.Upload(context.Background(), "alias/new", bytes.NewBufferString("safe"), "")
 	require.NoError(t, err)
 	body, err := s.Download(context.Background(), "alias/new")
@@ -53,7 +55,7 @@ func TestPathReplacement(t *testing.T) {
 	// Change the directory after validation but keep using the original root handle,
 	// exercising the gap between metadata checks and the filesystem operation itself.
 	require.NoError(t, os.Rename(filepath.Join(base, "dir"), filepath.Join(base, "original")))
-	require.NoError(t, os.Symlink(outside, filepath.Join(base, "dir")))
+	assertion.Symlink(t, outside, filepath.Join(base, "dir"))
 	file, err := root.Create(relative)
 	if file != nil {
 		// Close any unexpectedly returned handle before checking the rejection assertion,
@@ -72,7 +74,7 @@ func TestDeleteInnerLinkPreservesTarget(t *testing.T) {
 	base := t.TempDir()
 	s := NewLocalBackupStore(base)
 	require.NoError(t, os.WriteFile(filepath.Join(base, "target"), []byte("kept"), 0o600))
-	require.NoError(t, os.Symlink(filepath.Join(base, "target"), filepath.Join(base, "link")))
+	assertion.Symlink(t, filepath.Join(base, "target"), filepath.Join(base, "link"))
 	require.NoError(t, s.Delete(context.Background(), "link"))
 	data, err := os.ReadFile(filepath.Join(base, "target"))
 	require.NoError(t, err)

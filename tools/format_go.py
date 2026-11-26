@@ -5,6 +5,7 @@ import argparse
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 import sys
 
@@ -62,7 +63,8 @@ def main() -> int:
         return 0
 
     # 版本不符时在改写任何文件之前退出。
-    lint = ["bash", str(root / "tools/golangci-lint.sh")]
+    # Resolve Bash on PATH before Windows can select its system WSL launcher.
+    lint = [shutil.which("bash") or "bash", (root / "tools/golangci-lint.sh").as_posix()]
     result = subprocess.run([*lint, "version", "--short"], cwd=root, check=False, stdout=subprocess.DEVNULL)
     if result.returncode != 0:
         return result.returncode

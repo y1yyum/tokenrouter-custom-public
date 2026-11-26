@@ -5,22 +5,29 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/require"
+
+	"github.com/TokenFlux/TokenRouter/internal/testutil/assertion"
 )
 
 // TestUpgradeConfigFilePreservesBackup exercises durable migration and a second load.
-// It protects exact original backup bytes, private backup permissions, source mode,
+// It protects exact original backup bytes, private POSIX backup permissions, source mode,
 // comment retention, and the absence of writes for current configuration files.
 func TestUpgradeConfigFilePreservesBackup(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config.yaml")
 	original := []byte("# deployment\ngateway:\n  # request limit\n  max_body_size: 2048 # bytes\ndatabase:\n  password: old\n")
 	require.NoError(t, os.WriteFile(file, original, 0o640))
+	originalInfo, err := os.Stat(file)
+	require.NoError(t, err)
 	env := upgradeEnvironment{LookupEnv: func(name string) (string, bool) {
 		if name == "DATABASE_PASSWORD" {
 			return "private-secret", true
@@ -41,10 +48,14 @@ func TestUpgradeConfigFilePreservesBackup(t *testing.T) {
 	require.Equal(t, original, backup)
 	info, err := os.Stat(file)
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+	require.Equal(t, originalInfo.Mode().Perm(), info.Mode().Perm())
 	backupInfo, err := os.Stat(file + ".v1.bak")
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), backupInfo.Mode().Perm())
+	// Windows reports the read-only attribute through Go mode bits. Only POSIX
+	// mode bits distinguish a private backup from other writable regular files.
+	if runtime.GOOS != "windows" {
+		require.Equal(t, os.FileMode(0o600), backupInfo.Mode().Perm())
+	}
 	_, err = upgradeConfigFile(file, true, env)
 	require.NoError(t, err)
 	after, err := os.Stat(file)
@@ -154,14 +165,31 @@ func TestConfigWriteErrorClassifiesPermissions(t *testing.T) {
 // sentinel, allowing an operator to produce an offline copy before replacement.
 func TestUpgradeReadOnlyDirectoryFailsBeforeReplacement(t *testing.T) {
 	if os.Getuid() == 0 {
-		t.Skip("root can bypass filesystem mode restrictions; read-only mounts are covered by deployment verification")
+		t.Skip("root can bypass POSIX directory permissions")
 	}
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	original := []byte("server:\n  port: 8081\n")
 	require.NoError(t, os.WriteFile(file, original, 0o600))
-	require.NoError(t, os.Chmod(dir, 0o500))
-	t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
+	if runtime.GOOS == "windows" {
+		// Deny file creation only on this temporary directory. Existing files stay
+		// readable, so the loader can inspect the legacy bytes before backup fails.
+		account, err := user.Current()
+		require.NoError(t, err)
+		sid := "*" + account.Uid
+		const acl = "icacls.exe"
+		output, err := exec.CommandContext(t.Context(), acl, dir, "/deny", sid+":(WD)").CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		t.Cleanup(func() {
+			// The test context is canceled before cleanup. Restore directory access
+			// before TempDir removes the fixture and reports any remaining open handles.
+			output, err := exec.Command(acl, dir, "/remove:d", sid).CombinedOutput()
+			require.NoError(t, err, "%s", output)
+		})
+	} else {
+		require.NoError(t, os.Chmod(dir, 0o500))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
+	}
 	_, err := upgradeConfigFile(file, true, upgradeEnvironment{})
 	require.ErrorIs(t, err, ErrConfigNotWritable)
 	after, readErr := os.ReadFile(file)
@@ -277,7 +305,9 @@ func TestUpgradePreservesConfigSymlink(t *testing.T) {
 			file := filepath.Join(dir, "config.yaml")
 			raw := []byte("server:\n  port: 9090\n")
 			require.NoError(t, os.WriteFile(target, raw, 0o640))
-			require.NoError(t, os.Symlink("managed/runtime.yaml", file))
+			originalInfo, err := os.Stat(target)
+			require.NoError(t, err)
+			assertion.Symlink(t, "managed/runtime.yaml", file)
 			env := upgradeEnvironment{}
 			if fallback {
 				resolved, err := filepath.EvalSymlinks(target)
@@ -288,14 +318,14 @@ func TestUpgradePreservesConfigSymlink(t *testing.T) {
 					return syscall.EBUSY
 				}
 			}
-			_, err := upgradeConfigFile(file, true, env)
+			_, err = upgradeConfigFile(file, true, env)
 			require.NoError(t, err)
 			link, err := os.Readlink(file)
 			require.NoError(t, err)
-			require.Equal(t, "managed/runtime.yaml", link)
+			require.Equal(t, filepath.Join("managed", "runtime.yaml"), link)
 			info, err := os.Stat(target)
 			require.NoError(t, err)
-			require.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+			require.Equal(t, originalInfo.Mode().Perm(), info.Mode().Perm())
 			backup, err := os.ReadFile(file + ".v1.bak")
 			require.NoError(t, err)
 			require.Equal(t, raw, backup)
@@ -316,7 +346,7 @@ func TestUpgradePreservesConfigSymlink(t *testing.T) {
 func TestWriteConfigFileRejectsDanglingSymlink(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.Symlink("missing.yaml", file))
+	assertion.Symlink(t, "missing.yaml", file)
 	require.ErrorIs(t, WriteConfigFile(file, []byte("config_version: 2\n")), os.ErrNotExist)
 	link, err := os.Readlink(file)
 	require.NoError(t, err)
@@ -328,24 +358,34 @@ func TestWriteConfigFileRejectsDanglingSymlink(t *testing.T) {
 // A retry with the same PID must succeed without reusing, following, or deleting
 // either the stale bytes or a preexisting temporary symlink.
 func TestUpgradeIgnoresStaleTemporaryFiles(t *testing.T) {
-	dir := t.TempDir()
-	file := filepath.Join(dir, "config.yaml")
-	require.NoError(t, os.WriteFile(file, []byte("server: {port: 9090}\n"), 0o600))
-	stale := filepath.Join(dir, fmt.Sprintf(".config.yaml.tmp-%d", os.Getpid()))
-	require.NoError(t, os.WriteFile(stale, []byte("interrupted write"), 0o600))
-	link := filepath.Join(dir, ".config.yaml.tmp-preexisting")
-	require.NoError(t, os.Symlink(filepath.Base(stale), link))
-	_, err := upgradeConfigFile(file, true, upgradeEnvironment{})
-	require.NoError(t, err)
-	raw, err := os.ReadFile(stale)
-	require.NoError(t, err)
-	require.Equal(t, "interrupted write", string(raw))
-	_, err = os.Readlink(link)
-	require.NoError(t, err)
-	temps, err := filepath.Glob(filepath.Join(dir, ".config.yaml.tmp-*"))
-	require.NoError(t, err)
-	require.ElementsMatch(t, []string{stale, link}, temps)
-	loaded, err := loadFrom(file, true, upgradeEnvironment{}, true)
-	require.NoError(t, err)
-	require.Equal(t, 9090, loaded.Server.Port)
+	for _, withLink := range []bool{false, true} {
+		t.Run(fmt.Sprintf("symlink_%t", withLink), func(t *testing.T) {
+			dir := t.TempDir()
+			file := filepath.Join(dir, "config.yaml")
+			require.NoError(t, os.WriteFile(file, []byte("server: {port: 9090}\n"), 0o600))
+			stale := filepath.Join(dir, fmt.Sprintf(".config.yaml.tmp-%d", os.Getpid()))
+			require.NoError(t, os.WriteFile(stale, []byte("interrupted write"), 0o600))
+			link := filepath.Join(dir, ".config.yaml.tmp-preexisting")
+			wantTemps := []string{stale}
+			if withLink {
+				assertion.Symlink(t, filepath.Base(stale), link)
+				wantTemps = append(wantTemps, link)
+			}
+			_, err := upgradeConfigFile(file, true, upgradeEnvironment{})
+			require.NoError(t, err)
+			raw, err := os.ReadFile(stale)
+			require.NoError(t, err)
+			require.Equal(t, "interrupted write", string(raw))
+			if withLink {
+				_, err = os.Readlink(link)
+				require.NoError(t, err)
+			}
+			temps, err := filepath.Glob(filepath.Join(dir, ".config.yaml.tmp-*"))
+			require.NoError(t, err)
+			require.ElementsMatch(t, wantTemps, temps)
+			loaded, err := loadFrom(file, true, upgradeEnvironment{}, true)
+			require.NoError(t, err)
+			require.Equal(t, 9090, loaded.Server.Port)
+		})
+	}
 }

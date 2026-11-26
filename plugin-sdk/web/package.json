@@ -25,8 +25,8 @@
     }
   },
   "scripts": {
-    "format": "prettier --config ../prettier.config.mjs --write 'src/**/*.ts' 'tests/**/*.{mjs,ts,vue,json}' '*.json'",
-    "format:check": "prettier --config ../prettier.config.mjs --check 'src/**/*.ts' 'tests/**/*.{mjs,ts,vue,json}' '*.json'",
+    "format": "prettier --config ../prettier.config.mjs --write \"src/**/*.ts\" \"tests/**/*.{mjs,ts,vue,json}\" \"*.json\"",
+    "format:check": "prettier --config ../prettier.config.mjs --check \"src/**/*.ts\" \"tests/**/*.{mjs,ts,vue,json}\" \"*.json\"",
     "build": "tsc -p tsconfig.json",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test": "pnpm build && vue-tsc -p tests/fixtures/consumer/tsconfig.json && node --test tests/*.test.mjs"

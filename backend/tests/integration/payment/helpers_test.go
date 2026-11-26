@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"strconv"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -32,6 +33,10 @@ import (
 // requested ID, while an absent write callback reports success without changing
 // balance. Unsupported promoted methods remain nil-backed, making the fixture's
 // implemented method set part of each scenario's setup.
+
+// fixtureSequence assigns distinct identity suffixes to orders sharing a test process,
+// including consecutive inserts that fall within the same system clock tick.
+var fixtureSequence atomic.Uint64
 
 // paymentOrderLifecycleRedeemRepo records unprotected code and usage state for
 // payment redemption scenarios.
@@ -96,8 +101,9 @@ func createPaymentFulfillmentSubscriptionOrder(
 	updatedAt time.Time,
 ) *dbent.PaymentOrder {
 	t.Helper()
+	suffix := strconv.FormatUint(fixtureSequence.Add(1), 10)
 	user, err := client.User.Create().
-		SetEmail("fulfillment-" + strconv.FormatInt(time.Now().UnixNano(), 10) + "@example.com").
+		SetEmail("fulfillment-" + suffix + "@example.com").
 		SetPasswordHash("hash").
 		SetUsername("payment-fulfillment-user").
 		Save(ctx)
@@ -113,8 +119,8 @@ func createPaymentFulfillmentSubscriptionOrder(
 		SetAmount(80).
 		SetPayAmount(80).
 		SetFeeRate(0).
-		SetRechargeCode("PAY-SUB-" + strconv.FormatInt(time.Now().UnixNano(), 10)).
-		SetOutTradeNo("sub2_fulfillment_" + strconv.FormatInt(time.Now().UnixNano(), 10)).
+		SetRechargeCode("PAY-SUB-" + suffix).
+		SetOutTradeNo("sub2_fulfillment_" + suffix).
 		SetPaymentType(payment.TypeAlipay).
 		SetPaymentTradeNo("trade-fulfillment").
 		SetOrderType(payment.OrderTypeSubscription).
@@ -334,7 +340,7 @@ func newPaymentOrderLifecycleTestClient(t *testing.T) *dbent.Client {
 }
 
 // createPaymentOrderLifecycleOrder stores a fixture user followed by a balance
-// order using one nanosecond suffix. The caller selects status and expiresAt
+// order using one sequence number. The caller selects status and expiresAt
 // and supplies the context and client used by both writes.
 //
 // The saved user provides the order's owner ID, email, and name, so order
@@ -344,7 +350,7 @@ func newPaymentOrderLifecycleTestClient(t *testing.T) *dbent.Client {
 // registers no separate row cleanup.
 func createPaymentOrderLifecycleOrder(t *testing.T, ctx context.Context, client *dbent.Client, status string, expiresAt time.Time) *dbent.PaymentOrder {
 	t.Helper()
-	suffix := strconv.FormatInt(time.Now().UnixNano(), 10)
+	suffix := strconv.FormatUint(fixtureSequence.Add(1), 10)
 	user, err := client.User.Create().
 		SetEmail("payment-lifecycle-" + suffix + "@example.com").
 		SetPasswordHash("hash").

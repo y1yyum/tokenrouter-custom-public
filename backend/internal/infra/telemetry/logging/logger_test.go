@@ -20,15 +20,12 @@ import (
 // temporary rotating file. It requires info on stdout, warning on stderr, and
 // both messages in the file after closing captured pipe writers.
 func TestInit_DualOutput(t *testing.T) {
-	// Use best-effort directory cleanup because lumberjack may retain an open handle on Windows.
-	tmpDir, err := os.MkdirTemp("", "logger-test-*")
-	if err != nil {
-		t.Fatalf("create temp dir: %v", err)
-	}
+	logPath := filepath.Join(t.TempDir(), "logs", "tokenrouter.log")
 	t.Cleanup(func() {
-		_ = os.RemoveAll(tmpDir)
+		if err := CloseFiles(); err != nil {
+			t.Errorf("close rotating log: %v", err)
+		}
 	})
-	logPath := filepath.Join(tmpDir, "logs", "tokenrouter.log")
 
 	// This serial fixture owns the process stream replacement until cleanup
 	// restores stdout and stderr. Its logger core retains the pipe writer
@@ -239,6 +236,13 @@ func TestInit_CallerShouldPointToCallsite(t *testing.T) {
 // identify this test file after a synchronization attempt.
 func TestLegacyPrintfCaller(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "caller.json")
+	// Release the rotating writer before TempDir removes its directory. Windows
+	// keeps the log file in use after Sync flushes the logger.
+	t.Cleanup(func() {
+		if err := CloseFiles(); err != nil {
+			t.Errorf("close rotating log: %v", err)
+		}
+	})
 	err := Init(InitOptions{
 		Level:  "info",
 		Format: "json",

@@ -1,7 +1,9 @@
 """Test quick-check selection from changed paths and existing checkout files."""
+import os
 import unittest
+from unittest.mock import patch
 
-from check_changed import plan
+from check_changed import plan, run
 
 # test_check_changed.py verifies language-specific checks selected by pre-push.
 # Fixtures use existing source paths where related tests are expected, and missing
@@ -29,6 +31,22 @@ def flat(files):
 
 class PlanTest(unittest.TestCase):
     """PlanTest verifies pre-push command selection across source and configuration changes."""
+
+    def test_git_fixture_suites_ignore_hook_repository(self):
+        """A linked-worktree hook exports its repository to child processes.
+        Both fixture suites must discover their temporary repositories without inheriting
+        the developer's Git directory or index, while retaining the tool search path.
+        """
+        commands = [('.', ['make', 'test-tools']), ('.', ['python3', '-m', 'unittest'])]
+        variables = {'GIT_DIR': 'outer.git', 'GIT_INDEX_FILE': 'outer.index'}
+        with patch.dict(os.environ, variables), patch('check_changed.subprocess.call', return_value=0) as call:
+            self.assertEqual(run(commands), 0)
+        self.assertEqual(call.call_count, len(commands))
+        for invocation in call.call_args_list:
+            env = invocation.kwargs['env']
+            self.assertNotIn('GIT_DIR', env)
+            self.assertNotIn('GIT_INDEX_FILE', env)
+            self.assertEqual(env['PATH'], os.environ['PATH'])
 
     def test_plugin_go_contract_change_checks_host_consumers(self):
         """An SDK contract change can break host code without editing backend files.

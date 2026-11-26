@@ -266,13 +266,14 @@ func TestContentModerationRuntimeSnapshotRefreshFailureKeepsStaleConfig(t *testi
 		SettingKeyRiskControlEnabled:      "true",
 		SettingKeyContentModerationConfig: runtimeCacheTestConfig(t, "blocked"),
 	}}
-	svc := runtimeCacheTestService(repo, time.Nanosecond)
+	svc := runtimeCacheTestService(repo, time.Minute)
 	input := runtimeCacheTestInput("blocked")
 
 	decision, err := svc.Check(context.Background(), input)
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
 
+	expireRuntimeTestSnapshot(t, svc)
 	repo.failMultiple(errors.New("database unavailable"))
 	decision, err = svc.Check(context.Background(), input)
 	require.NoError(t, err)
@@ -299,13 +300,7 @@ func TestContentModerationRuntimeSnapshotRefreshFailureBacksOff(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
 
-	current := svc.runtimeSnapshot.Load()
-	require.NotNil(t, current)
-	// Copy the snapshot header before changing its load time; immutable policy
-	// and matcher storage stay shared while this test publishes an expired cache entry.
-	expired := *current
-	expired.loadedAt = time.Now().Add(-2 * time.Minute)
-	svc.runtimeSnapshot.Store(&expired)
+	expireRuntimeTestSnapshot(t, svc)
 	repo.failMultiple(errors.New("database unavailable"))
 
 	decision, err = svc.Check(context.Background(), input)
@@ -341,13 +336,7 @@ func TestContentModerationRuntimeSnapshotRefreshReusesUnchangedMatcher(t *testin
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
 
-	current := svc.runtimeSnapshot.Load()
-	require.NotNil(t, current)
-	// Copy the snapshot header before changing its load time; immutable policy
-	// and matcher storage stay shared while this test publishes an expired cache entry.
-	expired := *current
-	expired.loadedAt = time.Now().Add(-2 * time.Minute)
-	svc.runtimeSnapshot.Store(&expired)
+	expired := expireRuntimeTestSnapshot(t, svc)
 
 	decision, err = svc.Check(context.Background(), input)
 	require.NoError(t, err)
@@ -358,8 +347,8 @@ func TestContentModerationRuntimeSnapshotRefreshReusesUnchangedMatcher(t *testin
 	}, time.Second, time.Millisecond)
 
 	refreshed := svc.runtimeSnapshot.Load()
-	require.Same(t, current.config, refreshed.config)
-	require.Same(t, current.keywordMatcher, refreshed.keywordMatcher)
+	require.Same(t, expired.config, refreshed.config)
+	require.Same(t, expired.keywordMatcher, refreshed.keywordMatcher)
 	_, calls := repo.calls()
 	require.Equal(t, 2, calls)
 }
@@ -379,13 +368,7 @@ func TestContentModerationRuntimeSnapshotUpdateWinsOverInFlightRefresh(t *testin
 	require.NoError(t, err)
 	require.True(t, decision.Blocked)
 
-	current := svc.runtimeSnapshot.Load()
-	require.NotNil(t, current)
-	// Copy the snapshot header before changing its load time; immutable policy
-	// and matcher storage stay shared while this test publishes an expired cache entry.
-	expired := *current
-	expired.loadedAt = time.Now().Add(-2 * time.Minute)
-	svc.runtimeSnapshot.Store(&expired)
+	expireRuntimeTestSnapshot(t, svc)
 
 	refreshStarted := make(chan struct{}, 1)
 	releaseRefresh := make(chan struct{})
@@ -684,4 +667,19 @@ func TestTriggerRuntimeSnapshotRefreshReleasesMutexWhenBackgroundRejected(t *tes
 	require.True(t, rejected.Load())
 	require.True(t, svc.runtimeRefreshMu.TryLock(), "runtimeRefreshMu must be unlocked when Background returns false")
 	svc.runtimeRefreshMu.Unlock()
+}
+
+// expireRuntimeTestSnapshot publishes and returns an expired copy of the loaded
+// snapshot. Its shared policy and matcher remain available to stale readers;
+// callers can trigger refresh immediately regardless of host clock resolution.
+func expireRuntimeTestSnapshot(t *testing.T, svc *ContentModerationService) *contentModerationRuntimeSnapshot {
+	t.Helper()
+	current := svc.runtimeSnapshot.Load()
+	require.NotNil(t, current)
+	// Copy the snapshot header before changing its load time; immutable policy
+	// and matcher storage stay shared while this test publishes an expired cache entry.
+	expired := *current
+	expired.loadedAt = time.Now().Add(-svc.runtimeSnapshotTTL())
+	svc.runtimeSnapshot.Store(&expired)
+	return &expired
 }

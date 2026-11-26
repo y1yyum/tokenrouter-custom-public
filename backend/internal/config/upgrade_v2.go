@@ -845,14 +845,16 @@ func transformV1Catalog(root *yaml.Node, env upgradeEnvironment) error {
 	if fallback == nil {
 		return nil
 	}
-	cleaned := filepath.Clean(fallback.Value)
+	// Compare the packaged YAML paths in slash form on every host. Windows
+	// also accepts these spellings when checking whether the configured file exists.
+	cleaned := filepath.ToSlash(filepath.Clean(fallback.Value))
 	if cleaned != "resources/model-pricing/model_prices_and_context_window.json" && cleaned != "/app/resources/model-pricing/model_prices_and_context_window.json" {
 		return nil
 	}
 	// Only confirmed absence permits changing a packaged filename. Permission and
 	// other stat failures preserve the configured path for normal loading diagnostics.
 	if _, err := env.Stat(cleaned); os.IsNotExist(err) {
-		fallback.Value = filepath.Join(filepath.Dir(cleaned), "model_pricing_supplements.json")
+		fallback.Value = path.Join(path.Dir(cleaned), "model_pricing_supplements.json")
 	}
 	return nil
 }
