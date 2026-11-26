@@ -1,4 +1,5 @@
 import { getLocale, setLocale } from '@/i18n'
+import { clearCryptoGrant } from '@/composables/cryptoGrant'
 import { defineStore } from 'pinia'
 import { ref, computed, readonly } from 'vue'
 import { authAPI, isTotp2FARequired, passkeyAPI, type LoginResponse } from '@/api'
@@ -511,6 +512,7 @@ export const useAuthStore = defineStore('auth', () => {
     // clearing access credentials; omission clears that pending context as well.
     preservePendingAuthSession?: boolean
   }): void {
+    clearCryptoGrant()
     // Release owned refresh timers before clearing credentials so future timer ticks
     // cannot start new profile or token work for the cleared session.
     stopAutoRefresh()

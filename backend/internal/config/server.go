@@ -103,6 +103,12 @@ type CSPConfig = httpconfig.CSPConfig
 type SecurityConfig struct {
 	CORS CORSConfig `yaml:"cors"` // browser cross-origin response settings
 	CSP  CSPConfig  `yaml:"csp"`  // security csp settings
+	// KeyRotationCutoff activates deposit screening when this site's RFC3339 instant arrives.
+	// An empty value leaves screening inactive.
+	KeyRotationCutoff string `yaml:"key_rotation_cutoff"`
+	// KeyRotationRiskAckEnabled controls whether existing confirmations qualify and new ones can be written.
+	KeyRotationRiskAckEnabled bool `yaml:"key_rotation_risk_ack_enabled"`
+	KeyRotationRiskAckHours   int  `yaml:"key_rotation_risk_ack_hours"` // confirmation lifetime in hours, zero uses default
 	// SecretEncryptionKey is the hex-encoded 32-byte AES-256 key used to encrypt TOTP secrets.
 	// Empty generates a random development key at startup.
 	SecretEncryptionKey string             `yaml:"secret_encryption_key"`

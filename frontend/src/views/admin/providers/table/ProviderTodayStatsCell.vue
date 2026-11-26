@@ -1,5 +1,16 @@
 <template>
-  <div>
+  <div v-if="compact" class="min-w-0 truncate text-xs leading-4 text-gray-600 dark:text-gray-300">
+    <span v-if="stats" class="tabular-nums" data-test="provider-today-summary">
+      {{ t('admin.providers.compact.today') }} ·
+      {{ formatNumber(stats.requests) }} {{ t('admin.providers.usageStats.requests') }} ·
+      {{ formatTokens(stats.tokens) }} {{ t('admin.providers.usageStats.tokens') }} ·
+      {{ formatUsdAmount(stats.cost, { fractionDigits: 2 }) }}
+    </span>
+    <div v-else-if="loading" class="skeleton h-3 w-24"></div>
+    <span v-else-if="error" class="text-red-500">{{ error }}</span>
+    <span v-else class="text-gray-400">—</span>
+  </div>
+  <div v-else>
     <!-- Loading state -->
     <div v-if="props.loading && !props.stats" class="space-y-0.5">
       <div class="skeleton h-3 w-12"></div>
@@ -79,6 +90,7 @@ const props = withDefaults(
     stats?: WindowStats | null
     loading?: boolean // parent statistics request activity
     error?: string | null // optional statistics request error
+    compact?: boolean // Expose the three headline metrics on a single line.
   }>(),
   {
     stats: null,

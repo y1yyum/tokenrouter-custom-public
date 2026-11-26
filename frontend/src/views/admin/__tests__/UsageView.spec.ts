@@ -1,3 +1,4 @@
+import type { Column } from '@/components/common/table/types'
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest'
 import { flushPromises, mount } from '@vue/test-utils'
 import { defineComponent, ref } from 'vue'
@@ -178,8 +179,9 @@ const UsageExportDialogStub = {
 const UsageTableStub = {
   props: [
     'columns', // visible table column definitions
+    'columnOrderStorageKey', // compact drag order preference
   ],
-  emits: ['userClick'],
+  emits: ['userClick', 'sort'],
   template:
     '<div data-test="usage-table"><button class="user-click" @click="$emit(\'userClick\', 2)">user</button></div>',
 }
@@ -687,7 +689,7 @@ describe('admin UsageView distribution metric toggles', () => {
   })
 })
 
-describe('admin UsageView request ID column visibility', () => {
+describe('admin UsageView compact columns', () => {
   beforeEach(() => {
     vi.useFakeTimers()
     vi.mocked(localStorage.getItem).mockReset().mockReturnValue(null)
@@ -748,163 +750,146 @@ describe('admin UsageView request ID column visibility', () => {
       },
     })
 
-  // Old column preferences precede the TPS column and then explicitly hide it. The test
-  // protects its default placement, unsortable status, and retaining the hidden choice
-  // after remount.
-  it('TPS 默认可见，旧偏好补入该列，隐藏后重新挂载仍隐藏', async () => {
-    const saved = new Map([['usage-hidden-columns', JSON.stringify(['ip_address'])]])
+  // A new administrator gets all nine columns, with real service keys on the two
+  // sortable headers and the baseline width expected by the desktop table.
+  it('exposes nine columns and binds time and model to the server sort keys', async () => {
+    const wrapper = mountColumnView()
+    await flushPromises()
+
+    const table = wrapper.findComponent(UsageTableStub)
+    const columns = table.props('columns') as Column[]
+    expect(columns.map(({ key }) => key)).toEqual([
+      'time',
+      'caller',
+      'route',
+      'model_spec',
+      'tokens',
+      'cost',
+      'performance',
+      'request_trace',
+      'client_network',
+    ])
+    expect(columns.flatMap(({ sortOptions }) => sortOptions?.map(({ key }) => key) ?? [])).toEqual([
+      'created_at',
+      'model',
+    ])
+    const model = columns.find(({ key }) => key === 'model_spec')
+    expect(model?.sortOptions?.[0]?.label).toBe(model?.label)
+    expect(columns.reduce((width, column) => width + Number.parseInt(column.width!, 10), 0)).toBe(
+      1510,
+    )
+    expect(table.props('columnOrderStorageKey')).toBe('admin-usage-column-order-v2')
+    wrapper.unmount()
+  })
+
+  // Older preferences hide the whole route, only IP, and the local request ID. The
+  // administrator's previous migration already hid upstream IDs for this profile.
+  it('restores fully hidden groups and preserves the source preferences', async () => {
+    const hidden = JSON.stringify([
+      'request_id',
+      'ip_address',
+      'created_at',
+      'provider',
+      'endpoint',
+    ])
+    const order = JSON.stringify(['model', 'created_at', 'reasoning_effort', 'provider'])
+    vi.mocked(localStorage.getItem).mockImplementation((key) => {
+      if (key === 'usage-hidden-columns') return hidden
+      if (key === 'admin-usage-column-order') return order
+      return null
+    })
+
+    const wrapper = mountColumnView()
+    await flushPromises()
+    const columns = wrapper.findComponent(UsageTableStub).props('columns') as Column[]
+    expect(columns.map(({ key }) => key)).toEqual([
+      'time',
+      'caller',
+      'model_spec',
+      'tokens',
+      'cost',
+      'performance',
+      'client_network',
+    ])
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      'usage-hidden-columns-dense-layout-v1',
+      JSON.stringify(['route', 'request_trace']),
+    )
+    expect(localStorage.setItem).toHaveBeenCalledWith(
+      'admin-usage-column-order-v2',
+      JSON.stringify([
+        'model_spec',
+        'time',
+        'route',
+        'caller',
+        'tokens',
+        'cost',
+        'performance',
+        'request_trace',
+        'client_network',
+      ]),
+    )
+    expect(localStorage.setItem).not.toHaveBeenCalledWith('usage-hidden-columns', expect.anything())
+    wrapper.unmount()
+  })
+
+  // An explicit visibility change survives remount and uses the composite key.
+  it('persists hiding the performance column', async () => {
+    const saved = new Map<string, string>()
     vi.mocked(localStorage.getItem).mockImplementation((key) => saved.get(key) ?? null)
     vi.mocked(localStorage.setItem).mockImplementation((key, value) => {
       saved.set(key, value)
     })
+
     const wrapper = mountColumnView()
-    await flushPromises()
-    const columns = wrapper.findComponent(UsageTableStub).props('columns') as Array<{
-      key: string // table column identifier
-      sortable?: boolean // server sorting availability flag
-    }>
-    expect(columns.findIndex((column) => column.key === 'tps')).toBe(
-      columns.findIndex((column) => column.key === 'latency') + 1,
-    )
-    expect(columns.find((column) => column.key === 'tps')?.sortable).toBe(false)
     await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
     await wrapper
       .findAll('button')
-      .find((button) => button.text() === 'TPS')!
+      .find((button) => button.text() === 'usage.compactTable.performance')!
       .trigger('click')
-    expect(JSON.parse(saved.get('usage-hidden-columns')!)).toContain('tps')
+    expect(saved.get('usage-hidden-columns-dense-layout-v1')).toBe(JSON.stringify(['performance']))
     wrapper.unmount()
     const restored = mountColumnView()
-    await flushPromises()
-    expect(
-      restored
-        .findComponent(UsageTableStub)
-        .props('columns')
-        .map(
-          (column: {
-            key: string // table column identifier
-          }) => column.key,
-        ),
-    ).not.toContain('tps')
+    const columns = restored.findComponent(UsageTableStub).props('columns') as Column[]
+    expect(columns.map(({ key }) => key)).not.toContain('performance')
     restored.unmount()
   })
 
-  // The request-ID column is visible by default and then hidden through settings. The test
-  // protects removing it from the table and persisting that explicit preference.
-  it('shows request ID by default and persists an explicit hide', async () => {
+  // Hiding an unrelated column retains the order; hiding the active model column
+  // replaces it with descending time once, even if DataTable publishes the fallback.
+  it('reloads page one once when the active sort column is hidden', async () => {
     const wrapper = mountColumnView()
-    await wrapper.vm.$nextTick()
-
-    const usageTable = wrapper.findComponent(UsageTableStub)
-    expect(usageTable.props('columns')).toEqual(
-      expect.arrayContaining([expect.objectContaining({ key: 'request_id' })]),
+    await flushPromises()
+    const table = wrapper.findComponent(UsageTableStub)
+    table.vm.$emit('sort', 'model', 'asc')
+    await flushPromises()
+    expect(list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, sort_by: 'model', sort_order: 'asc' }),
+      expect.anything(),
     )
+    list.mockClear()
 
     await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
-    const requestIdToggle = wrapper
+    await wrapper
       .findAll('button')
-      .find((button) => button.text() === 'Request ID')
-    expect(requestIdToggle).toBeDefined()
-    await requestIdToggle!.trigger('click')
+      .find((button) => button.text() === 'usage.compactTable.performance')!
+      .trigger('click')
+    expect(list).not.toHaveBeenCalled()
 
-    expect(usageTable.props('columns')).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ key: 'request_id', label: 'Request ID' })]),
-    )
-    expect(localStorage.setItem).toHaveBeenCalledWith(
-      'usage-hidden-columns-version',
-      'upstream-request-id-hidden-by-default',
-    )
-  })
-
-  // The upstream-ID column starts hidden and is enabled through settings. The test protects
-  // its default omission and adding its definition to the visible table columns.
-  it('keeps upstream ID hidden by default and allows enabling it from column settings', async () => {
-    const wrapper = mount(UsageView, {
-      global: {
-        stubs: {
-          AppLayout: AppLayoutStub,
-          UsageStatsCards: true,
-          UsageFilters: UsageFiltersStub,
-          UsageTable: UsageTableStub,
-          UsageExportDialog: UsageExportDialogStub,
-          UsageCleanupDialog: true,
-          UserBalanceHistoryModal: true,
-          AuditLogModal: true,
-          Pagination: true,
-          Select: true,
-          DateRangePicker: true,
-          Icon: true,
-          TokenUsageTrend: true,
-          ModelDistributionChart: true,
-          GroupDistributionChart: true,
-          EndpointDistributionChart: true,
-          UserTokenRanking: true,
-        },
-      },
-    })
-    await wrapper.vm.$nextTick()
-
-    const usageTable = wrapper.findComponent(UsageTableStub)
-    expect(usageTable.props('columns')).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ key: 'upstream_request_id' })]),
-    )
-
-    await wrapper.get('button[title="admin.users.columnSettings"]').trigger('click')
-    const upstreamToggle = wrapper
+    const model = wrapper
       .findAll('button')
-      .find((button) => button.text() === 'Upstream ID')
-    expect(upstreamToggle).toBeDefined()
-    await upstreamToggle!.trigger('click')
-
-    expect(usageTable.props('columns')).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ key: 'upstream_request_id', label: 'Upstream ID' }),
-      ]),
+      .find((button) => button.text() === 'usage.compactTable.modelSpec')!
+    await model.trigger('click')
+    table.vm.$emit('sort', 'created_at', 'desc')
+    await flushPromises()
+    expect(list).toHaveBeenCalledOnce()
+    expect(list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, sort_by: 'created_at', sort_order: 'desc' }),
+      expect.anything(),
     )
-  })
-
-  // An old preference contains user-selected hidden columns before migration. The test
-  // protects retaining those choices while adding the upstream-ID default and writing the
-  // updated preference.
-  it('migrates an old preference without replacing existing hidden columns', async () => {
-    vi.mocked(localStorage.getItem).mockImplementation((key: string) => {
-      if (key === 'usage-hidden-columns') return JSON.stringify(['ip_address'])
-      return null
-    })
-
-    const wrapper = mountColumnView()
-    await wrapper.vm.$nextTick()
-    const columns = wrapper.findComponent(UsageTableStub).props('columns') as Array<{
-      key: string // table column identifier
-    }>
-
-    expect(columns).not.toEqual(
-      expect.arrayContaining([expect.objectContaining({ key: 'ip_address' })]),
-    )
-    expect(columns).toEqual(
-      expect.arrayContaining([expect.objectContaining({ key: 'request_id' })]),
-    )
-    expect(localStorage.setItem).toHaveBeenCalledWith(
-      'usage-hidden-columns',
-      expect.stringContaining('request_id'),
-    )
-  })
-
-  // The earlier request-ID preference version is stored with request ID enabled.
-  // The test protects that saved visible choice when the usage table mounts again.
-  it('respects an enabled request ID after the migration version is stored', async () => {
-    vi.mocked(localStorage.getItem).mockImplementation((key: string) => {
-      if (key === 'usage-hidden-columns') return JSON.stringify(['ip_address'])
-      if (key === 'usage-hidden-columns-version') return 'request-id-hidden-by-default'
-      return null
-    })
-
-    const wrapper = mountColumnView()
-    await wrapper.vm.$nextTick()
-
-    expect(wrapper.findComponent(UsageTableStub).props('columns')).toEqual(
-      expect.arrayContaining([expect.objectContaining({ key: 'request_id' })]),
-    )
+    await model.trigger('click')
+    expect(list).toHaveBeenCalledOnce()
+    wrapper.unmount()
   })
 })
 

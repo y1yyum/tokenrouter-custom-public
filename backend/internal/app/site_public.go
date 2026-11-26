@@ -2,10 +2,12 @@ package app
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/TokenFlux/TokenRouter/internal/billing"
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/TokenFlux/TokenRouter/internal/pkg/timezone"
 	"github.com/TokenFlux/TokenRouter/internal/settings"
@@ -68,6 +70,17 @@ func provideSitePages(cfg *config.Config, settings *site.DisplaySettings) *siteh
 func provideSitePublic(store *settings.Store, oauth *identity.OAuthSettings, cfg *config.Config, calendar timezone.Calendar) *site.PublicService {
 	p := site.NewPublicService(site.NewInputSource(store, site.PublicInputOptions{
 		FrontendURL: func() string { return cfg.Site.FrontendURL },
+		CryptoEnabled: func(raw string) bool {
+			if !mode.UserAPIReady(cfg.Security.SecretEncryptionKey, cfg.Security.SecretEncryptionKeyConfigured) {
+				return false
+			}
+			// Only the stored channel switch is public. Unreadable settings
+			// leave the entry hidden until an operator saves a usable document.
+			var channel struct {
+				Enabled bool `json:"enabled"` // operator-controlled channel switch
+			}
+			return json.Unmarshal([]byte(raw), &channel) == nil && channel.Enabled
+		},
 		Auth: func(raw map[string]string) site.PublicAuth {
 			value := oauth.PublicSettingsFromValues(raw)
 			enabled, selfService := team.PublicSettings(raw, cfg.Team.Enabled, cfg.Team.SelfServiceEnabled)

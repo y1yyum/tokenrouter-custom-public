@@ -3,9 +3,10 @@ import { i18n, getLocale } from '@/i18n'
 /**
  * format.ts formats dates, elapsed time, numeric counts, and reasoning effort for
  * shared frontend displays. Locale-aware functions read the application locale unless
- * their signature accepts an override. Compact token functions have distinct precision
- * and suffix rules, so consumers choose the representation appropriate to their table,
- * chart, or export.
+ * their signature accepts an override. Compact timestamp parts use a fixed numeric
+ * layout and share the browser-local clock with the existing date displays. Compact
+ * token functions have distinct precision and suffix rules for tables, charts, and
+ * exports.
  *
  * Local form values carry calendar components without a timezone. Parsing validates
  * those components before constructing a local Date, checks calendar overflow
@@ -148,6 +149,60 @@ export function formatDateTime(
   localeOverride?: string,
 ): string {
   return formatDate(date, options, localeOverride)
+}
+
+/**
+ * CompactDateTimeParts provides local calendar and clock text for compact date cells.
+ */
+interface CompactDateTimeParts {
+  date: string // compact calendar date
+  time: string // local time through seconds
+  full: string // complete local date and time
+}
+
+/**
+ * formatCompactDateTimeParts builds a two-line timestamp and its full tooltip in the
+ * browser's local timezone. Both displays use the same wall-clock fields, even when
+ * an incoming offset moves the timestamp to a different local day or year. The date
+ * includes a two-digit year for other local years or when callers request 'always'.
+ * Missing or invalid timestamps return empty strings for every part.
+ */
+export function formatCompactDateTimeParts(
+  date: string | Date | null | undefined,
+  yearDisplay: 'auto' | 'always' = 'auto',
+): CompactDateTimeParts {
+  if (!date) return { date: '', time: '', full: '' }
+
+  const localDate = new Date(date)
+  const fullDate = formatDateLocalInput(localDate)
+  if (!fullDate) return { date: '', time: '', full: '' }
+
+  const showYear = yearDisplay === 'always' || localDate.getFullYear() !== new Date().getFullYear()
+  const hours = String(localDate.getHours()).padStart(2, '0')
+  const minutes = String(localDate.getMinutes()).padStart(2, '0')
+  const seconds = String(localDate.getSeconds()).padStart(2, '0')
+  const time = `${hours}:${minutes}:${seconds}`
+  // Keep calendar width fixed when including the year.
+  return {
+    date: fullDate.slice(showYear ? -8 : -5),
+    time,
+    full: `${fullDate} ${time}`,
+  }
+}
+
+/**
+ * truncateMiddle shortens a display string while keeping both identifying ends.
+ * Head and tail are nonnegative whole code-point counts and default to six and four.
+ * Nullish text is empty, and the ellipsis appears only if it makes the result shorter.
+ */
+export function truncateMiddle(value: string | null | undefined, head = 6, tail = 4): string {
+  if (!value) return ''
+
+  const characters = Array.from(value)
+  if (characters.length <= head + tail + 1) return value
+
+  // Slice code points to preserve characters outside the basic multilingual plane.
+  return `${characters.slice(0, head).join('')}…${characters.slice(characters.length - tail).join('')}`
 }
 
 /**

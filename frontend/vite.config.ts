@@ -1,6 +1,7 @@
 import { defineConfig, loadEnv, type Plugin } from 'vite'
 import vue from '@vitejs/plugin-vue'
 import checker from 'vite-plugin-checker'
+import nuxtUi from '@nuxt/ui/vite'
 import { resolve } from 'path'
 // Native config loading requires source extensions; tsconfig.node.json rewrites
 // this extension so emitted JavaScript resolves the compiled metadata module.
@@ -121,6 +122,36 @@ function injectPublicSettings(backendUrl: string, devOrigin: string): Plugin {
   }
 }
 
+// cryptoVendorPattern selects libraries owned by the on-chain payment routes.
+const cryptoVendorPattern = /\/node_modules\/(?:\.nuxt-ui|@nuxt\/ui|@iconify\/vue|@noble\/(?:ciphers|hashes)|@tanstack\/(?:vue-table|table-core)|reka-ui|vaul-vue|tailwind-variants|tailwind-merge|jsqr)\//
+
+// cryptoUiPlugins limits the Nuxt UI Tailwind transform to the crypto stylesheet.
+// The host stylesheet and Vue component styles still go through Tailwind 3.
+function cryptoUiPlugins() {
+  const plugins = [
+    nuxtUi({
+      colorMode: false,
+      components: false,
+      autoImport: false,
+      icon: { clientBundle: { scan: true } },
+      ui: { colors: { neutral: 'zinc' } },
+    }),
+  ].flat()
+
+  for (const plugin of plugins) {
+    if (!plugin.name.startsWith('@tailwindcss/vite:generate:')) continue
+    const transform = plugin.transform
+    if (!transform || typeof transform === 'function') {
+      throw new Error('The Tailwind 4 generator needs a stylesheet transform filter')
+    }
+    plugin.transform = {
+      ...transform,
+      filter: { ...transform.filter, id: /[/\\]src[/\\]styles[/\\]crypto-ui\.css$/ },
+    }
+  }
+  return plugins
+}
+
 export default defineConfig(({ mode }) => {
   // Development addresses come from the selected mode environment, with local server defaults for an unconfigured checkout.
   const env = loadEnv(mode, process.cwd(), '')
@@ -130,6 +161,7 @@ export default defineConfig(({ mode }) => {
   return {
     plugins: [
       vue(),
+      ...cryptoUiPlugins(),
       checker({
         vueTsc: true,
       }),
@@ -165,6 +197,10 @@ export default defineConfig(({ mode }) => {
                 // application dependency does not initialize a payment SDK early.
                 name(id: string) {
                   if (id.includes('node_modules')) {
+                    // Nuxt UI and Iconify also have /vue/ in their module paths.
+                    // Give the crypto group precedence over the host Vue group.
+                    if (cryptoVendorPattern.test(id)) return 'vendor-crypto'
+
                     // Vue runtime, routing, state, and compiler packages share this vendor group.
                     if (
                       id.includes('/vue/') ||

@@ -117,6 +117,22 @@ func TestDependencyBoundaries(t *testing.T) {
 		{"internal/ops/service_test.go", "log", true},
 		{"internal/infra/telemetry/logging/logger.go", "log", true},
 		{"cmd/server/main.go", "log", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "database/sql", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "entgo.io/ent/dialect/sql", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/payment/testkit", true},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/payment/postgres", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/payment/testkit/extra", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", modulePath + "/internal/app/legacybridge", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "net/rpc", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration_test.go", "github.com/lib/pq", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration.go", "database/sql", false},
+		{"internal/cryptopay/bsc_deposit_scenario_integration.go", modulePath + "/internal/payment/testkit", false},
+		{"internal/cryptopay/new_test.go", modulePath + "/internal/settings", false},
+		{"internal/cryptopay/config_test.go", modulePath + "/internal/settings", true},
+		{"internal/cryptopay/config_test.go", modulePath + "/internal/service", false},
+		{"internal/cryptopay/config.go", modulePath + "/internal/settings", false},
+		{"internal/cryptopay/sweeper/jobs_postgres_integration_test.go", modulePath + "/migrations", true},
+		{"internal/cryptopay/sweeper/new_test.go", modulePath + "/migrations", false},
 		{"internal/newmodule/new.go", modulePath + "/internal/provider", false},
 		{"internal/provider/new.go", modulePath + "-other/internal/billing", false},
 	}
@@ -191,7 +207,9 @@ func TestScanFailsClosed(t *testing.T) {
 	}
 }
 
-// 保留例外需要真实消费者；删除或迁移文件后，陈旧许可应及时退出。
+// TestFilePermissionsHaveConsumers verifies that every file permission still
+// has a source importing its target. Removed or relocated fixtures leave stale
+// entries that fail this check and must be removed with the source change.
 func TestFilePermissionsHaveConsumers(t *testing.T) {
 	sources, err := scan(filepath.Join("..", "..", "backend"))
 	if err != nil {
@@ -218,6 +236,24 @@ func TestFilePermissionsHaveConsumers(t *testing.T) {
 			for _, target := range strings.Fields(targets) {
 				if !imports[file][target] {
 					t.Errorf("标准库例外缺少实际消费者：%s -> %s", file, target)
+				}
+			}
+		}
+	}
+	for file, allowed := range unregisteredTestImports {
+		location := locate(file)
+		if !location.test || location.role != "" {
+			t.Errorf("测试许可要求未登记角色的测试文件：%s", file)
+		}
+		for _, target := range allowed.Internal {
+			if !imports[file][modulePath+"/"+target] {
+				t.Errorf("测试许可缺少实际消费者：%s -> %s", file, target)
+			}
+		}
+		for _, targets := range [][]string{allowed.Standard, allowed.External} {
+			for _, target := range targets {
+				if !imports[file][target] {
+					t.Errorf("测试许可缺少实际消费者：%s -> %s", file, target)
 				}
 			}
 		}

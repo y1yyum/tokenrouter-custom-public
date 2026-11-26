@@ -131,11 +131,12 @@ func provideGatewayRouteMount(eCountTokensHTTP *gatewayhttp.CountTokensHandler,
 
 // providePaymentRouteMount binds payment handlers with user, administrator,
 // backend-mode, panel, and audit guards. The returned callback passes those
-// shared instances to paymenthttp.RegisterRoutes, which applies them to its
-// route families.
-func providePaymentRouteMount(user *paymenthttp.PaymentHandler, webhook *paymenthttp.PaymentWebhookHandler, admin *paymenthttp.AdminHandler, plans *billinghttp.PlanHandler) paymentRouteMount {
+// shared instances to the checkout routes and the deposit route mount.
+// The latter adds the wallet-specific user and operator checks.
+func providePaymentRouteMount(user *paymenthttp.PaymentHandler, webhook *paymenthttp.PaymentWebhookHandler, admin *paymenthttp.AdminHandler, plans *billinghttp.PlanHandler, deposits cryptoRouteMount) paymentRouteMount {
 	return func(v1 *gin.RouterGroup, security httpRouteSecurity) {
 		paymenthttp.RegisterRoutes(v1, user, webhook, admin, plans, paymenthttp.RouteMiddleware{JWT: security.JWT, BackendMode: security.BackendUser, Panel: security.Panel.Global(), Admin: security.Admin, Audit: security.Audit})
+		deposits(v1, security)
 	}
 }
 

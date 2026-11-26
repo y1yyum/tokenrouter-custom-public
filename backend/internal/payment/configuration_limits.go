@@ -323,6 +323,9 @@ func ConfigPcGroupByPaymentType(instances []*ProviderInstance) map[string][]*Pro
 		}
 	}
 	for _, inst := range instances {
+		if isCryptoPaymentType(inst.ProviderKey) {
+			continue
+		}
 		// Stripe hosted subtype lists describe methods inside one checkout provider.
 		// Group its instance once under stripe so limit lookup uses that persisted
 		// provider-level entry.
@@ -331,7 +334,9 @@ func ConfigPcGroupByPaymentType(instances []*ProviderInstance) map[string][]*Pro
 			continue
 		}
 		for _, t := range ConfigSplitTypes(inst.SupportedTypes) {
-			add(t, inst)
+			if !isCryptoPaymentType(t) {
+				add(t, inst)
+			}
 		}
 	}
 	return typeInstances

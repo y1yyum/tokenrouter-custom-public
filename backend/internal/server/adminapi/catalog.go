@@ -13,18 +13,17 @@ import (
 	"github.com/google/jsonschema-go/jsonschema"
 )
 
-// catalog.go registers administrative operation descriptions alongside their
-// existing HTTP handlers. Descriptions are declared during package
-// initialization and retain stable identifiers independently of handler names.
-// Each running router selects its own catalogue from the routes actually
-// mounted on that engine, so disabled or absent endpoints cannot become
-// callable merely because another module declared a description.
+// catalog.go declares which administrative routes support delegation. Each
+// delegable operation has a stable identifier independent of handler names.
+// Direct-only routes have a method and path declaration and no operation ID.
+// The declaration records the delegation policy while the owning router group
+// enforces authentication for the direct HTTP request.
 //
-// Registration checks the declared method and absolute path against the Gin
-// group. Catalogue construction then rejects missing descriptions and duplicate
-// identifiers before the MCP endpoint is published. Tests can construct isolated
-// catalogues from explicit descriptions; production declarations are protected
-// while they are copied and are never changed by request execution.
+// Each router builds its catalogue from the routes actually mounted on that
+// engine, so a declaration alone cannot expose an absent endpoint. Every
+// mounted administrator route must have exactly one declared policy. Catalogue
+// construction rejects missing declarations and duplicate identifiers before
+// MCP discovery or permission selection becomes available.
 
 const (
 	// Response modes select shared result handling; aliases retain their own
@@ -36,8 +35,8 @@ const (
 )
 
 var (
-	// declarations holds startup descriptions shared by registered HTTP modules.
-	// The lock allows independent router fixtures to read declarations concurrently.
+	// declarations indexes startup policies shared by HTTP modules. A present nil
+	// value marks a direct-only route, while an absent key has no policy.
 	declarationsMu sync.RWMutex
 	declarations   = map[string]*Operation{}
 )
@@ -109,14 +108,32 @@ func Define(op Operation) *Operation {
 			panic(fmt.Sprintf("operation %s step-up condition: %v", op.ID, err))
 		}
 	}
+	declareRoute(op.Method, op.Path, &op)
+	return &op
+}
+
+// DefineDirectOnly declares an administrator route that stays outside the
+// delegation catalogue. Call during package initialization with the exact HTTP
+// method and absolute Gin route pattern. The registering group supplies the
+// authentication and authorization for direct requests.
+func DefineDirectOnly(method, absolutePath string) {
+	if method == "" || !strings.HasPrefix(absolutePath, "/api/v1/admin/") || path.Clean(absolutePath) != absolutePath {
+		panic("invalid direct-only administrative route: " + method + " " + absolutePath)
+	}
+	declareRoute(method, absolutePath, nil)
+}
+
+// declareRoute publishes one startup policy for a route key. A nil operation
+// reserves the key for direct HTTP access. Any second declaration panics, so
+// delegation and direct-only policies cannot coexist for one route.
+func declareRoute(method, absolutePath string, op *Operation) {
 	declarationsMu.Lock()
 	defer declarationsMu.Unlock()
-	key := op.Method + " " + op.Path
+	key := method + " " + absolutePath
 	if _, exists := declarations[key]; exists {
 		panic("duplicate administrative route description: " + key)
 	}
-	declarations[key] = &op
-	return &op
+	declarations[key] = op
 }
 
 // Register mounts a described operation using the supplied complete handler
@@ -134,23 +151,26 @@ func Register(group *gin.RouterGroup, op *Operation, handlers ...gin.HandlerFunc
 	group.Handle(op.Method, relative, handlers...)
 }
 
-// FromRoutes selects descriptions for every mounted administrator route.
-// Missing metadata prevents publication; aliases must refer to another mounted
-// operation so their target cannot escape the registered management surface.
+// FromRoutes validates the declared policy of every mounted administrator route
+// and returns the catalogue of delegable operations. Missing declarations and
+// alias targets prevent publication. Direct-only routes supply no operation ID
+// and cannot be selected as alias targets.
 func FromRoutes(routes gin.RoutesInfo) (*Catalog, error) {
 	declarationsMu.RLock()
 	available := maps.Clone(declarations)
 	declarationsMu.RUnlock()
 	var operations []*Operation
 	for _, route := range routes {
-		op := available[route.Method+" "+route.Path]
-		if !strings.HasPrefix(route.Path, "/api/v1/admin/") && op == nil {
+		op, declared := available[route.Method+" "+route.Path]
+		if !declared {
+			if strings.HasPrefix(route.Path, "/api/v1/admin/") {
+				return nil, fmt.Errorf("missing management operation: %s %s", route.Method, route.Path)
+			}
 			continue
 		}
-		if op == nil {
-			return nil, fmt.Errorf("missing management operation: %s %s", route.Method, route.Path)
+		if op != nil {
+			operations = append(operations, op)
 		}
-		operations = append(operations, op)
 	}
 	return NewCatalog(operations)
 }

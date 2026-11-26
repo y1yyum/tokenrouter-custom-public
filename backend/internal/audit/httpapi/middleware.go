@@ -43,6 +43,9 @@ var (
 	// auditSensitiveReads selects GET method/route pairs that expose sensitive data
 	// and assigns their stable actions before the handler executes the read.
 	auditSensitiveReads = map[string]string{
+		"GET /api/v1/admin/crypto/config/private": "admin.crypto.rpc_config.read",
+		"GET /api/v1/admin/crypto/deposits.csv":   "admin.crypto.deposits.export",
+
 		"GET /api/v1/admin/mcp/tokens/:id/credential": "admin.mcp.tokens.copy",
 		"GET /api/v1/admin/mcp/files/:id":             "admin.mcp.files.download",
 		"GET /api/v1/admin/mcp/confirmations/:id":     "admin.mcp.confirmations.read",
@@ -62,6 +65,23 @@ var (
 	// auditActionOverrides supplies stable mutation actions when generic method and
 	// route derivation would obscure the authentication or management operation being recorded.
 	auditActionOverrides = map[string]string{
+		"POST /api/v1/admin/crypto/scan/run":                         "admin.crypto.scan.run",
+		"POST /api/v1/admin/crypto/deposits/confirm":                 "admin.crypto.deposit.manual_confirm",
+		"PUT /api/v1/admin/crypto/config":                            "admin.crypto.config.update",
+		"POST /api/v1/admin/crypto/addresses/:id/status":             "admin.crypto.address.status.update",
+		"POST /api/v1/admin/crypto/addresses/:id/rotate":             "admin.crypto.address.rotate",
+		"POST /api/v1/admin/crypto/addresses/:id/export-private-key": "admin.crypto.address.private_key.export",
+		"POST /api/v1/admin/crypto/sweep/run":                        "admin.crypto.sweep.run",
+		"POST /api/v1/admin/crypto/scan/runs/:id/cancel":             "admin.crypto.scan.run.cancel",
+		"POST /api/v1/admin/crypto/wallet/initialize":                "admin.crypto.wallet.initialize",
+		"POST /api/v1/admin/crypto/wallet/hot-mnemonic":              "admin.crypto.wallet.hot_mnemonic.import",
+		"POST /api/v1/admin/crypto/wallet/export-mnemonics":          "admin.crypto.wallet.mnemonics.export",
+		"POST /api/v1/admin/crypto/security/setup":                   "admin.crypto.security.setup",
+		"POST /api/v1/admin/crypto/security/enable":                  "admin.crypto.security.enable",
+		"POST /api/v1/admin/crypto/security/verify":                  "admin.crypto.security.verify",
+		"POST /api/v1/admin/crypto/rpc/test":                         "admin.crypto.rpc.test",
+		"POST /api/v1/admin/crypto/rpc/auto-pick":                    "admin.crypto.rpc.auto_pick",
+
 		"POST /api/v1/auth/login":                                 audit.AuditActionLogin,
 		"POST /api/v1/auth/login/2fa":                             audit.AuditActionLogin2FA,
 		"POST /api/v1/auth/register":                              audit.AuditActionRegister,
@@ -172,7 +192,7 @@ func NewAuditLogMiddleware(auditService *audit.AuditLogService, redactor *audit.
 		// Read only the capture limit plus one byte and retain the unread stream,
 		// avoiding a second full in-memory copy of large import bodies.
 		var bodyRedacted string
-		if _, omit := auditBodyOmittedRoutes[routeKey]; omit {
+		if _, omit := auditBodyOmittedRoutes[routeKey]; omit || cryptoAuditOmitBody(c) {
 			// Credentials embedded inside arbitrary strings cannot be identified by JSON
 			// key matching, so these routes retain an omission marker for the entire body.
 			bodyRedacted = "<credential-bearing body omitted>"
@@ -265,7 +285,7 @@ func NewAuditLogMiddleware(auditService *audit.AuditLogService, redactor *audit.
 		// display form; fields such as route parameters follow their own capture rules below.
 		entry.CredentialMasked = MaskedRequestCredential(c)
 
-		extra := map[string]any{}
+		extra := cryptoAuditExtra(c)
 		if dispatch, ok := authctx.GetMCPDispatch(c.Request.Context()); ok {
 			extra["mcp_token_id"] = dispatch.TokenID
 			extra["mcp_source"] = dispatch.Source
@@ -287,8 +307,10 @@ func NewAuditLogMiddleware(auditService *audit.AuditLogService, redactor *audit.
 			}
 			extra["params"] = params
 		}
-		if q := audit.RedactAuditQuery(c.Request.URL.RawQuery); q != "" {
-			extra["query"] = q
+		if !cryptoAuditRoute(c.FullPath()) {
+			if q := audit.RedactAuditQuery(c.Request.URL.RawQuery); q != "" {
+				extra["query"] = q
+			}
 		}
 		if len(extra) > 0 {
 			entry.Extra = extra
@@ -303,10 +325,18 @@ func NewAuditLogMiddleware(auditService *audit.AuditLogService, redactor *audit.
 // wait for downstream body reads.
 func (b *restoredBody) Close() error { return b.closer.Close() }
 
-// MaskedRequestCredential returns a masked display credential from request headers.
-// A nonempty x-api-key takes precedence over Authorization; authorization schemes
-// are retained when separated by a space, and missing headers yield an empty string.
+// MaskedRequestCredential returns a masked display credential from request
+// headers. Crypto grant and TOTP headers take precedence and retain only
+// their names. Otherwise a nonempty x-api-key precedes Authorization.
 func MaskedRequestCredential(c *gin.Context) string {
+	// Record only the presence of payment verification headers because their
+	// full values are usable credentials and must never enter the audit store.
+	if len(c.Request.Header.Values("X-Crypto-Grant")) > 0 {
+		return "x-crypto-grant <redacted>"
+	}
+	if len(c.Request.Header.Values("X-Crypto-TOTP")) > 0 {
+		return "x-crypto-totp <redacted>"
+	}
 	if apiKey := strings.TrimSpace(c.GetHeader("x-api-key")); apiKey != "" {
 		return "x-api-key " + audit.MaskAuditCredential(apiKey)
 	}

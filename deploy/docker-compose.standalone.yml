@@ -68,6 +68,8 @@ services:
       - JWT_EXPIRE_HOUR=${JWT_EXPIRE_HOUR:-24}
       - SETUP_MIGRATION_TIMEOUT_SECONDS=${SETUP_MIGRATION_TIMEOUT_SECONDS:-0}
       - TOTP_ENCRYPTION_KEY=${TOTP_ENCRYPTION_KEY:-}
+      - CRYPTO_ADMIN_USER_IDS=${CRYPTO_ADMIN_USER_IDS:-}
+      - CRYPTO_INSTANCE_ENABLED=${CRYPTO_INSTANCE_ENABLED:-true}
       - TZ=${TZ:-Asia/Shanghai}
 
       # Explicit ${VAR} references in migrated files may still need these secrets.

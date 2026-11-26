@@ -55,6 +55,7 @@ RequestLogger
 | `/api/v1/marketplace/models/available` | 用户 JWT | `routing`：公开分组与当前用户获授权的专属分组，返回私有、不缓存响应 |
 | `/api/v1/admin/plugins*`、`/api/v1/admin/plugin-catalog*`、`/api/v1/admin/plugin-indexes*` | 管理员（执行代码与来源变更另需 step-up） | `plugin`：安装、更新回滚、市场与索引来源，见[安装管理](plugin_contracts.md#administration) |
 | `/api/v1/plugins/*` | UI 描述需用户 JWT；静态资源公开；API 按 manifest 决定 | `plugin`：插件页面描述、版本化静态资源和非流式 HTTP 代理，见[插件契约](plugin_contracts.md#http_contributions) |
+| `/api/v1/admin/crypto/*` | 管理员 JWT 和支付操作员身份 | `cryptopay` 管理收款配置、地址、来款、扫描、钱包和归集。见[专属地址链上充值](../domains/payments_and_entitlements.md#onchain_balance_deposits) |
 | `/api/v1/admin/*` | 管理员 JWT 或站点管理 Key（部分路由要求浏览器会话或 step-up） | 各领域管理入口：用户、分组、提供商、价格配置、设置、运维、备份、支付和安全管理 |
 | `/mcp` | 专用 MCP Bearer 令牌或 OAuth access token | MCP 管理入口：四个通用管理工具，按操作授权，MCP JSON-RPC 协议，见 [MCP 管理接口](mcp_management.md) |
 | `/api/v1/admin/mcp/oauth/*` | 管理员 JWT | MCP OAuth 浏览器授权与应用管理，见 [MCP OAuth 应用授权](mcp_management.md#oauth_authorization) |

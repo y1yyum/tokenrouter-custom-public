@@ -21,7 +21,7 @@ const darkEdges = {
   900: darkEdgeColor(0.02),
 }
 
-/** @type {import('tailwindcss').Config} */
+/** @type {import('tailwindcss-v3').Config} */
 export default {
   content: ['./index.html', './src/**/*.{vue,js,ts,jsx,tsx}'],
   darkMode: 'class',

@@ -1,3 +1,4 @@
+import type { Column } from '@/components/common/table/types'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { enableAutoUnmount, flushPromises, mount } from '@vue/test-utils'
 
@@ -54,6 +55,10 @@ const {
 // compare the complete user-facing field sequence.
 const messages: Record<string, string> = {
   'usage.time': 'Time',
+  'usage.compactTable.caller.teamOwner': 'Member / Group',
+  'usage.compactTable.caller.personal': 'Key / Group',
+  'usage.compactTable.performance': 'Latency / TPS',
+  'usage.compactTable.modelSpec': 'Model / Type',
   'usage.reasoningEffort': 'Reasoning Effort',
   'usage.inboundEndpoint': 'Inbound Endpoint',
   'admin.usage.ipAddress': 'IP Address',
@@ -181,8 +186,12 @@ const UsageTableStub = {
     'data', // records on the selected usage page
     'columns', // visible table column definitions
     'userClickable', // administrator navigation permission flag
-    'compactUserColumn', // compact member attribution flag
+    'compactRole', // administrator, team owner, or personal presentation
+    'columnOrderStorageKey', // compact drag order preference
+    'showProviderBilling', // visibility for provider charges
+    'showStandardCost', // visibility for standard charges
   ],
+  emits: ['sort'],
   template:
     '<div data-test="usage-table"><span v-for="row in data" :key="row.id">{{ row.request_id }}</span></div>',
 }
@@ -693,68 +702,101 @@ describe('user UsageView', () => {
       }),
     )
     const usageTable = wrapper.findComponent(UsageTableStub)
-    const columns = usageTable.props('columns') as Array<{
-      key: string // table column identifier
-      class?: string // table column layout classes
-    }>
-    expect(columns.map((column) => column.key)).toContain('user')
-    expect(columns.map((column) => column.key)).toContain('tps')
-    expect(columns.find((column) => column.key === 'user')?.class).toContain('w-36')
+    const columns = usageTable.props('columns') as Column[]
+    expect(columns.find(({ key }) => key === 'caller')?.label).toBe('Member / Group')
     expect(usageTable.props('userClickable')).toBe(false)
-    expect(usageTable.props('compactUserColumn')).toBe(true)
+    expect(usageTable.props('compactRole')).toBe('teamOwner')
   })
 
-  // The user usage table mounts with default column preferences. The test protects showing
-  // reasoning effort while keeping user-agent details hidden until the user enables them.
-  it('shows reasoning effort column by default while hiding user agent', async () => {
+  // Personal usage starts with the full composite layout and copy-only attribution,
+  // even if the old default hid the standalone user-agent field.
+  it('shows all nine composite columns for a personal user', async () => {
+    localStorage.setItem('user-usage-hidden-columns', JSON.stringify(['user_agent']))
     const wrapper = mountUsageView()
     await flushPromises()
 
-    const usageTable = wrapper.findComponent(UsageTableStub)
-    const columns = usageTable.props('columns') as Array<{
-      key: string // table column identifier
-    }>
-    expect(columns.map((col) => col.key)).toContain('reasoning_effort')
-    expect(columns.map((col) => col.key)).not.toContain('user_agent')
-  })
-
-  // Old user preferences precede TPS and then explicitly hide it. The test protects default
-  // placement after latency, its unsortable status, and persistence after the page
-  // remounts.
-  it('TPS 默认放在延迟后，旧偏好可见且隐藏后重新挂载仍隐藏', async () => {
-    localStorage.setItem('user-usage-hidden-columns', JSON.stringify(['ip_address']))
-    const wrapper = mountUsageView()
-    await flushPromises()
-    const columns = wrapper.findComponent(UsageTableStub).props('columns') as Array<{
-      key: string // table column identifier
-      sortable?: boolean // server sorting availability flag
-    }>
-    expect(columns.findIndex((column) => column.key === 'tps')).toBe(
-      columns.findIndex((column) => column.key === 'latency') + 1,
-    )
-    expect(columns.find((column) => column.key === 'tps')?.sortable).toBe(false)
-    await wrapper.get('button[title="Columns"]').trigger('click')
-    await wrapper
-      .findAll('button')
-      .find((button) => button.text() === 'TPS')!
-      .trigger('click')
-    expect(JSON.parse(localStorage.getItem('user-usage-hidden-columns')!)).toEqual([
-      'ip_address',
-      'tps',
+    const table = wrapper.findComponent(UsageTableStub)
+    const columns = table.props('columns') as Column[]
+    expect(columns.map(({ key }) => key)).toEqual([
+      'time',
+      'caller',
+      'route',
+      'model_spec',
+      'tokens',
+      'cost',
+      'performance',
+      'request_trace',
+      'client_network',
     ])
+    expect(columns.find(({ key }) => key === 'caller')?.label).toBe('Key / Group')
+    expect(columns.reduce((width, column) => width + Number.parseInt(column.width!, 10), 0)).toBe(
+      1485,
+    )
+    expect(table.props('compactRole')).toBe('personal')
+    expect(table.props('showProviderBilling')).toBe(false)
+    expect(table.props('showStandardCost')).toBe(false)
+    expect(table.props('columnOrderStorageKey')).toBe('user-usage-column-order-v2')
+  })
+
+  // The personal and team layouts share caller preferences. An older personal profile
+  // must also hide the member key to hide the composite caller after migration.
+  it.each([
+    { hidden: ['api_key', 'group'], callerVisible: true },
+    { hidden: ['user', 'api_key', 'group'], callerVisible: false },
+  ])(
+    'migrates caller visibility when the old profile hid $hidden',
+    async ({ hidden, callerVisible }) => {
+      localStorage.setItem(
+        'user-usage-hidden-columns',
+        JSON.stringify([...hidden, 'ip_address', 'user_agent']),
+      )
+      const wrapper = mountUsageView()
+      await flushPromises()
+      const columns = wrapper.findComponent(UsageTableStub).props('columns') as Column[]
+      expect(columns.some(({ key }) => key === 'caller')).toBe(callerVisible)
+      expect(columns.some(({ key }) => key === 'client_network')).toBe(false)
+      expect(localStorage.getItem('user-usage-hidden-columns-dense-layout-v1')).toBe(
+        JSON.stringify(callerVisible ? ['client_network'] : ['caller', 'client_network']),
+      )
+    },
+  )
+
+  // The model sort uses the API key and falls back to time when its cell is hidden.
+  // A later mount restores the hidden column and starts with descending time.
+  it('persists a hidden model group and reloads page one only once', async () => {
+    const wrapper = mountUsageView()
+    await flushPromises()
+    const table = wrapper.findComponent(UsageTableStub)
+    table.vm.$emit('sort', 'model', 'asc')
+    await flushPromises()
+    expect(query).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, sort_by: 'model', sort_order: 'asc' }),
+      expect.anything(),
+    )
+    query.mockClear()
+
+    await wrapper.get('button[title="Columns"]').trigger('click')
+    const model = wrapper.findAll('button').find((button) => button.text() === 'Model / Type')!
+    await model.trigger('click')
+    table.vm.$emit('sort', 'created_at', 'desc')
+    await flushPromises()
+    expect(query).toHaveBeenCalledOnce()
+    expect(query).toHaveBeenLastCalledWith(
+      expect.objectContaining({ page: 1, sort_by: 'created_at', sort_order: 'desc' }),
+      expect.anything(),
+    )
+    expect(localStorage.getItem('user-usage-hidden-columns-dense-layout-v1')).toBe(
+      JSON.stringify(['model_spec']),
+    )
     wrapper.unmount()
     const restored = mountUsageView()
     await flushPromises()
-    expect(
-      restored
-        .findComponent(UsageTableStub)
-        .props('columns')
-        .map(
-          (column: {
-            key: string // table column identifier
-          }) => column.key,
-        ),
-    ).not.toContain('tps')
+    const columns = restored.findComponent(UsageTableStub).props('columns') as Column[]
+    expect(columns.some(({ key }) => key === 'model_spec')).toBe(false)
+    expect(query).toHaveBeenLastCalledWith(
+      expect.objectContaining({ sort_by: 'created_at', sort_order: 'desc' }),
+      expect.anything(),
+    )
   })
 
   // Clicking the toolbar export button on the user Usage view opens UsageExportDialog

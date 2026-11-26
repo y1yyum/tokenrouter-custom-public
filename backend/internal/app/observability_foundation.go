@@ -11,6 +11,7 @@ import (
 	auditHTTP "github.com/TokenFlux/TokenRouter/internal/audit/httpapi"
 	auditpostgres "github.com/TokenFlux/TokenRouter/internal/audit/postgres"
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/identity"
 	"github.com/TokenFlux/TokenRouter/internal/ops"
 	"github.com/TokenFlux/TokenRouter/internal/payment"
@@ -42,8 +43,12 @@ func provideAuditRepository(db *sql.DB) audit.AuditLogRepository {
 
 // provideAuditService constructs auditing with a callback for current retention
 // days. The redactor argument orders Wire construction, while the service reads
-// retention settings later using the operation context.
+// retention settings later using the operation context. A review instance can
+// still record explicitly enabled writes without expiring production history.
 func provideAuditService(repo audit.AuditLogRepository, settings *audit.RetentionSettings, _ *audit.Redactor) *audit.AuditLogService {
+	if mode.TestInstance() {
+		return audit.NewAuditLogService(repo, nil)
+	}
 	return audit.NewAuditLogService(repo, func(ctx context.Context) int { return settings.GetAuditLogRetentionDays(ctx) })
 }
 

@@ -1,0 +1,4 @@
+// The Nuxt UI Vite plugin generates the local icon loader from the fixed collection.
+declare module 'virtual:nuxt-ui-icons' {
+  export function init(register: typeof import('@iconify/vue').addIcon): void
+}

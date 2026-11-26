@@ -39110,6 +39110,7 @@ type RedeemCodeMutation struct {
 	expires_at           *time.Time
 	used_at              *time.Time
 	notes                *string
+	source_ref           *string
 	created_at           *time.Time
 	validity_days        *int
 	addvalidity_days     *int
@@ -39732,6 +39733,55 @@ func (m *RedeemCodeMutation) ResetNotes() {
 	delete(m.clearedFields, redeemcode.FieldNotes)
 }
 
+// SetSourceRef sets the "source_ref" field.
+func (m *RedeemCodeMutation) SetSourceRef(s string) {
+	m.source_ref = &s
+}
+
+// SourceRef returns the value of the "source_ref" field in the mutation.
+func (m *RedeemCodeMutation) SourceRef() (r string, exists bool) {
+	v := m.source_ref
+	if v == nil {
+		return
+	}
+	return *v, true
+}
+
+// OldSourceRef returns the old "source_ref" field's value of the RedeemCode entity.
+// If the RedeemCode object wasn't provided to the builder, the object is fetched from the database.
+// An error is returned if the mutation operation is not UpdateOne, or the database query fails.
+func (m *RedeemCodeMutation) OldSourceRef(ctx context.Context) (v string, err error) {
+	if !m.op.Is(OpUpdateOne) {
+		return v, errors.New("OldSourceRef is only allowed on UpdateOne operations")
+	}
+	if m.id == nil || m.oldValue == nil {
+		return v, errors.New("OldSourceRef requires an ID field in the mutation")
+	}
+	oldValue, err := m.oldValue(ctx)
+	if err != nil {
+		return v, fmt.Errorf("querying old value for OldSourceRef: %w", err)
+	}
+	return oldValue.SourceRef, nil
+}
+
+// ClearSourceRef clears the value of the "source_ref" field.
+func (m *RedeemCodeMutation) ClearSourceRef() {
+	m.source_ref = nil
+	m.clearedFields[redeemcode.FieldSourceRef] = struct{}{}
+}
+
+// SourceRefCleared returns if the "source_ref" field was cleared in this mutation.
+func (m *RedeemCodeMutation) SourceRefCleared() bool {
+	_, ok := m.clearedFields[redeemcode.FieldSourceRef]
+	return ok
+}
+
+// ResetSourceRef resets all changes to the "source_ref" field.
+func (m *RedeemCodeMutation) ResetSourceRef() {
+	m.source_ref = nil
+	delete(m.clearedFields, redeemcode.FieldSourceRef)
+}
+
 // SetCreatedAt sets the "created_at" field.
 func (m *RedeemCodeMutation) SetCreatedAt(t time.Time) {
 	m.created_at = &t
@@ -40042,7 +40092,7 @@ func (m *RedeemCodeMutation) Type() string {
 // order to get all numeric fields that were incremented/decremented, call
 // AddedFields().
 func (m *RedeemCodeMutation) Fields() []string {
-	fields := make([]string, 0, 14)
+	fields := make([]string, 0, 15)
 	if m.code != nil {
 		fields = append(fields, redeemcode.FieldCode)
 	}
@@ -40075,6 +40125,9 @@ func (m *RedeemCodeMutation) Fields() []string {
 	}
 	if m.notes != nil {
 		fields = append(fields, redeemcode.FieldNotes)
+	}
+	if m.source_ref != nil {
+		fields = append(fields, redeemcode.FieldSourceRef)
 	}
 	if m.created_at != nil {
 		fields = append(fields, redeemcode.FieldCreatedAt)
@@ -40115,6 +40168,8 @@ func (m *RedeemCodeMutation) Field(name string) (ent.Value, bool) {
 		return m.UsedAt()
 	case redeemcode.FieldNotes:
 		return m.Notes()
+	case redeemcode.FieldSourceRef:
+		return m.SourceRef()
 	case redeemcode.FieldCreatedAt:
 		return m.CreatedAt()
 	case redeemcode.FieldPlanID:
@@ -40152,6 +40207,8 @@ func (m *RedeemCodeMutation) OldField(ctx context.Context, name string) (ent.Val
 		return m.OldUsedAt(ctx)
 	case redeemcode.FieldNotes:
 		return m.OldNotes(ctx)
+	case redeemcode.FieldSourceRef:
+		return m.OldSourceRef(ctx)
 	case redeemcode.FieldCreatedAt:
 		return m.OldCreatedAt(ctx)
 	case redeemcode.FieldPlanID:
@@ -40243,6 +40300,13 @@ func (m *RedeemCodeMutation) SetField(name string, value ent.Value) error {
 			return fmt.Errorf("unexpected type %T for field %s", value, name)
 		}
 		m.SetNotes(v)
+		return nil
+	case redeemcode.FieldSourceRef:
+		v, ok := value.(string)
+		if !ok {
+			return fmt.Errorf("unexpected type %T for field %s", value, name)
+		}
+		m.SetSourceRef(v)
 		return nil
 	case redeemcode.FieldCreatedAt:
 		v, ok := value.(time.Time)
@@ -40358,6 +40422,9 @@ func (m *RedeemCodeMutation) ClearedFields() []string {
 	if m.FieldCleared(redeemcode.FieldNotes) {
 		fields = append(fields, redeemcode.FieldNotes)
 	}
+	if m.FieldCleared(redeemcode.FieldSourceRef) {
+		fields = append(fields, redeemcode.FieldSourceRef)
+	}
 	if m.FieldCleared(redeemcode.FieldPlanID) {
 		fields = append(fields, redeemcode.FieldPlanID)
 	}
@@ -40389,6 +40456,9 @@ func (m *RedeemCodeMutation) ClearField(name string) error {
 		return nil
 	case redeemcode.FieldNotes:
 		m.ClearNotes()
+		return nil
+	case redeemcode.FieldSourceRef:
+		m.ClearSourceRef()
 		return nil
 	case redeemcode.FieldPlanID:
 		m.ClearPlanID()
@@ -40436,6 +40506,9 @@ func (m *RedeemCodeMutation) ResetField(name string) error {
 		return nil
 	case redeemcode.FieldNotes:
 		m.ResetNotes()
+		return nil
+	case redeemcode.FieldSourceRef:
+		m.ResetSourceRef()
 		return nil
 	case redeemcode.FieldCreatedAt:
 		m.ResetCreatedAt()

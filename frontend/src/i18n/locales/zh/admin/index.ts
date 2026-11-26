@@ -8,6 +8,7 @@ import ops from './ops'
 import settings from './settings'
 import audit from './audit'
 import plugins from './plugins'
+import crypto from './crypto'
 
 // index.ts assembles the Simplified Chinese administrator catalog and defines
 // protocol-control messages. Imported domain dictionaries contribute their top-
@@ -75,4 +76,5 @@ export default {
   ...settings,
   ...audit,
   ...mcp,
+  ...crypto,
 }

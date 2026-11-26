@@ -31,7 +31,9 @@
           <template #actions="{ row }">
             <div class="flex items-center gap-2">
               <button
-                v-if="row.status === 'PENDING'"
+                v-if="
+                  row.status === 'PENDING' && row.payment_type.trim().toLowerCase() !== 'crypto'
+                "
                 @click="handleCancel(row.id)"
                 class="inline-flex items-center gap-1 rounded-compact px-2 py-1 text-xs font-medium text-yellow-600 hover:bg-yellow-50 dark:text-yellow-400 dark:hover:bg-yellow-900/20"
               >
@@ -303,6 +305,7 @@ async function confirmRefund() {
 // The order-type restriction follows the backend refund rule. Missing provider
 // identity or an unavailable eligibility response leaves the action hidden.
 function canRequestRefund(order: PaymentOrder): boolean {
+  if (order.payment_type.trim().toLowerCase() === 'crypto') return false
   if (order.order_type !== 'balance') return false
   if (order.status !== 'COMPLETED') return false
   if (!order.provider_instance_id) return false

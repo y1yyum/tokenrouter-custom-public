@@ -57,6 +57,11 @@ func (s *OrderStore) ApplyOrderRebate(ctx context.Context, o *payment.Order, bas
 	// Carry the same Ent transaction into claim and promotion participation so a
 	// failed grant or final audit cannot commit only the provisional order claim.
 	txCtx := dbent.NewTxContext(ctx, tx)
+	if payment.IsCryptoDepositOrder(o) {
+		if err := lockCryptoDepositRebate(txCtx, tx.Client(), o.ID); err != nil {
+			return err
+		}
+	}
 	claimed, err := s.TryClaimAffiliateRebateAudit(txCtx, tx.Client(), o.ID, basePoints)
 	if err != nil {
 		s.runtime.Audit(ctx, o.ID, "AFFILIATE_REBATE_FAILED", "system", map[string]any{

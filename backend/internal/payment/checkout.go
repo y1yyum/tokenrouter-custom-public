@@ -50,6 +50,9 @@ import (
 // its identity for recovery. Other invocation errors trigger best-effort
 // FailCheckout, retaining the original error for the caller.
 func (s *Checkout) CreateOrder(ctx context.Context, req CreateOrderRequest) (*CreateOrderResponse, error) {
+	if isCryptoPaymentType(req.PaymentType) {
+		return nil, ErrCryptoCheckoutUnsupported
+	}
 	req.Locale = locale.Negotiate(req.Locale, locale.FromContext(ctx))
 	ctx = locale.WithLanguage(ctx, req.Locale)
 	if req.OrderType == "" {
@@ -247,6 +250,9 @@ func (s *Checkout) ValidateSubOrder(ctx context.Context, req CreateOrderRequest)
 // plan/configuration, selected merchant and separate entitlement/principal/fee
 // values before later provider initiation.
 func (s *Checkout) CreateOrderInTx(ctx context.Context, req CreateOrderRequest, user *Buyer, plan *SubscriptionPlan, cfg *PaymentConfig, orderAmount, limitAmount float64, fee FeeBreakdown, sel *InstanceSelection) (*Order, error) {
+	if isCryptoPaymentType(req.PaymentType) || (sel != nil && isCryptoPaymentType(sel.ProviderKey)) {
+		return nil, ErrCryptoCheckoutUnsupported
+	}
 	return s.store.CreateCheckout(ctx, BuildCheckoutDraft(req, user, plan, cfg, orderAmount, limitAmount, fee, sel))
 }
 
@@ -745,6 +751,9 @@ func (s *Checkout) BuildWeChatOAuthRequiredResponse(ctx context.Context, req Cre
 // NO_AVAILABLE_INSTANCE; nonapplicable requests retain ordinary
 // selected-provider validation.
 func (s *Checkout) ValidateSelectedCreateOrderInstance(ctx context.Context, req CreateOrderRequest, sel *InstanceSelection) error {
+	if sel != nil && isCryptoPaymentType(sel.ProviderKey) {
+		return ErrCryptoCheckoutUnsupported
+	}
 	if !RequiresWeChatJSAPICompatibleSelection(req, sel) {
 		return nil
 	}

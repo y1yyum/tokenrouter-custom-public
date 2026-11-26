@@ -1,6 +1,8 @@
 import { mount, type VueWrapper } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import DataTable from '../DataTable.vue'
+import { useDenseTablePreferences } from '@/composables/useDenseTablePreferences'
+import type { Column } from '../types'
 
 // DataTable.columnOrder.spec.ts checks persisted column movement through
 // rendered headers, cells, and keyboard focus. Fixtures exercise structural
@@ -76,6 +78,27 @@ describe('DataTable 列顺序', () => {
   afterEach(() => {
     wrappers.splice(0).forEach((wrapper) => wrapper.unmount())
     vi.restoreAllMocks()
+  })
+
+  // A full storage area still permits reading an older order. The first
+  // mounted table must honour that order before any later visit retries persistence.
+  it('renders migrated headers immediately when the new storage write fails', () => {
+    localStorage.setItem('admin-providers-column-order', '["expires_at","id","groups"]')
+    const write = Storage.prototype.setItem
+    vi.spyOn(Storage.prototype, 'setItem').mockImplementation(function (this: Storage, key, value) {
+      if (key === 'admin-providers-column-order-v2')
+        throw new DOMException('full', 'QuotaExceededError')
+      write.call(this, key, value)
+    })
+    const { initialColumnOrder, columnOrderStorageKey } = useDenseTablePreferences('providers')
+    const keys = ['select', 'identity', 'groups', 'timestamps', 'actions']
+    const table = mountTable({
+      columns: keys.map((key) => ({ key, label: key })),
+      initialColumnOrder,
+      columnOrderStorageKey,
+    })
+    expect(localStorage.getItem(columnOrderStorageKey)).toBeNull()
+    expect(headerKeys(table)).toEqual(['select', 'timestamps', 'identity', 'groups', 'actions'])
   })
 
   // A data column is dragged before another while server sorting is active.
@@ -167,6 +190,52 @@ describe('DataTable 列顺序', () => {
     expect(wrapper.emitted('sort')).toBeUndefined()
     await handle.trigger('keydown', { key: 'ArrowLeft' })
     expect(headerKeys(wrapper)).toEqual(columns.map((column) => column.key))
+  })
+
+  // A compact column exposes two sort keys and one movement handle. Drag and
+  // keyboard movement keep that group intact and preserve the active child sort.
+  it('复合列整列移动，选择和操作固定，排序保持原值', async () => {
+    const compactColumns: Column[] = [
+      { key: 'select', label: '', width: '44px' },
+      {
+        key: 'identity',
+        label: '身份',
+        width: '200px',
+        sortOptions: [
+          { key: 'name', label: '名称' },
+          { key: 'id', label: 'ID' },
+        ],
+      },
+      { key: 'cost', label: '费用', width: '100px' },
+      { key: 'actions', label: '操作', width: '106px' },
+    ]
+    const wrapper = mountTable({
+      columns: compactColumns,
+      density: 'compact',
+      defaultSortKey: 'id',
+      serverSideSort: true,
+    })
+    await dragColumn(wrapper, 'cost', 'identity', 'before')
+    expect(headerKeys(wrapper)).toEqual(['select', 'cost', 'identity', 'actions'])
+    expect(wrapper.findAll('col').map(({ element }) => element.style.width)).toEqual([
+      '44px',
+      '100px',
+      '200px',
+      '106px',
+    ])
+
+    const identity = wrapper.get('th[data-column-key="identity"]')
+    const handle = identity.get('button.column-drag-handle')
+    await handle.trigger('keydown', { key: 'ArrowLeft' })
+    expect(document.activeElement).toBe(handle.element)
+    expect(identity.findAll('.compact-sort-button').map((button) => button.text())).toEqual([
+      '名称',
+      'ID',
+    ])
+    expect(identity.attributes('aria-sort')).toBe('ascending')
+    expect(wrapper.emitted('sort')).toBeUndefined()
+    expect(headerKeys(wrapper)).toEqual(['select', 'identity', 'cost', 'actions'])
+    expect(localStorage.getItem('test-column-order')).toBe(JSON.stringify(['identity', 'cost']))
   })
 
   // A data column is dropped on the fixed actions column. The table must reject

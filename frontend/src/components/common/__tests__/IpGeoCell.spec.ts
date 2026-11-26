@@ -146,4 +146,69 @@ describe('IpGeoCell', () => {
     expect(wrapper.text()).toContain('Private address')
     expect(wrapper.find('button').exists()).toBe(false)
   })
+
+  /**
+   * A public IPv6 address has a long location label and no supplementary details.
+   * Both values remain available on hover, and the refresh and detail actions use
+   * the complete IPv6 address.
+   */
+  it('紧凑 IPv6 有独立 IP 行、完整属地提示和原地址操作', async () => {
+    const ip = '2001:4860:4860:0000:0000:0000:0000:8888'
+    const label = 'US · California · A location with a long display name'
+    mocks.getEntry.mockReturnValue({ status: 'success', label })
+    const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null)
+    const wrapper = mount(IpGeoCell, { props: { ip, compact: true } })
+    try {
+      const ipLine = wrapper.get('div.truncate')
+      expect(ipLine.text()).toBe(ip)
+      expect(ipLine.attributes('title')).toBe(ip)
+      expect(mocks.getEntry).toHaveBeenCalledWith(ip)
+      const [location, refresh] = wrapper.findAll('button')
+      expect(location.classes()).toContain('truncate')
+      expect(location.attributes('title')).toBe(label)
+      expect(refresh.classes()).toContain('shrink-0')
+      await location.trigger('click')
+      expect(openSpy).toHaveBeenCalledWith(
+        'https://www.iplocation.net/ip-lookup?query=2001%3A4860%3A4860%3A0000%3A0000%3A0000%3A0000%3A8888',
+        '_blank',
+        'noopener,noreferrer',
+      )
+      await refresh.trigger('click')
+      expect(mocks.fetchOne).toHaveBeenCalledWith(ip, true)
+    } finally {
+      // Restore window.open even if the assertions fail so other cases use their
+      // own independent navigation spies.
+      openSpy.mockRestore()
+    }
+  })
+
+  /**
+   * An IPv6 lookup in the idle or error state remains actionable below the address.
+   * Both buttons delegate the full address through the ordinary lookup path.
+   */
+  it.each([
+    ['idle', 'Fetch region'],
+    ['error', 'Failed'],
+  ])('紧凑属地保留查询和重试 %s', async (status, text) => {
+    const ip = '2001:4860:4860::8888'
+    mocks.getEntry.mockReturnValue({ status })
+    const wrapper = mount(IpGeoCell, { props: { ip, compact: true } })
+
+    expect(wrapper.get('div.truncate').text()).toBe(ip)
+    expect(wrapper.get('button').text()).toBe(text)
+    await wrapper.get('button').trigger('click')
+    expect(mocks.fetchOne).toHaveBeenCalledWith(ip)
+  })
+
+  /**
+   * A compact cell has no address supplied by the caller. It renders a placeholder
+   * and avoids reading or fetching a lookup entry for the empty value.
+   */
+  it('紧凑属地空值只显示占位符', () => {
+    const wrapper = mount(IpGeoCell, { props: { ip: '', compact: true } })
+
+    expect(wrapper.text()).toBe('-')
+    expect(wrapper.find('button').exists()).toBe(false)
+    expect(mocks.getEntry).not.toHaveBeenCalled()
+  })
 })

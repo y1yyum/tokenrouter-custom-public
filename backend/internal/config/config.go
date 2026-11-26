@@ -265,6 +265,9 @@ func (c *Config) Validate() error {
 	if err := c.validateCSP(); err != nil {
 		return err
 	}
+	if _, err := c.Security.KeyRotationGateCutoff(); err != nil {
+		return err
+	}
 	if err := c.validateLinuxDoOAuth(); err != nil {
 		return err
 	}

@@ -19,6 +19,8 @@
     <div class="overflow-auto">
       <DataTable
         :column-order-storage-key="columnOrderStorageKey"
+        :initial-column-order="initialColumnOrder"
+        :density="isCompact ? 'compact' : 'default'"
         :columns="columns"
         :data="data"
         :loading="loading"
@@ -27,6 +29,296 @@
         :default-sort-order="defaultSortOrder"
         @sort="(key, order) => $emit('sort', key, order)"
       >
+        <template #cell-time="{ row }">
+          <time
+            class="block min-w-0 text-xs tabular-nums text-gray-600 dark:text-gray-400"
+            :datetime="compactTimes.get(row.created_at)?.full ? row.created_at : undefined"
+            :title="compactTimes.get(row.created_at)?.full"
+          >
+            <span class="block truncate">{{ compactTimes.get(row.created_at)?.date || '-' }}</span>
+            <span v-if="compactTimes.get(row.created_at)?.time" class="block truncate">
+              {{ compactTimes.get(row.created_at)?.time }}
+            </span>
+          </time>
+        </template>
+
+        <template #cell-caller="{ row }">
+          <div class="w-full min-w-0 space-y-0.5 text-xs">
+            <div
+              v-if="compactRole !== 'personal'"
+              class="flex min-w-0 items-baseline gap-1"
+              data-test="usage-user-cell"
+            >
+              <span
+                v-if="showAdminDetails && row.system_usage"
+                class="truncate"
+                :title="systemRequestLabel(row)"
+              >
+                {{ systemRequestLabel(row) }}
+              </span>
+              <template v-else>
+                <button
+                  v-if="
+                    showAdminDetails && userClickable && row.user_id && usageUserDisplayName(row)
+                  "
+                  type="button"
+                  class="min-w-0 truncate font-medium text-primary-600 underline decoration-dashed underline-offset-2 hover:text-primary-700 dark:text-primary-400 dark:hover:text-primary-300"
+                  :aria-label="
+                    t('admin.usage.clickToViewBalance') + ' · ' + usageUserDisplayName(row)
+                  "
+                  :title="usageUserTitle(row)"
+                  data-test="usage-user-email"
+                  @click="emit('userClick', row.user_id, row.user?.email)"
+                >
+                  {{ usageUserDisplayName(row) }}
+                </button>
+                <span
+                  v-else
+                  class="min-w-0 truncate font-medium text-gray-900 dark:text-white"
+                  :title="usageUserTitle(row) || undefined"
+                  data-test="usage-user-email"
+                >
+                  {{ usageUserDisplayName(row) || '-' }}
+                </span>
+                <span v-if="row.user_id" class="shrink-0 text-gray-500 dark:text-gray-400">
+                  #{{ row.user_id }}
+                </span>
+                <span
+                  v-if="row.user?.deleted_at"
+                  class="min-w-0 truncate rounded-compact bg-rose-100 px-1 text-rose-600 dark:bg-rose-500/20 dark:text-rose-400"
+                  :title="t('admin.usage.userDeletedBadge')"
+                >
+                  {{ t('admin.usage.userDeletedBadge') }}
+                </span>
+              </template>
+            </div>
+            <div
+              class="flex min-w-0 items-center gap-1 text-gray-600 dark:text-gray-400"
+              :title="row.api_key?.name || undefined"
+            >
+              <Icon name="key" size="xs" class="shrink-0" />
+              <span class="truncate">{{ row.api_key?.name || '-' }}</span>
+            </div>
+            <GroupBadge
+              v-if="row.group"
+              class="max-w-full"
+              :name="row.group.display_name || row.group.name"
+              :display-brand="row.group.display_brand"
+              :show-rate="false"
+              :title="row.group.display_name || row.group.name"
+            />
+            <span v-else class="block text-gray-400 dark:text-gray-500">-</span>
+          </div>
+        </template>
+
+        <template #cell-route="{ row }">
+          <div class="w-full min-w-0 space-y-0.5 text-xs text-gray-600 dark:text-gray-400">
+            <div
+              v-if="showAdminDetails"
+              class="truncate font-medium text-gray-900 dark:text-white"
+              :title="row.provider?.name || undefined"
+            >
+              {{ row.provider?.name || '-' }}
+            </div>
+            <div class="truncate" :title="row.inbound_endpoint?.trim() || undefined">
+              <span v-if="showAdminDetails" class="mr-1">{{ t('usage.inbound') }}</span>
+              {{ row.inbound_endpoint?.trim() || '-' }}
+            </div>
+            <div
+              v-if="showAdminDetails && showUpstreamEndpoint"
+              class="truncate"
+              :title="row.upstream_endpoint?.trim() || undefined"
+            >
+              <span class="mr-1">{{ t('usage.upstream') }}</span>
+              {{ row.upstream_endpoint?.trim() || '-' }}
+            </div>
+          </div>
+        </template>
+
+        <template #cell-model_spec="{ row }">
+          <!-- A dedicated control keeps the complete mapping reachable when long names consume the line. -->
+          <div
+            class="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-x-1 text-xs"
+          >
+            <div
+              class="col-span-2 flex min-w-0 items-center gap-1 font-medium text-gray-900 dark:text-white"
+            >
+              <ProviderIcon v-if="row.platform" :brand="row.platform" size="12px" hide-fallback />
+              <span class="self-baseline truncate" :title="row.model">{{ row.model || '-' }}</span>
+            </div>
+            <span
+              v-if="modelMappings.get(row)?.length"
+              class="truncate text-gray-600 dark:text-gray-400"
+              :title="forwardedModel(row)"
+            >
+              ↳ {{ forwardedModel(row) }}
+            </span>
+            <span
+              v-if="
+                showAdminDetails &&
+                row.upstream_model_mismatch === true &&
+                row.upstream_response_model
+              "
+              class="col-span-2 truncate text-orange-600 dark:text-orange-400"
+              :title="responseModelTitle(row)"
+              data-testid="upstream-response-model"
+            >
+              {{ t('usage.compactTable.responseModel') }} · {{ row.upstream_response_model }}
+            </span>
+            <div
+              class="flex min-w-0 items-baseline gap-1"
+              :class="{ 'col-span-2': modelMappings.get(row)?.length }"
+              :title="modelMetadata(row)"
+            >
+              <span
+                class="shrink-0 rounded-compact px-1 font-medium"
+                :class="getRequestTypeBadgeClass(row)"
+              >
+                {{ getRequestTypeLabel(row) }}
+              </span>
+              <span
+                class="shrink-0 rounded-compact px-1 font-medium"
+                :class="getBillingModeBadgeClass(row.billing_mode || getDisplayBillingMode(row))"
+              >
+                {{ getBillingModeLabel(row.billing_mode || getDisplayBillingMode(row), t) }}
+              </span>
+              <span
+                v-if="row.reasoning_effort || row.requested_reasoning_effort"
+                class="min-w-0 truncate"
+              >
+                {{ reasoningEffortSummary(row) }}
+              </span>
+              <span
+                v-if="row.native_compaction_v2"
+                class="min-w-0 truncate rounded-compact bg-fuchsia-100 px-1 text-fuchsia-800 dark:bg-fuchsia-900 dark:text-fuchsia-200"
+              >
+                {{ t('usage.nativeCompactionV2') }}
+              </span>
+            </div>
+            <HelpTooltip
+              class="col-start-2 self-center"
+              :class="{ 'row-start-2': modelMappings.get(row)?.length }"
+              trigger="both"
+              interactive
+              :accessible-label="t('usage.compactTable.modelDetails')"
+            >
+              <template #trigger="{ open, panelId }">
+                <button
+                  type="button"
+                  class="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-gray-400 hover:text-primary-500 focus-visible:ring-2 focus-visible:ring-primary-500/40 dark:text-gray-500"
+                  :aria-label="
+                    t(
+                      modelMappings.get(row)?.length
+                        ? 'usage.compactTable.modelMapping'
+                        : 'usage.compactTable.modelDetails',
+                    )
+                  "
+                  :aria-expanded="open"
+                  :aria-controls="panelId"
+                  :title="
+                    t(
+                      modelMappings.get(row)?.length
+                        ? 'usage.compactTable.modelMapping'
+                        : 'usage.compactTable.modelDetails',
+                    )
+                  "
+                >
+                  <Icon name="infoCircle" size="xs" />
+                </button>
+              </template>
+              <div class="space-y-1 break-words pr-4" data-testid="usage-model-details">
+                <div class="font-semibold">{{ row.model }}</div>
+                <template v-if="modelMappings.get(row)?.length">
+                  <div>{{ t('usage.compactTable.modelMapping') }}</div>
+                  <ol class="list-decimal pl-4">
+                    <li v-for="(model, index) in modelMappings.get(row)" :key="index">{{
+                      model
+                    }}</li>
+                  </ol>
+                  <div v-if="row.upstream_model && row.upstream_model !== lastMappedModel(row)">
+                    {{ t('usage.upstream') }} · {{ row.upstream_model }}
+                  </div>
+                </template>
+                <div
+                  v-if="
+                    showAdminDetails &&
+                    row.upstream_model_mismatch === true &&
+                    row.upstream_response_model
+                  "
+                >
+                  {{ responseModelTitle(row) }}
+                </div>
+                <div>{{ modelMetadata(row) }}</div>
+              </div>
+            </HelpTooltip>
+          </div>
+        </template>
+
+        <template #cell-request_trace="{ row }">
+          <div class="w-full min-w-0 space-y-0.5 text-xs">
+            <RequestIdLink compact :value="row.request_id" :link="showAdminDetails" />
+            <div
+              v-if="showAdminDetails && row.upstream_request_id"
+              class="flex min-w-0 items-center gap-1"
+            >
+              <span class="shrink-0 text-gray-500 dark:text-gray-400">{{
+                t('usage.upstream')
+              }}</span>
+              <span
+                class="min-w-0 truncate font-mono text-gray-600 dark:text-gray-400"
+                :title="row.upstream_request_id"
+              >
+                {{ truncateMiddle(row.upstream_request_id) }}
+              </span>
+              <button
+                type="button"
+                class="shrink-0 rounded-compact p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
+                :class="{ 'text-green-500': copiedRequestId === row.upstream_request_id }"
+                :aria-label="t('usage.compactTable.copyUpstreamId')"
+                :title="
+                  copiedRequestId === row.upstream_request_id
+                    ? t('keys.copied')
+                    : t('usage.compactTable.copyUpstreamId')
+                "
+                @click="copyUpstreamRequestId(row.upstream_request_id)"
+              >
+                <Icon
+                  :name="copiedRequestId === row.upstream_request_id ? 'check' : 'copy'"
+                  size="xs"
+                />
+              </button>
+            </div>
+          </div>
+        </template>
+
+        <template #cell-client_network="{ row }">
+          <div class="w-full min-w-0 space-y-0.5 text-xs">
+            <IpGeoCell compact :ip="row.ip_address || ''" />
+            <div
+              v-if="row.user_agent"
+              class="flex min-w-0 items-center gap-1 text-gray-600 dark:text-gray-400"
+            >
+              <span class="min-w-0 truncate" :title="row.user_agent">{{
+                formatCompactUserAgent(row.user_agent)
+              }}</span>
+              <button
+                type="button"
+                class="shrink-0 rounded-compact p-0.5 text-gray-400 hover:bg-gray-100 hover:text-gray-600 dark:hover:bg-dark-700 dark:hover:text-gray-300"
+                :class="{ 'text-green-500': copiedUserAgent === row.id }"
+                :aria-label="t('usage.compactTable.copyUserAgent')"
+                :title="
+                  copiedUserAgent === row.id
+                    ? t('keys.copied')
+                    : t('usage.compactTable.copyUserAgent')
+                "
+                @click="copyUserAgent(row)"
+              >
+                <Icon :name="copiedUserAgent === row.id ? 'check' : 'copy'" size="xs" />
+              </button>
+            </div>
+          </div>
+        </template>
+
         <template #cell-user="{ row }">
           <!-- Mobile cards align member values with their other fields; desktop rows retain a fixed width for scanning. -->
           <div
@@ -197,7 +489,22 @@
 
         <template #cell-tokens="{ row }">
           <!-- Image usage displays image counts and billing dimensions. -->
-          <div v-if="isImageUsage(row)" class="flex items-center gap-1.5">
+
+          <div v-if="isCompact && isImageUsage(row)" class="w-full min-w-0 text-xs">
+            <div class="flex items-baseline gap-1 text-gray-900 dark:text-white">
+              <Icon name="modalityImage" size="xs" class="shrink-0 text-indigo-500" />
+              <span class="truncate font-medium" :title="imageUsageCount(row)">{{
+                imageUsageCount(row)
+              }}</span>
+            </div>
+            <div
+              class="truncate text-gray-500 dark:text-gray-400"
+              :title="formatImageBillingSize(row, t)"
+            >
+              {{ formatImageBillingSize(row, t) }}
+            </div>
+          </div>
+          <div v-else-if="isImageUsage(row)" class="flex items-center gap-1.5">
             <Icon name="modalityImage" size="sm" class="h-4 w-4 text-indigo-500" />
             <!-- The image count provides the mobile card label's text baseline. -->
             <span class="self-baseline font-medium text-gray-900 dark:text-white"
@@ -209,8 +516,54 @@
             <span class="text-gray-400">({{ formatImageBillingSize(row, t) }})</span>
           </div>
           <!-- Token usage -->
-          <div v-else class="flex items-center gap-1.5">
-            <div class="space-y-1 text-sm">
+          <div
+            v-else
+            class="flex gap-1.5"
+            :class="isCompact ? 'w-full min-w-0 items-end' : 'items-center'"
+          >
+            <div v-if="isCompact" class="min-w-0 grow space-y-0.5 text-xs">
+              <dl class="grid min-w-0 grid-cols-2 gap-x-2 tabular-nums">
+                <div
+                  v-for="item in compactTokenCounts(row)"
+                  :key="item.label"
+                  class="flex min-w-0 items-baseline justify-between gap-0.5"
+                >
+                  <dt class="shrink-0 text-gray-500 dark:text-gray-400">{{ t(item.label) }}</dt>
+                  <dd
+                    class="truncate font-medium text-gray-900 dark:text-white"
+                    :title="item.value"
+                    >{{ item.value }}</dd
+                  >
+                </div>
+              </dl>
+              <div
+                v-if="row.cache_creation_tokens > 0"
+                class="truncate text-amber-600 dark:text-amber-400"
+                :title="cacheBucketSummary(row)"
+              >
+                {{ cacheBucketSummary(row) }}
+              </div>
+              <div
+                v-if="row.cache_ttl_overridden || (showAdminDetails && row.cache_write_anomaly)"
+                class="flex min-w-0 items-baseline gap-1"
+              >
+                <span
+                  v-if="row.cache_ttl_overridden"
+                  class="shrink-0 rounded-compact bg-rose-100 px-1 text-rose-600 dark:bg-rose-500/20 dark:text-rose-400"
+                  :title="t('usage.cacheTtlOverriddenHint')"
+                  >R</span
+                >
+                <span
+                  v-if="showAdminDetails && row.cache_write_anomaly"
+                  class="truncate rounded-compact bg-amber-100 px-1 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400"
+                  :title="formatCacheWriteAnomalyText(row.cache_write_anomaly)"
+                  data-testid="cache-write-anomaly-badge"
+                >
+                  {{ t('admin.usage.cacheWriteAnomalyBadge') }}
+                </span>
+              </div>
+            </div>
+            <div v-else class="space-y-1 text-sm">
               <div class="flex items-center gap-2">
                 <div class="inline-flex items-center gap-1">
                   <Icon name="arrowDown" size="sm" class="h-3.5 w-3.5 text-emerald-500" />
@@ -291,7 +644,7 @@
             <!-- Token Detail Tooltip -->
             <button
               type="button"
-              class="group relative"
+              class="group relative shrink-0"
               :aria-label="t('usage.tokenDetails')"
               :aria-describedby="tokenTooltipData === row ? tokenTooltipId : undefined"
               @focus="showTokenTooltip($event, row)"
@@ -315,10 +668,11 @@
         </template>
 
         <template #cell-cost="{ row }">
-          <div class="text-sm">
-            <div class="flex items-center gap-1.5">
+          <div :class="isCompact ? 'w-full min-w-0 text-xs' : 'text-sm'">
+            <div class="flex min-w-0 items-center gap-1">
+              <span v-if="isSystemRow(row) && !showProviderBilling" class="text-gray-500">-</span>
               <span
-                v-if="row.system_usage?.cost_state === 'unknown'"
+                v-else-if="isSystemRow(row) && row.system_usage?.cost_state === 'unknown'"
                 class="text-gray-500 dark:text-gray-400"
               >
                 {{ t('usage.costUnknown') }}
@@ -326,11 +680,15 @@
               <!-- System costs and customer charges share amount styling while retaining their recorded USD or configured balance unit. -->
               <span
                 v-else
-                class="font-medium text-green-600 dark:text-green-400"
-                :title="row.system_usage ? t('usage.providerCost') : undefined"
+                class="min-w-0 truncate font-medium text-green-600 dark:text-green-400"
+                :title="
+                  isSystemRow(row)
+                    ? t('usage.providerCost') + ' · ' + formatDetailedUsdAmount(providerBilled(row))
+                    : formatDetailedBalance(row.actual_cost)
+                "
               >
                 {{
-                  row.system_usage
+                  isSystemRow(row)
                     ? formatDetailedUsdAmount(providerBilled(row))
                     : formatDetailedBalance(row.actual_cost)
                 }}
@@ -339,13 +697,14 @@
               <span
                 v-if="row.long_context_billing_applied"
                 data-testid="long-context-billing-marker"
+                :title="t('usage.compactTable.longContextBilling')"
                 class="inline-flex items-center rounded-compact px-1 py-px text-xs font-semibold leading-tight bg-amber-100 text-amber-700 ring-1 ring-inset ring-amber-200 dark:bg-amber-500/20 dark:text-amber-300 dark:ring-amber-500/30"
                 >L</span
               >
               <!-- Cost details -->
               <button
                 type="button"
-                class="group relative"
+                class="group relative shrink-0"
                 :aria-label="t('usage.costDetails')"
                 :aria-describedby="tooltipData === row ? costTooltipId : undefined"
                 @focus="showTooltip($event, row)"
@@ -367,25 +726,54 @@
               </button>
             </div>
             <div
-              v-if="row.system_usage?.cost_state === 'partial'"
-              class="mt-0.5 text-xs text-gray-500 dark:text-gray-400"
+              v-if="
+                isCompact &&
+                !isSystemRow(row) &&
+                showStandardCost &&
+                row.total_cost != null &&
+                row.total_cost !== row.actual_cost
+              "
+              class="truncate text-gray-500 line-through dark:text-gray-400"
+              :title="t('usage.original') + ' · ' + formatDetailedUsdAmount(row.total_cost)"
+              data-testid="usage-original-cost"
+            >
+              {{ formatDetailedUsdAmount(row.total_cost) }}
+            </div>
+            <div
+              v-if="
+                isSystemRow(row) &&
+                showProviderBilling &&
+                row.system_usage?.cost_state === 'partial'
+              "
+              class="truncate text-xs text-gray-500 dark:text-gray-400"
             >
               {{ t('usage.costPartial') }}
             </div>
             <div
               v-else-if="
-                !row.system_usage && showProviderBilling && row.provider_rate_multiplier != null
+                !isSystemRow(row) && showProviderBilling && row.provider_rate_multiplier != null
               "
-              class="mt-0.5 text-xs text-orange-500 dark:text-orange-400"
+              class="truncate text-xs text-orange-500 dark:text-orange-400"
+              :title="
+                t('usage.providerBilled') + ' · ' + formatDetailedUsdAmount(providerBilled(row))
+              "
             >
-              A {{ formatDetailedUsdAmount(providerBilled(row)) }}
+              {{ isCompact ? t('usage.compactTable.providerCost') : 'A' }}
+              {{ formatDetailedUsdAmount(providerBilled(row)) }}
+            </div>
+            <div
+              v-if="isCompact && !isSystemRow(row) && billingFundingLabel(row)"
+              class="truncate text-gray-600 dark:text-gray-400"
+              data-testid="usage-billing-funding"
+            >
+              {{ billingFundingLabel(row) }}
             </div>
           </div>
         </template>
 
         <!-- Latency combines first-token and total-duration severity: the edge colors identify each measure and the middle segment blends them. -->
-        <template #cell-latency="{ row }">
-          <div class="flex items-stretch gap-2">
+        <template #[latencyCell]="{ row }">
+          <div class="flex items-stretch gap-2" :class="{ 'w-full min-w-0': isCompact }">
             <span
               class="w-1 shrink-0 rounded-full"
               :class="
@@ -401,15 +789,31 @@
             ></span>
             <!-- The text grid provides the mobile card label's first-row baseline. -->
             <div
-              class="grid grid-cols-[max-content_max-content] items-baseline gap-x-2 gap-y-0.5 self-baseline text-xs"
+              class="grid items-baseline gap-x-2 gap-y-0.5 self-baseline text-xs"
+              :class="
+                isCompact
+                  ? 'min-w-0 grid-cols-[minmax(0,1fr)_auto]'
+                  : 'grid-cols-[max-content_max-content]'
+              "
             >
-              <span class="text-gray-400 dark:text-gray-500">{{
-                t(
-                  row.ttft_mode === 'first_event'
-                    ? 'usage.latencyFirstEvent'
-                    : 'usage.latencyFirstToken',
-                )
-              }}</span>
+              <span
+                class="text-gray-500 dark:text-gray-400"
+                :class="{ truncate: isCompact }"
+                :title="
+                  t(
+                    row.ttft_mode === 'first_event'
+                      ? 'usage.latencyFirstEvent'
+                      : 'usage.latencyFirstToken',
+                  )
+                "
+                >{{
+                  t(
+                    row.ttft_mode === 'first_event'
+                      ? 'usage.latencyFirstEvent'
+                      : 'usage.latencyFirstToken',
+                  )
+                }}</span
+              >
               <span
                 v-if="row.ttft_ms != null"
                 class="font-medium tabular-nums"
@@ -423,13 +827,24 @@
                 :class="LATENCY_TEXT_CLASSES[durationSeverity(row.duration_ms ?? 0)]"
                 >{{ formatDuration(row.duration_ms) }}</span
               >
+              <span
+                v-if="isCompact"
+                class="col-span-2 truncate tabular-nums text-gray-600 dark:text-gray-400"
+                :title="t('usage.tpsHint')"
+              >
+                {{ formatUsageTps(row) }}
+              </span>
             </div>
             <button
-              v-if="row.detailed_timing"
+              v-if="showAdminDetails && row.detailed_timing"
               type="button"
               class="group relative flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-gray-100 text-gray-400 transition-colors hover:bg-primary-100 hover:text-primary-500 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary-500/40 dark:bg-dark-700 dark:text-gray-500 dark:hover:bg-primary-500/8 dark:hover:text-primary-500"
               :aria-label="t('usage.detailedTiming')"
               :title="t('usage.detailedTiming')"
+              :aria-describedby="timingTooltipData === row ? timingTooltipId : undefined"
+              @focus="showTimingTooltip($event, row)"
+              @blur="hideTimingTooltip"
+              @keydown.esc="closeTimingTooltip"
               @mouseenter="showTimingTooltip($event, row)"
               @mouseleave="hideTimingTooltip"
               @click.stop="toggleTimingTooltip($event, row)"
@@ -652,7 +1067,7 @@
               </div>
             </div>
             <div
-              v-if="tokenTooltipData && tokenTooltipData.cache_write_anomaly"
+              v-if="showAdminDetails && tokenTooltipData?.cache_write_anomaly"
               data-testid="cache-write-anomaly-detail"
               class="space-y-1 rounded-compact bg-amber-500/10 px-2 py-1.5 ring-1 ring-inset ring-amber-500/20"
             >
@@ -713,6 +1128,8 @@
         v-if="timingTooltipVisible"
         :inert="!timingTooltipVisible || undefined"
         ref="timingTooltipRef"
+        :id="timingTooltipId"
+        role="tooltip"
         data-testid="timing-detail-tooltip"
         class="pointer-events-none fixed z-teleport-tooltip"
         :class="{ invisible: !timingTooltipReady }"
@@ -799,12 +1216,15 @@
         >
           <div class="space-y-1.5">
             <!-- Cost Breakdown -->
-            <div class="mb-2 border-b border-gray-700 pb-1.5 dark:border-dark-600">
+            <div
+              v-if="showCostBreakdown || isImageUsage(tooltipData)"
+              class="mb-2 border-b border-gray-700 pb-1.5 dark:border-dark-600"
+            >
               <div class="text-xs font-semibold text-gray-300 mb-1">
                 {{ t('usage.costDetails') }}
               </div>
               <div
-                v-if="tooltipData && tooltipData.input_cost > 0"
+                v-if="showCostBreakdown && tooltipData && tooltipData.input_cost > 0"
                 class="flex items-center justify-between gap-4"
               >
                 <span class="text-gray-400">{{ t('admin.usage.inputCost') }}</span>
@@ -813,7 +1233,7 @@
                 }}</span>
               </div>
               <div
-                v-if="tooltipData && hasImageInputCost(tooltipData)"
+                v-if="showCostBreakdown && tooltipData && hasImageInputCost(tooltipData)"
                 class="flex items-center justify-between gap-4"
               >
                 <span class="text-gray-400">{{ t('usage.imageInputCost') }}</span>
@@ -822,7 +1242,7 @@
                 }}</span>
               </div>
               <div
-                v-if="tooltipData && tooltipData.output_cost > 0"
+                v-if="showCostBreakdown && tooltipData && tooltipData.output_cost > 0"
                 class="flex items-center justify-between gap-4"
               >
                 <span class="text-gray-400">{{ t('admin.usage.outputCost') }}</span>
@@ -831,7 +1251,7 @@
                 }}</span>
               </div>
               <div
-                v-if="tooltipData && hasImageOutputCost(tooltipData)"
+                v-if="showCostBreakdown && tooltipData && hasImageOutputCost(tooltipData)"
                 class="flex items-center justify-between gap-4"
               >
                 <span class="text-gray-400">{{ t('usage.imageOutputCost') }}</span>
@@ -842,6 +1262,7 @@
               <!-- Token billing displays prices per million tokens. -->
               <template
                 v-if="
+                  showCostBreakdown &&
                   tooltipData &&
                   !isImageUsage(tooltipData) &&
                   (!tooltipData.billing_mode || tooltipData.billing_mode === BILLING_MODE_TOKEN)
@@ -953,13 +1374,13 @@
                     formatImageSizeBreakdown(tooltipData)
                   }}</span>
                 </div>
-                <div class="flex items-center justify-between gap-4">
+                <div v-if="showCostBreakdown" class="flex items-center justify-between gap-4">
                   <span class="text-gray-400">{{ t('usage.imageUnitPrice') }}</span>
                   <span class="font-medium text-sky-300"
                     >${{ imageUnitPrice(tooltipData).toFixed(6) }}</span
                   >
                 </div>
-                <div class="flex items-center justify-between gap-4">
+                <div v-if="showCostBreakdown" class="flex items-center justify-between gap-4">
                   <span class="text-gray-400">{{ t('usage.imageTotalPrice') }}</span>
                   <span class="font-medium text-white"
                     >${{ tooltipData.total_cost?.toFixed(6) || '0.000000' }}</span
@@ -968,8 +1389,9 @@
               </template>
               <template
                 v-else-if="
-                  !getDisplayBillingMode(tooltipData) ||
-                  getDisplayBillingMode(tooltipData) === BILLING_MODE_TOKEN
+                  showCostBreakdown &&
+                  (!getDisplayBillingMode(tooltipData) ||
+                    getDisplayBillingMode(tooltipData) === BILLING_MODE_TOKEN)
                 "
               >
                 <div
@@ -1021,7 +1443,10 @@
                   >
                 </div>
               </template>
-              <div v-else-if="tooltipData" class="flex items-center justify-between gap-4">
+              <div
+                v-else-if="showCostBreakdown && tooltipData"
+                class="flex items-center justify-between gap-4"
+              >
                 <span class="text-gray-400">{{
                   tooltipData.billing_mode === BILLING_MODE_IMAGE
                     ? t('usage.imageUnitPrice')
@@ -1032,7 +1457,7 @@
                 }}</span>
               </div>
               <div
-                v-if="tooltipData && tooltipData.cache_creation_cost > 0"
+                v-if="showCostBreakdown && tooltipData && tooltipData.cache_creation_cost > 0"
                 class="flex items-center justify-between gap-4"
               >
                 <span class="text-gray-400">{{ t('admin.usage.cacheCreationCost') }}</span>
@@ -1041,7 +1466,7 @@
                 }}</span>
               </div>
               <div
-                v-if="tooltipData && tooltipData.cache_read_cost > 0"
+                v-if="showCostBreakdown && tooltipData && tooltipData.cache_read_cost > 0"
                 class="flex items-center justify-between gap-4"
               >
                 <span class="text-gray-400">{{ t('admin.usage.cacheReadCost') }}</span>
@@ -1063,13 +1488,19 @@
                 >{{ formatMultiplier(tooltipData?.rate_multiplier || 1) }}x</span
               >
             </div>
-            <div v-if="showStandardCost" class="flex items-center justify-between gap-6">
+            <div
+              v-if="showStandardCost && (!isCompact || !isSystemRow(tooltipData))"
+              class="flex items-center justify-between gap-6"
+            >
               <span class="text-gray-400">{{ t('usage.original') }}</span>
               <span class="font-medium text-white">{{
                 formatDetailedUsdAmount(tooltipData?.total_cost)
               }}</span>
             </div>
-            <div class="flex items-center justify-between gap-6">
+            <div
+              v-if="!isCompact || !isSystemRow(tooltipData)"
+              class="flex items-center justify-between gap-6"
+            >
               <span class="text-gray-400">{{ t('usage.userBilled') }}</span>
               <span class="font-semibold text-green-400">{{
                 formatDetailedBalance(tooltipData?.actual_cost)
@@ -1089,14 +1520,19 @@
                 <span class="text-gray-400">{{ t('usage.providerBilled') }}</span>
                 <span class="font-semibold text-green-400">
                   {{
-                    formatDetailedUsdAmount(
-                      providerBilled({
-                        total_cost: tooltipData?.total_cost,
-                        provider_stats_cost: tooltipData?.provider_stats_cost,
-                        provider_rate_multiplier: tooltipData?.provider_rate_multiplier,
-                      }),
-                    )
+                    isCompact && tooltipData?.system_usage?.cost_state === 'unknown'
+                      ? t('usage.costUnknown')
+                      : formatDetailedUsdAmount(
+                          providerBilled({
+                            total_cost: tooltipData?.total_cost,
+                            provider_stats_cost: tooltipData?.provider_stats_cost,
+                            provider_rate_multiplier: tooltipData?.provider_rate_multiplier,
+                          }),
+                        )
                   }}
+                  <span v-if="isCompact && tooltipData?.system_usage?.cost_state === 'partial'">
+                    {{ t('usage.costPartial') }}
+                  </span>
                 </span>
               </div>
             </template>
@@ -1126,7 +1562,14 @@ import { useI18n } from 'vue-i18n'
 import { useBalanceDisplay } from '@/composables/useBalanceDisplay'
 import { useClipboard } from '@/composables/useClipboard'
 import { COPY_FEEDBACK_MS } from '@/constants/ui'
-import { formatDateTime, formatReasoningEffort, reasoningEffortValuesEqual } from '@/utils/format'
+import {
+  formatCompactDateTimeParts,
+  formatDateTime,
+  formatReasoningEffort,
+  reasoningEffortValuesEqual,
+  truncateMiddle,
+} from '@/utils/format'
+import { formatCompactUserAgent } from '@/utils/userAgent'
 import { formatCacheTokens, formatMultiplier } from '@/utils/formatters'
 import { formatTokenPricePerMillion } from '@/utils/usagePricing'
 import { formatRequestSize } from '@/utils/requestTiming'
@@ -1167,17 +1610,20 @@ import {
 
 import DataTable from '@/components/common/table/DataTable.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
+import HelpTooltip from '@/components/common/HelpTooltip.vue'
 import GroupBadge from '@/components/common/GroupBadge.vue'
 import IpGeoCell from '@/components/common/IpGeoCell.vue'
+import ProviderIcon from '@/components/common/ProviderIcon.vue'
 import Icon from '@/components/icons/Icon.vue'
 import { fetchBatch, getEntry } from '@/utils/ipGeoLookup'
 import type { AdminUsageLog } from '@/api/usage.types'
 import type { Column } from '@/components/common/table/types'
+import type { UsageTableRole } from './usageTableColumns'
 
 // UsageTable.vue renders usage rows with request identity, billing, tokens, and optional
-// diagnostics for administrator and user pages. Parent-selected columns and visibility
-// flags determine which details are exposed; user billing and provider charges use their
-// own amount formatters.
+// diagnostics for administrator and user pages. Compact rows keep the same nine columns
+// across roles and cap each field group at four lines. Legacy callers can still select
+// individual fields. User billing and provider charges use different amount formatters.
 //
 // Floating cost, token, and timing panels render outside table cells to escape
 // scrolling-container clipping. Their row identities are checked after Vue updates before
@@ -1208,9 +1654,14 @@ interface Props {
   data: AdminUsageLog[] // parent-owned usage row records
   loading?: boolean // table query progress flag
   columns: Column[] // visible table column definitions
+  // compactRole enables composite columns and applies their role-specific visibility.
+  // Omission keeps the individual slots available to legacy tables.
+  compactRole?: UsageTableRole
   // columnOrderStorageKey names the local preference owned by this table instance; user and
   // administrator pages supply separate storage keys.
   columnOrderStorageKey?: string
+  /** Carries the page migration result across a failed browser storage write. */
+  initialColumnOrder?: readonly string[]
   serverSideSort?: boolean // server sorting event flag
   defaultSortKey?: string // initial sorted column key
   defaultSortOrder?: 'asc' | 'desc' // initial sort direction value
@@ -1264,12 +1715,41 @@ const { copyToClipboard } = useClipboard()
 // copiedRequestId marks the upstream identifier whose copy action most recently succeeded
 // until its feedback timer clears it.
 const copiedRequestId = ref<string | null>(null)
-// These setup-time visibility values select provider billing, standard charges, upstream
-// endpoints, and administrator user navigation in row templates.
-const showProviderBilling = props.showProviderBilling
-const showStandardCost = props.showStandardCost
-const showUpstreamEndpoint = props.showUpstreamEndpoint
-const userClickable = props.userClickable
+// The regular table takes its visibility flags from the caller. Compact rows also
+// require administrator layout for fields excluded by the user usage endpoint.
+const isCompact = computed(() => props.compactRole !== undefined)
+const showAdminDetails = computed(() => !isCompact.value || props.compactRole === 'admin')
+const showProviderBilling = computed(() => showAdminDetails.value && props.showProviderBilling)
+const showStandardCost = computed(() => showAdminDetails.value && props.showStandardCost)
+const showUpstreamEndpoint = computed(() => props.showUpstreamEndpoint)
+const userClickable = computed(() => props.userClickable)
+const latencyCell = computed(() => (isCompact.value ? 'cell-performance' : 'cell-latency'))
+
+// Compact timestamps and mapping chains are computed once for the current page so
+// display, titles, and details reuse the same values.
+const compactTimes = computed(
+  () =>
+    new Map(props.data.map((row) => [row.created_at, formatCompactDateTimeParts(row.created_at)])),
+)
+const modelMappings = computed(() => {
+  if (!showAdminDetails.value) return new Map<AdminUsageLog, string[]>()
+  return new Map(props.data.map((row) => [row, modelMappingSteps(row)]))
+})
+
+// User-agent feedback belongs to the row whose exact header was copied.
+const copiedUserAgent = ref<number | null>(null)
+let userAgentFeedbackTimer: ReturnType<typeof setTimeout> | undefined
+
+// copyUserAgent keeps the recorded header intact even though the cell shows a summary.
+async function copyUserAgent(row: AdminUsageLog) {
+  if (!row.user_agent || !(await copyToClipboard(row.user_agent))) return
+  copiedUserAgent.value = row.id
+  clearTimeout(userAgentFeedbackTimer)
+  userAgentFeedbackTimer = setTimeout(() => {
+    copiedUserAgent.value = null
+  }, COPY_FEEDBACK_MS)
+}
+
 // compactUserColumn follows the parent's compact member-column preference for team table
 // width and email truncation.
 const compactUserColumn = computed(() => props.compactUserColumn)
@@ -1309,7 +1789,9 @@ const usageUserTitle = (row: AdminUsageLog): string => {
 // showIpGeoToolbar requires both parent permission and a visible IP column before
 // presenting page-level lookup controls.
 const showIpGeoToolbar = computed(
-  () => props.showIpGeoToolbar && props.columns.some((col) => col.key === 'ip_address'),
+  () =>
+    props.showIpGeoToolbar &&
+    props.columns.some((col) => col.key === (isCompact.value ? 'client_network' : 'ip_address')),
 )
 
 // hasReasoningEffortMapping reports a difference between nonempty requested and forwarded
@@ -1319,6 +1801,109 @@ const hasReasoningEffortMapping = (row: AdminUsageLog): boolean => {
   const requested = row.requested_reasoning_effort?.trim() || ''
   const forwarded = row.reasoning_effort?.trim() || ''
   return requested !== '' && forwarded !== '' && !reasoningEffortValuesEqual(requested, forwarded)
+}
+
+// modelMappingSteps preserves intermediate hops. Older records may carry only
+// the upstream model, which still provides the requested-to-forwarded pair.
+function modelMappingSteps(row: AdminUsageLog): string[] {
+  const steps = row.model_mapping_chain
+    ?.split('→')
+    .map((step) => step.trim())
+    .filter(Boolean)
+  if (steps && steps.length > 1) return steps
+  if (row.upstream_model && row.upstream_model !== row.model) return [row.model, row.upstream_model]
+  return []
+}
+
+// lastMappedModel resolves the last recorded hop without altering the mapping chain.
+function lastMappedModel(row: AdminUsageLog): string | undefined {
+  const steps = modelMappings.value.get(row)
+  return steps?.[steps.length - 1]
+}
+
+// forwardedModel prefers the observed upstream model over the last mapping hop.
+function forwardedModel(row: AdminUsageLog): string | undefined {
+  return row.upstream_model || lastMappedModel(row)
+}
+
+// responseModelTitle identifies the returned model relative to the forwarded model.
+function responseModelTitle(row: AdminUsageLog): string {
+  return (
+    t('usage.upstreamResponseModel') +
+    ' · ' +
+    (forwardedModel(row) || row.model) +
+    ' → ' +
+    row.upstream_response_model
+  )
+}
+
+// reasoningEffortSummary preserves an observed rewrite of the requested effort.
+function reasoningEffortSummary(row: AdminUsageLog): string {
+  const requested = formatReasoningEffort(row.requested_reasoning_effort)
+  const applied = formatReasoningEffort(row.reasoning_effort)
+  if (hasReasoningEffortMapping(row)) return requested + ' → ' + applied
+  return row.requested_reasoning_effort ? requested : applied
+}
+
+// modelMetadata supplies the complete line in the model details panel and hover title.
+function modelMetadata(row: AdminUsageLog): string {
+  const labels = [
+    getRequestTypeLabel(row),
+    getBillingModeLabel(row.billing_mode || getDisplayBillingMode(row), t),
+  ]
+  if (row.requested_reasoning_effort || row.reasoning_effort)
+    labels.push(reasoningEffortSummary(row))
+  if (row.native_compaction_v2) labels.push(t('usage.nativeCompactionV2'))
+  return labels.join(' · ')
+}
+
+// isSystemRow limits internal cost and caller fields to administrator diagnostics.
+function isSystemRow(row: AdminUsageLog | null): boolean {
+  return showAdminDetails.value && Boolean(row?.system_usage)
+}
+
+// systemRequestLabel keeps unnamed system requests distinguishable from customer rows.
+function systemRequestLabel(row: AdminUsageLog): string {
+  return t(
+    row.request_source
+      ? 'admin.usage.requestSources.' + row.request_source
+      : 'admin.usage.requestSources.system',
+  )
+}
+
+// billingFundingLabel only accepts explicit balance and subscription codes. Missing
+// or unknown codes leave the funding line empty.
+function billingFundingLabel(row: AdminUsageLog): string {
+  if (row.billing_type === 0) return t('admin.usage.billingTypeBalance')
+  if (row.billing_type === 1) return t('admin.usage.billingTypeSubscription')
+  return ''
+}
+
+// compactTokenCounts orders the four visible token counters by reading order.
+function compactTokenCounts(row: AdminUsageLog) {
+  return [
+    { label: 'usage.compactTable.tokenInput', value: (row.input_tokens ?? 0).toLocaleString() },
+    { label: 'usage.compactTable.tokenOutput', value: (row.output_tokens ?? 0).toLocaleString() },
+    { label: 'usage.compactTable.cacheRead', value: (row.cache_read_tokens ?? 0).toLocaleString() },
+    {
+      label: 'usage.compactTable.cacheWrite',
+      value: (row.cache_creation_tokens ?? 0).toLocaleString(),
+    },
+  ]
+}
+
+// cacheBucketSummary keeps TTL amounts on one line; the token panel keeps full counts.
+function cacheBucketSummary(row: AdminUsageLog): string {
+  return cacheWriteBuckets(row)
+    .map((bucket) => bucket.ttl + ' ' + formatCacheTokens(bucket.tokens))
+    .join(' · ')
+}
+
+// imageUsageCount combines generated images and optional animation frames.
+function imageUsageCount(row: AdminUsageLog): string {
+  const images = row.image_count + t('usage.imageUnit')
+  if (!row.image_frame_count) return images
+  return images + ' · ' + row.image_frame_count + t('usage.imageFrameUnit')
 }
 
 // currentPageIps deduplicates nonempty addresses from the visible data page before batch
@@ -1374,6 +1959,7 @@ const copyUpstreamRequestId = async (upstreamRequestId: string) => {
 // Each table's focused trigger describes its own floating panel.
 const tokenTooltipId = useId()
 const costTooltipId = useId()
+const timingTooltipId = useId()
 
 // tooltipVisible, tooltipReady, tooltipRef, tooltipPosition, and tooltipData coordinate the
 // cost panel: selection and mounting precede measured positioning, then readiness reveals
@@ -1383,6 +1969,11 @@ const tooltipReady = ref(false)
 const tooltipRef = ref<HTMLElement | null>(null)
 const tooltipPosition = ref<TooltipPosition>({ x: 0, y: 0, arrowY: 0, placement: 'overlay' })
 const tooltipData = ref<AdminUsageLog | null>(null)
+// Standard amounts follow the billing visibility setting. Recorded image dimensions
+// remain available separately because they describe the request rather than its price.
+const showCostBreakdown = computed(
+  () => !isCompact.value || (showStandardCost.value && !isSystemRow(tooltipData.value)),
+)
 
 // tokenTooltipVisible, tokenTooltipReady, tokenTooltipRef, tokenTooltipPosition, and
 // tokenTooltipData coordinate the token panel: selection and mounting precede measured
@@ -1727,7 +2318,7 @@ const hideTokenTooltip = () => {
 // pending opening. A close or another row selection therefore prevents stale positioning.
 // Accepted measurements set the panel coordinates and readiness; the caller separately
 // decides whether this timing inspection remains pinned during pointer movement.
-const updateTimingTooltip = async (event: MouseEvent, row: AdminUsageLog) => {
+const updateTimingTooltip = async (event: Event, row: AdminUsageLog) => {
   if (!row.detailed_timing) return
   // Keep the timing row and anchor together across rendering; visibility and row
   // checks reject obsolete measurements before position and readiness publish.
@@ -1749,7 +2340,7 @@ const updateTimingTooltip = async (event: MouseEvent, row: AdminUsageLog) => {
 }
 
 // showTimingTooltip starts the timing-panel opening flow for the supplied usage row.
-const showTimingTooltip = (event: MouseEvent, row: AdminUsageLog) => {
+const showTimingTooltip = (event: Event, row: AdminUsageLog) => {
   void updateTimingTooltip(event, row)
 }
 
@@ -1804,5 +2395,6 @@ onMounted(() => {
 // cannot operate on its stored anchor state.
 onUnmounted(() => {
   document.removeEventListener('click', handleTimingTooltipDocumentClick)
+  clearTimeout(userAgentFeedbackTimer)
 })
 </script>

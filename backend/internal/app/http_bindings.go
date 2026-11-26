@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"net/http"
 	"sync/atomic"
 	"time"
 
@@ -10,6 +11,8 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/app/lifecycle"
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	cryptohttp "github.com/TokenFlux/TokenRouter/internal/cryptopay/httpapi"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/gateway/admission"
 	gatewayhttpapi "github.com/TokenFlux/TokenRouter/internal/gateway/httpapi"
 	identityhttp "github.com/TokenFlux/TokenRouter/internal/identity/httpapi"
@@ -33,6 +36,8 @@ import (
 // and CSP frame origins while settings updates refresh those values. Failed
 // refreshes retain the last successful state, and embedded frontend builds add
 // cache invalidation to the same notification that reloads frame origins.
+// The review guard runs before frontend and API dispatch. Review requests
+// retain local logging while the ordinary request-record writer stays off.
 
 // httpRouteMount registers application route families with their shared
 // security middleware.
@@ -77,15 +82,28 @@ func provideRouterRuntime(requests *requestlog.Service, public *site.PublicServi
 			origins.Store(&next)
 		}
 	}
-	middleware.SetIngressRejectRecorder(opsService)
+	requestLogger := middleware.RequestLogger(requests.Observe)
+	audit := gin.HandlerFunc(auditLog)
+	if mode.TestInstance() {
+		// The review lifecycle leaves request-record and Ops writers inactive.
+		// Drop their observers even when the operator enables interactive writes.
+		requestLogger = middleware.RequestLogger()
+		middleware.SetIngressRejectRecorder(nil)
+	} else {
+		middleware.SetIngressRejectRecorder(opsService)
+	}
+	if mode.ReadOnly() {
+		audit = func(c *gin.Context) { c.Next() }
+	}
 	rt := &server.RouterRuntime{Middleware: []gin.HandlerFunc{
-		middleware.RequestLogger(requests.Observe),
+		requestLogger,
 		middleware.Locale(func() string { value, _ := defaultLanguage.Load().(string); return value }),
 		identityhttp.SessionBindingContext(func() identityhttp.ForwardedIPSettings {
 			value := cfg.ForwardedClientIPSettings()
 			return identityhttp.ForwardedIPSettings{TrustForwardedIP: value.TrustForwardedIP, Headers: value.Headers}
 		}), middleware.Logger(), middleware.CORS(cfg.Security.CORS),
 		middleware.SecurityHeaders(cfg.Security.CSP, func() []string { return *origins.Load() }), middleware.ServerTiming(cfg.Server.EnableServerTiming),
+		cryptoReviewHTTPGuard(),
 	}}
 	endpoints := make(map[protocol.ProtocolID]string)
 	for _, entry := range gatewayhttpapi.ProtocolEndpoints() {
@@ -120,16 +138,35 @@ func provideRouterRuntime(requests *requestlog.Service, public *site.PublicServi
 	}
 	panelLimiter := middleware.NewPanelRateLimiter(panelCounter, panelSettings)
 	rt.Register = []func(*gin.Engine){func(r *gin.Engine) {
-		mount(r, httpRouteSecurity{JWT: gin.HandlerFunc(jwtAuth), Admin: gin.HandlerFunc(adminAuth), Audit: gin.HandlerFunc(auditLog), StepUp: gin.HandlerFunc(stepUpAuth), BackendAuth: identityhttp.BackendModeAuthGuard(backendMode), BackendUser: identityhttp.BackendModeUserGuard(backendMode), Panel: panelLimiter, AuthLimiter: authLimiter}, protocolCatalog, func(v1 *gin.RouterGroup) {
+		mount(r, httpRouteSecurity{JWT: gin.HandlerFunc(jwtAuth), Admin: gin.HandlerFunc(adminAuth), Audit: audit, StepUp: gin.HandlerFunc(stepUpAuth), BackendAuth: identityhttp.BackendModeAuthGuard(backendMode), BackendUser: identityhttp.BackendModeUserGuard(backendMode), Panel: panelLimiter, AuthLimiter: authLimiter}, protocolCatalog, func(v1 *gin.RouterGroup) {
 			pages.Register(v1, gin.HandlerFunc(jwtAuth), gin.HandlerFunc(adminAuth))
-			registerRequestLogRoutes(v1, requests, gin.HandlerFunc(adminAuth), gin.HandlerFunc(auditLog), panelLimiter.Heavy())
+			registerRequestLogRoutes(v1, requests, gin.HandlerFunc(adminAuth), audit, panelLimiter.Heavy())
 		})
-		if err := mcpHandler.Mount(r, gin.HandlerFunc(adminAuth), gin.HandlerFunc(auditLog)); err != nil {
+		if err := mcpHandler.Mount(r, gin.HandlerFunc(adminAuth), audit); err != nil {
 			panic(err)
 		}
 	}}
 
 	return rt, nil
+}
+
+// cryptoReviewHTTPGuard applies the ported global allowlist and admits
+// TokenRouter's additional crypto console page URLs before SPA dispatch.
+// These exceptions require an unregistered GET or HEAD so a future server
+// handler at the same path still goes through the normal allowlist.
+func cryptoReviewHTTPGuard() gin.HandlerFunc {
+	guard := cryptohttp.CryptoAdminTestModeGuard()
+	return func(c *gin.Context) {
+		if c.FullPath() == "" && (c.Request.Method == http.MethodGet || c.Request.Method == http.MethodHead) {
+			switch c.Request.URL.Path {
+			case "/admin/crypto/addresses", "/admin/crypto/sweeps", "/admin/crypto/deposits",
+				"/admin/crypto/chains", "/admin/crypto/settings":
+				c.Next()
+				return
+			}
+		}
+		guard(c)
+	}
 }
 
 // provideHTTPOptions copies listener options from required startup

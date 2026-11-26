@@ -1,0 +1,580 @@
+package sweeper
+
+import (
+	"bytes"
+	"context"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"log/slog"
+	"math/big"
+	"strconv"
+	"strings"
+
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/rpc"
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+)
+
+var (
+	errGasPayerPending = errors.New("gas payer has an unresolved transaction; funding deferred")
+	// errGasBudgetInsufficient marks a top-up the operator's native budget
+	// cannot cover right now. Waiting for a cheaper quote or a raised budget is
+	// not a failed payment, so the caller defers instead of spending an attempt.
+	errGasBudgetInsufficient = errors.New("insufficient native gas budget to fund this sweep; it will be retried when the gas budget allows")
+	// errGasPayerUnderfunded means the gas wallet cannot pay for the top-up plus
+	// its own transfer fee. Signing anyway produced bytes no node accepts
+	// ("insufficient funds for gas"); the row then stayed gas_pending with a
+	// hash and blocked every other address on the chain, because only a
+	// confirmation releases a payer and an unfundable transaction never
+	// confirms.
+	errGasPayerUnderfunded = errors.New("gas wallet native balance cannot cover another top-up; fund the gas wallet and the sweep will resume")
+	// errGasQuoteExceedsBudget is a temporary market condition, not a failure.
+	errGasQuoteExceedsBudget = errors.New("RPC gas quote exceeds the configured native funding budget")
+)
+
+func (e *Executor) prepareGas(ctx context.Context, pool *rpc.Pool, j *sweepJob, amount, price *big.Int) error {
+	// A zero (or negative) top-up cannot help the child and would only produce a
+	// signature that validation must reject. Treat it as unfunded, not failed.
+	if amount == nil || amount.Sign() <= 0 || price == nil || price.Sign() <= 0 {
+		return errGasBudgetInsufficient
+	}
+	if e.wallet == nil {
+		return fmt.Errorf("wallet is not initialized")
+	}
+	hot, err := e.wallet.HotAddresses(ctx)
+	if err != nil {
+		return err
+	}
+	if !common.IsHexAddress(hot.EVM) || isZeroAddress(hot.EVM) {
+		return fmt.Errorf("wallet returned invalid gas payer")
+	}
+	busy, err := e.gasPayerBusy(ctx, j, hot.EVM)
+	if err != nil {
+		return &persistenceError{err}
+	}
+	if busy {
+		return errGasPayerPending
+	}
+	// The payer also pays the 21000-gas fee of this transfer. Check it here,
+	// before anything is signed or persisted, so a drained gas wallet defers
+	// instead of leaving an unmineable reservation behind.
+	balance, err := pool.Balance(ctx, hot.EVM)
+	if err != nil {
+		return err
+	}
+	required := new(big.Int).Add(amount, new(big.Int).Mul(price, big.NewInt(21000)))
+	if balance.Cmp(required) < 0 {
+		slog.Warn("[cryptopay] gas wallet cannot cover the top-up",
+			"job_id", j.ID, "chain", j.Chain,
+			"shortfall_wei", new(big.Int).Sub(required, balance).String())
+		return errGasPayerUnderfunded
+	}
+	// The receiving address may be a cold wallet. Its nonce is irrelevant.
+	nonce, err := pool.Nonce(ctx, hot.EVM)
+	if err != nil {
+		return err
+	}
+	idx := j.DerivationIndex
+	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{Index: hot.Index, Kind: "gas", GasIndex: &idx,
+		ChainID: ChainIDs[j.Chain], Token: "native", To: j.Address, Amount: amount.String(),
+		Nonce: nonce, GasPrice: price.String(), GasLimit: 21000})
+	if err != nil {
+		return err
+	}
+	hash, err := validateSigned(raw, j.Chain, hot.EVM, j.Address, "native", amount, nonce, 21000, price)
+	if err != nil {
+		return err
+	}
+	j.GasPayer, j.GasAmount, j.GasNonce = hot.EVM, amount.String(), strconv.FormatUint(nonce, 10)
+	j.GasRaw, j.GasHash, j.Status, j.Error = raw, hash, "gas_pending", ""
+	return e.saveJob(ctx, j) // autocommit; broadcast is only in settle
+}
+
+func (e *Executor) prepareSweep(ctx context.Context, pool *rpc.Pool, j *sweepJob, price *big.Int) error {
+	if e.wallet == nil {
+		return fmt.Errorf("wallet is not initialized")
+	}
+	nonce, err := e.sweepNonce(ctx, pool, j)
+	if err != nil {
+		return err
+	}
+	// A native coin sweep is a plain value transfer: intrinsic gas only, no
+	// calldata. An ERC-20 sweep needs the larger contract-call budget.
+	gasLimit := e.sweepGasLimitFor(j.Chain, j.Token)
+	raw, err := e.wallet.SignEVM(ctx, EVMSignRequest{Index: j.DerivationIndex, Kind: "sweep",
+		ChainID: ChainIDs[j.Chain], Token: j.Token, To: j.Destination, Amount: j.RawAmount.String(),
+		Nonce: nonce, GasPrice: price.String(), GasLimit: gasLimit})
+	if err != nil {
+		return err
+	}
+	hash, err := validateSigned(raw, j.Chain, j.Address, j.Destination, j.Token,
+		j.RawAmount, nonce, gasLimit, price)
+	if err != nil {
+		return err
+	}
+	j.SweepNonce, j.SweepRaw, j.SweepHash = strconv.FormatUint(nonce, 10), raw, hash
+	j.Status, j.Error = "sweep_pending", ""
+	return e.saveJob(ctx, j)
+}
+
+// Decode and verify the signed bytes, rather than trusting a wallet/RPC hash.
+// This also detects seed/index changes before any funds can be spent.
+func validateSigned(raw, chain, from, to, token string, amount *big.Int, nonce, gas uint64, price *big.Int) (string, error) {
+	encoded, err := hex.DecodeString(strings.TrimPrefix(raw, "0x"))
+	if err != nil {
+		return "", fmt.Errorf("invalid signed transaction encoding: %w", err)
+	}
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(encoded); err != nil {
+		return "", fmt.Errorf("invalid signed transaction: %w", err)
+	}
+	chainID := ChainIDs[chain]
+	if chainID <= 0 || tx.ChainId().Cmp(big.NewInt(chainID)) != 0 ||
+		tx.Nonce() != nonce || !gasLimitMatches(tx.Gas(), gas) || tx.To() == nil ||
+		!common.IsHexAddress(from) || !common.IsHexAddress(to) || amount == nil || amount.Sign() <= 0 ||
+		(tx.Type() != types.DynamicFeeTxType && tx.Type() != types.LegacyTxType) {
+		return "", fmt.Errorf("signed transaction does not match reserved chain/nonce/gas")
+	}
+	sender, err := types.Sender(types.LatestSignerForChainID(big.NewInt(chainID)), &tx)
+	if err != nil || sender != common.HexToAddress(from) {
+		return "", fmt.Errorf("signed transaction sender does not match reserved payer")
+	}
+	if tx.GasFeeCap().Sign() <= 0 || tx.GasTipCap().Cmp(tx.GasFeeCap()) > 0 ||
+		(price != nil && tx.GasFeeCap().Cmp(price) != 0) {
+		return "", fmt.Errorf("signed transaction fee does not match request")
+	}
+	if token == "native" {
+		if *tx.To() != common.HexToAddress(to) || tx.Value().Cmp(amount) != 0 || len(tx.Data()) != 0 {
+			return "", fmt.Errorf("signed gas payment differs from reserved payment")
+		}
+	} else {
+		if !common.IsHexAddress(token) || amount.BitLen() > 256 {
+			return "", fmt.Errorf("invalid reserved token/amount")
+		}
+		data := common.FromHex("0xa9059cbb")
+		data = append(data, common.LeftPadBytes(common.HexToAddress(to).Bytes(), 32)...)
+		data = append(data, common.LeftPadBytes(amount.Bytes(), 32)...)
+		if *tx.To() != common.HexToAddress(token) || tx.Value().Sign() != 0 || !bytes.Equal(tx.Data(), data) {
+			return "", fmt.Errorf("signed token transfer differs from immutable plan")
+		}
+	}
+	return tx.Hash().Hex(), nil
+}
+
+type receiptState int
+
+const (
+	receiptAbsent receiptState = iota
+	receiptWaiting
+	receiptConfirmed
+	receiptReverted
+)
+
+// Receipt observation reasons. This is the complete diagnostic vocabulary for
+// "why did a mined sweep not advance": the durable payment record is redacted
+// (rpc.SafeRecordedError collapses anything it cannot classify into one
+// sentence), so the only place the real cause can survive is a structured log
+// with a fixed reason. Keep every value short, stable and free of node text.
+const (
+	reasonReceiptConfirmed  = "receipt_confirmed"
+	reasonReceiptAbsent     = "receipt_absent"
+	reasonReceiptIncomplete = "receipt_incomplete"
+	reasonReceiptReverted   = "receipt_reverted"
+	reasonCanonicalMismatch = "canonical_mismatch"
+	reasonCanonicalUnread   = "canonical_unreadable"
+	reasonDepthShort        = "depth_insufficient"
+	reasonFinalityPending   = "finality_pending"
+	reasonFinalityMissing   = "finality_unavailable"
+	reasonRPCFailure        = "rpc_failure"
+)
+
+// observeTransaction logs one receipt observation. It never receives an
+// endpoint URL, a credential or raw node text: rpc.HostOf keeps only the
+// hostname and rpc.DetailOf sanitises the node's own words before they are
+// logged, which is why the same fields cannot enter the payment record.
+func observeTransaction(chain, hash, reason string, attrs ...any) {
+	fields := []any{"chain", chain, "tx_hash", hash, "reason", reason}
+	slog.Info("[cryptopay] sweep receipt observation", append(fields, attrs...)...)
+}
+
+// logRPCFailure records the classified failure that made an observation
+// inconclusive. Without it every RPC-shaped failure looks identical to the
+// generic sentence that reaches the database.
+func logRPCFailure(chain, hash, reason string, err error) {
+	slog.Warn("[cryptopay] sweep receipt observation failed",
+		"chain", chain, "tx_hash", hash, "reason", reason,
+		"category", rpc.CategoryOf(err), "endpoint_host", rpc.HostOf(err),
+		"detail", rpc.DetailOf(err), "error", rpc.SafeError(err))
+}
+
+// maxObservationAttempts bounds how many endpoints one positive-evidence search
+// may ask. A negative answer is only believed after every allowed attempt, so
+// one endpoint that lags, prunes or lies cannot veto a receipt another endpoint
+// already has. Three is enough to survive one lagging and one failing node
+// without turning every poll into a pool-wide scan; rotation advances the start
+// index on each call, so consecutive attempts land on different endpoints.
+const maxObservationAttempts = 3
+
+func observationAttempts(pool *rpc.Pool) int {
+	n := len(pool.Endpoints())
+	switch {
+	case n <= 0:
+		return 1
+	case n > maxObservationAttempts:
+		return maxObservationAttempts
+	}
+	return n
+}
+
+// Durable phrases for an observation that is not (yet) a confirmation. Both are
+// recognised by rpc.SafeRecordedError, so a payment record keeps the reason
+// instead of collapsing it into the generic operation sentence.
+var (
+	errReceiptIncomplete = errors.New("incomplete or mismatched receipt")
+	errNotCanonical      = errors.New("receipt block is no longer canonical")
+)
+
+// receiptFields is the part of a receipt that decides confirmation.
+type receiptFields struct {
+	Status      string
+	BlockNumber string
+	BlockHash   string
+}
+
+// readReceipt asks the pool for the receipt until an endpoint returns a usable
+// one. absent is true only when at least one endpoint answered JSON null and no
+// attempt failed: a null from a node that lags behind a peer is not proof the
+// transaction is missing. A failed attempt stops the search because Pool.Call
+// has already rotated over every endpoint before it reports a failure.
+func readReceipt(ctx context.Context, pool *rpc.Pool, chain, hash string) (receiptFields, bool, bool, error) {
+	attempts := observationAttempts(pool)
+	var absent bool
+	for i := 0; i < attempts; i++ {
+		result, err := pool.Call(ctx, "eth_getTransactionReceipt", []any{hash})
+		if err != nil {
+			return receiptFields{}, false, false, err
+		}
+		if len(result) == 0 || string(result) == "null" {
+			absent = true
+			continue
+		}
+		var r struct {
+			Hash        string `json:"transactionHash"`
+			Status      string `json:"status"`
+			BlockNumber string `json:"blockNumber"`
+			BlockHash   string `json:"blockHash"`
+		}
+		if err := json.Unmarshal(result, &r); err != nil {
+			observeTransaction(chain, hash, reasonReceiptIncomplete, "cause", "undecodable receipt")
+			continue
+		}
+		if !strings.EqualFold(r.Hash, hash) || len(r.BlockHash) != 66 ||
+			(r.Status != "0x1" && r.Status != "0x0") {
+			observeTransaction(chain, hash, reasonReceiptIncomplete, "cause", "hash or status mismatch")
+			continue
+		}
+		return receiptFields{Status: r.Status, BlockNumber: r.BlockNumber, BlockHash: r.BlockHash}, true, false, nil
+	}
+	return receiptFields{}, false, absent, nil
+}
+
+// canonicalBlock asks the pool until an endpoint answers the receipt's block
+// number with the receipt's block hash. A null or a different hash from one
+// node means that node has not seen this block (yet); only every attempt
+// disagreeing is a real canonical mismatch. A failed attempt stops the search,
+// because Pool.Call already rotated over every endpoint.
+func canonicalBlock(ctx context.Context, pool *rpc.Pool, chain, hash string, receipt receiptFields, block uint64) (bool, error) {
+	attempts := observationAttempts(pool)
+	mismatch := false
+	for i := 0; i < attempts; i++ {
+		canonical, err := pool.Call(ctx, "eth_getBlockByNumber", []any{receipt.BlockNumber, false})
+		if err != nil {
+			return false, err
+		}
+		var header struct {
+			Hash string `json:"hash"`
+		}
+		if err := json.Unmarshal(canonical, &header); err != nil {
+			observeTransaction(chain, hash, reasonCanonicalUnread, "block", block)
+			mismatch = true
+			continue
+		}
+		if strings.EqualFold(header.Hash, receipt.BlockHash) {
+			return true, nil
+		}
+		mismatch = true
+		if i+1 == attempts {
+			observeTransaction(chain, hash, reasonCanonicalMismatch, "block", block,
+				"receipt_block_hash", receipt.BlockHash, "canonical_block_hash", header.Hash)
+		}
+	}
+	if mismatch {
+		return false, errNotCanonical
+	}
+	return false, nil
+}
+
+// No polling loops: a pending job returns control to the rest of the group.
+// Missing confirmation policy permits observation, never finalization.
+func checkReceipt(ctx context.Context, pool *rpc.Pool, chain, hash string, required uint64) (receiptState, error) {
+	receipt, found, absent, err := readReceipt(ctx, pool, chain, hash)
+	if err != nil {
+		logRPCFailure(chain, hash, reasonRPCFailure, err)
+		return receiptWaiting, err
+	}
+	if !found {
+		if absent {
+			observeTransaction(chain, hash, reasonReceiptAbsent, "attempts", observationAttempts(pool))
+			return receiptAbsent, nil
+		}
+		// Only malformed answers: no endpoint proved absence and none supplied
+		// a usable receipt, so the outcome is inconclusive rather than missing.
+		logRPCFailure(chain, hash, reasonReceiptIncomplete, fmt.Errorf("no usable receipt from any endpoint"))
+		return receiptWaiting, errReceiptIncomplete
+	}
+	block, err := strconv.ParseUint(strings.TrimPrefix(receipt.BlockNumber, "0x"), 16, 64)
+	if err != nil {
+		observeTransaction(chain, hash, reasonReceiptIncomplete, "cause", "undecodable block number")
+		return receiptWaiting, err
+	}
+	agreed, err := canonicalBlock(ctx, pool, chain, hash, receipt, block)
+	if err != nil {
+		if errors.Is(err, errNotCanonical) {
+			return receiptWaiting, err
+		}
+		logRPCFailure(chain, hash, reasonRPCFailure, err)
+		return receiptWaiting, err
+	}
+	if !agreed {
+		// Every allowed endpoint failed to return a block header at this
+		// height. Nothing proved the receipt wrong; say the read was empty.
+		logRPCFailure(chain, hash, reasonCanonicalUnread, fmt.Errorf("no canonical header for block"))
+		return receiptWaiting, errReceiptIncomplete
+	}
+	head, err := pool.MaxBlockNumber(ctx)
+	if err != nil {
+		logRPCFailure(chain, hash, reasonRPCFailure, err)
+		return receiptWaiting, err
+	}
+	if required == 0 || head < block || head-block < required {
+		observeTransaction(chain, hash, reasonDepthShort, "block", block,
+			"head", head, "depth", depthOf(head, block), "required", required)
+		return receiptWaiting, nil
+	}
+	// Depth is measured from a head that can itself be reorged, so it is not
+	// finality. When the chain exposes a finality tag the mined block must also
+	// be behind it; a chain or endpoint that cannot serve a tag keeps the depth
+	// rule instead of failing the confirmation for ever.
+	finality := blockIsFinal(ctx, pool, chain, block)
+	if !finality.Available {
+		observeTransaction(chain, hash, reasonFinalityMissing, "block", block,
+			"head", head, "depth", depthOf(head, block), "required", required,
+			"finality_tags", strings.Join(finalityTags(chain), ","))
+	}
+	if !finality.Final {
+		observeTransaction(chain, hash, reasonFinalityPending, "block", block,
+			"head", head, "depth", depthOf(head, block), "required", required,
+			"finality_tag", finality.Tag, "finality_height", finality.Height)
+		return receiptWaiting, nil
+	}
+	if receipt.Status == "0x0" {
+		observeTransaction(chain, hash, reasonReceiptReverted, "block", block)
+		return receiptReverted, nil
+	}
+	observeTransaction(chain, hash, reasonReceiptConfirmed, "block", block,
+		"head", head, "depth", depthOf(head, block), "required", required)
+	return receiptConfirmed, nil
+}
+
+// depthOf reports how many blocks a mined transaction is buried under. It is
+// only used for diagnostics; a negative value cannot occur because callers
+// check head >= block first.
+func depthOf(head, block uint64) uint64 {
+	if head < block {
+		return 0
+	}
+	return head - block
+}
+
+// finalityTags lists the block tags that prove finality, strongest first. BSC's
+// safe tag is only its justified head, so it is never used there.
+func finalityTags(chain string) []string {
+	if chain == "bsc" {
+		return []string{"finalized"}
+	}
+	return []string{"finalized", "safe"}
+}
+
+// finalityOutcome is the result of asking the chain where its finality tag is.
+// Available is false when no configured endpoint serves any tag for this chain:
+// the caller then keeps the configured depth rule, which is the policy that
+// governed confirmation before the tag check existed. Reason is the fixed
+// diagnostic phrase to log, never node text.
+type finalityOutcome struct {
+	Final     bool
+	Available bool
+	Tag       string
+	Height    uint64
+}
+
+// blockIsFinal reports whether the chain considers a block final.
+//
+// It never fails the caller. A chain that does not expose a finality tag, a
+// provider that rejects the tag, and a provider that answers with something
+// that does not decode all mean the same thing for confirmation: this endpoint
+// cannot contribute finality evidence, so the receipt, its canonical block and
+// the configured depth remain the whole rule. Before this change a single such
+// endpoint made every confirmation check return an error, which the durable
+// record redacted to one sentence and the job never advanced: on 2026-11-13 a
+// BSC sweep stayed at sweep_pending for five hours and 13,182 confirmations.
+func blockIsFinal(ctx context.Context, pool *rpc.Pool, chain string, block uint64) finalityOutcome {
+	tags := finalityTags(chain)
+	for _, tag := range tags {
+		height, ok, err := pool.MaxBlockTagHeight(ctx, tag)
+		if err != nil {
+			// An endpoint that cannot serve the tag is not a verdict on the
+			// payment. Keep the reason for the log and try the next tag.
+			slog.Warn("[cryptopay] finality tag unavailable; keeping the depth rule",
+				"chain", chain, "tag", tag, "block", block,
+				"category", rpc.CategoryOf(err), "endpoint_host", rpc.HostOf(err),
+				"detail", rpc.DetailOf(err), "error", rpc.SafeError(err))
+			continue
+		}
+		if ok {
+			return finalityOutcome{Final: block <= height, Available: true, Tag: tag, Height: height}
+		}
+	}
+	return finalityOutcome{Final: true}
+}
+
+// settle only rebroadcasts identical persisted bytes, and only after a
+// successful receipt query says absent. RPC failures never authorize a new tx.
+func (e *Executor) settle(ctx context.Context, pool *rpc.Pool, j *sweepJob, gas bool, required uint64) (bool, error) {
+	raw, hash, nonceStr := j.SweepRaw, j.SweepHash, j.SweepNonce
+	// A zero limit means "accept either the legacy or the current sweep gas
+	// limit"; signed bytes from before the raise must stay verifiable. A native
+	// sweep is new, so its intrinsic limit is checked exactly.
+	from, to, token, amount, limit := j.Address, j.Destination, j.Token, j.RawAmount, uint64(0)
+	if e.isNativeSweep(j.Chain, j.Token) {
+		limit = nativeSweepGasLimit
+	}
+	if gas {
+		raw, hash, nonceStr = j.GasRaw, j.GasHash, j.GasNonce
+		from, to, token, limit = j.GasPayer, j.Address, "native", 21000
+		amount, _ = new(big.Int).SetString(j.GasAmount, 10)
+	}
+	nonce, err := strconv.ParseUint(nonceStr, 10, 64)
+	if err == nil {
+		var actual string
+		actual, err = validateSigned(raw, j.Chain, from, to, token, amount, nonce, limit, nil)
+		if err == nil && !strings.EqualFold(hash, actual) {
+			err = fmt.Errorf("persisted transaction hash does not match signed bytes")
+		}
+	}
+	if err != nil {
+		j.Status = "manual_review"
+		_, saveErr := e.jobError(ctx, j, err)
+		return false, saveErr
+	}
+	state, err := checkReceipt(ctx, pool, j.Chain, hash, required)
+	if err == nil && state == receiptAbsent {
+		var returned string
+		if guard, ok := e.wallet.(interface {
+			GuardSweepBroadcast(context.Context, func() (string, error)) (string, error)
+		}); ok {
+			returned, err = guard.GuardSweepBroadcast(ctx, func() (string, error) { return pool.SendRawTransaction(ctx, raw) })
+		} else {
+			if guard, ok := e.wallet.(interface{ ValidateSweepAuthorization(context.Context) error }); ok {
+				if guardErr := guard.ValidateSweepAuthorization(ctx); guardErr != nil {
+					return false, guardErr
+				}
+			}
+			returned, err = pool.SendRawTransaction(ctx, raw)
+		}
+		if rpc.IsAlreadyKnown(err) {
+			// The node holds these exact bytes already: same outcome as a send.
+			returned, err = hash, nil
+		}
+		if err == nil && !strings.EqualFold(returned, hash) {
+			err = fmt.Errorf("broadcast returned a different transaction hash; outcome unknown")
+		}
+		if err == nil {
+			state, err = checkReceipt(ctx, pool, j.Chain, hash, required)
+		}
+	}
+	if err == nil {
+		state, err = e.waitForReceipt(ctx, pool, j.Chain, hash, required, state)
+	}
+	if err != nil {
+		j.Error = rpc.SafeError(err)
+		// A timeout is persisted as an observation, never as a status change:
+		// saveJob only bumps the revision here, so a transport failure cannot
+		// move the job to failed by itself.
+		return false, joinErrors(err, e.saveJob(ctx, j))
+	}
+	if state == receiptReverted {
+		if shouldRetrySweepRevert(gas, j.SweepRaw) && !e.isNativeSweep(j.Chain, j.Token) {
+			// The legacy 65k limit is below what some stablecoin transfers
+			// need. Re-sign once with the larger limit instead of parking the
+			// job for manual review; the retried tx is distinguishable because
+			// it carries the new gas limit.
+			j.Status = "gas_confirmed"
+			j.SweepRaw, j.SweepHash, j.SweepNonce = "", "", ""
+			j.Error = "sweep reverted under the legacy gas limit; retrying with a larger limit"
+			return false, e.saveJob(ctx, j)
+		}
+		j.Status, j.Error = "manual_review", "confirmed transaction reverted; automatic replacement/funding refused"
+		return false, e.saveJob(ctx, j)
+	}
+	if state != receiptConfirmed {
+		j.Error = "awaiting canonical receipt and required confirmations"
+		return false, e.saveJob(ctx, j)
+	}
+	j.Error = ""
+	if gas {
+		j.GasConfirmed, j.Status = true, "gas_confirmed"
+	} else {
+		j.Status = "swept"
+	}
+	if err := e.saveJob(ctx, j); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// gasLimitMatches validates the gas field of a signed transaction. A zero
+// expected value accepts the legacy and current sweep limits (used for bytes
+// signed before the limit was raised); every other caller keeps exact equality.
+func gasLimitMatches(actual, expected uint64) bool {
+	if expected == 0 {
+		return actual == legacyTransferGasLimit || actual == transferGasLimit
+	}
+	return actual == expected
+}
+
+// signedGasLimit decodes the gas limit stored in persisted raw bytes.
+func signedGasLimit(raw string) uint64 {
+	encoded, err := hex.DecodeString(strings.TrimPrefix(raw, "0x"))
+	if err != nil {
+		return 0
+	}
+	var tx types.Transaction
+	if err := tx.UnmarshalBinary(encoded); err != nil {
+		return 0
+	}
+	return tx.Gas()
+}
+
+// shouldRetrySweepRevert reports whether a reverted token transfer was signed
+// with the legacy gas limit and therefore deserves one automatic retry with the
+// larger limit. Gas top-ups and retries that already used the new limit stay in
+// manual review.
+func shouldRetrySweepRevert(gas bool, raw string) bool {
+	if gas {
+		return false
+	}
+	limit := signedGasLimit(raw)
+	return limit > 0 && limit <= legacyTransferGasLimit
+}

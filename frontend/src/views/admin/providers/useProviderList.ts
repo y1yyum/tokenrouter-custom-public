@@ -1,7 +1,9 @@
-import { ref, reactive, toRaw, watch } from 'vue'
+import { ref, reactive, onUnmounted } from 'vue'
 import { useIntervalFn } from '@vueuse/core'
 import { adminAPI } from '@/api/admin'
 import { useTableLoader } from '@/composables/useTableLoader'
+import { setPersistedPageSize } from '@/composables/usePersistedPageSize'
+import { SEARCH_DEBOUNCE_MS } from '@/constants/ui'
 import { supportsUpstreamUsageQuery } from '@/utils/upstreamUsage'
 import { buildGrokUsageRefreshKey, buildOpenAIUsageRefreshKey } from '@/utils/providerUsageRefresh'
 import type { Provider } from '@/api/admin/providers.types'
@@ -40,14 +42,14 @@ interface ProviderListOptions {
   // scheduled. The callback also supersedes pending cross-page selection work
   // owned by the selection controller.
   clearSelection: () => void
-  // onLoaded restores visible usage observations and awaits daily statistics
-  // after a completed load. It runs for both ordinary loads and successful
-  // incremental responses, including not-modified results.
-  onLoaded: () => Promise<void>
-  // refreshTodayStats updates daily metrics after a loader-driven pagination or
-  // filter request finishes. This callback does not hydrate upstream cache state
-  // because those deferred paths retain their existing behavior.
+  // onLoaded restores usage observations after accepting a list or 304.
+  onLoaded: () => void
+  // refreshTodayStats batches the displayed providers only when usage is visible.
   refreshTodayStats: () => Promise<void>
+  // isSortKeyVisible applies the same composite-column visibility as the table.
+  isSortKeyVisible: (key: string) => boolean
+  // invalidateTodayStats retires metrics when a query changes or usage is hidden.
+  invalidateTodayStats: () => void
   // onRowMissing invalidates observations for an upstream-capable row missing
   // from the next server page. It runs before reconciliation publishes the
   // resulting rows and may clear provider cache state.
@@ -60,6 +62,12 @@ interface ProviderListOptions {
   // refresh. The controller checks this after loading admission and before
   // decrementing its countdown or requesting another page.
   isRefreshPaused: () => boolean
+}
+
+// ProviderListRequest identifies the current ordinary, scheduled, or incremental request.
+interface ProviderListRequest {
+  // The ordinary loader resolves cancellation without a page or return status.
+  receivedPage: boolean
 }
 
 // useProviderList owns provider rows, loading parameters, pagination, and
@@ -83,48 +91,41 @@ export function useProviderList(options: ProviderListOptions) {
     sort_order: ProviderSortOrder // Requested sort direction.
   }
 
-  // PROVIDER_SORTABLE_KEYS accepts persisted sorting choices that the server and
-  // table currently expose to administrators.
-  const PROVIDER_SORTABLE_KEYS = new Set([
-    'id',
-    'name',
-    'status',
-    'schedulable',
-    'priority',
-    'rate_multiplier',
-    'last_used_at',
-    'created_at',
-    'expires_at',
-  ])
+  // defaultSort is also the table's fallback when a composite column is hidden.
+  const defaultSort: ProviderSortState = { sort_by: 'name', sort_order: 'asc' }
 
-  // loadInitialProviderSortState restores a supported sort key from browser
-  // storage. Missing, malformed, or unsupported saved values use name ascending;
-  // recognized keys retain descending order only when the stored order is desc.
-  const loadInitialProviderSortState = (): ProviderSortState => {
-    const fallback: ProviderSortState = { sort_by: 'name', sort_order: 'asc' }
+  // saveSort keeps the table's persisted preference aligned with the API query.
+  const saveSort = (state: ProviderSortState) => {
     try {
-      const raw = localStorage.getItem(PROVIDER_SORT_STORAGE_KEY)
-      if (!raw) return fallback
-      const parsed = JSON.parse(raw) as {
-        key?: string // Persisted sorting column.
-        order?: string // Persisted sorting direction.
-      }
-      const key = typeof parsed.key === 'string' ? parsed.key : ''
-      if (!PROVIDER_SORTABLE_KEYS.has(key)) return fallback
-      return {
-        sort_by: key,
-        sort_order: parsed.order === 'desc' ? 'desc' : 'asc',
-      }
+      localStorage.setItem(
+        PROVIDER_SORT_STORAGE_KEY,
+        JSON.stringify({ key: state.sort_by, order: state.sort_order }),
+      )
     } catch {
-      // Unreadable browser preferences use the initialized default sorting choice
-      // so table loading can proceed even when storage is unavailable.
-      return fallback
+      // Keep the accepted sort in memory when browser storage is unavailable.
     }
   }
 
-  // sortState supplies both visible sort controls and list request parameters
-  // from the restored browser preference.
-  const sortState = reactive<ProviderSortState>(loadInitialProviderSortState())
+  // loadInitialProviderSortState validates the legacy sort against migrated visibility
+  // before the first list request or table render can use it.
+  const loadInitialProviderSortState = (): ProviderSortState => {
+    try {
+      const raw = localStorage.getItem(PROVIDER_SORT_STORAGE_KEY)
+      if (raw === null) return defaultSort
+
+      const parsed = JSON.parse(raw)
+      if (typeof parsed?.key === 'string' && options.isSortKeyVisible(parsed.key)) {
+        return { sort_by: parsed.key, sort_order: parsed.order === 'desc' ? 'desc' : 'asc' }
+      }
+    } catch {
+      // Malformed preferences use the same fallback as a hidden sort field.
+    }
+    saveSort(defaultSort)
+    return defaultSort
+  }
+
+  // sortState supplies the currently accepted API sort.
+  const sortState = reactive<ProviderSortState>({ ...loadInitialProviderSortState() })
 
   // AUTO_REFRESH_STORAGE_KEY and autoRefreshIntervals define the persisted
   // preference namespace and supported durations shown by the refresh control.
@@ -138,10 +139,8 @@ export function useProviderList(options: ProviderListOptions) {
   const autoRefreshIntervalSeconds = ref<(typeof autoRefreshIntervals)[number]>(30)
   const autoRefreshCountdown = ref(0)
 
-  // autoRefreshETag belongs to the current list query, while autoRefreshFetching
-  // prevents overlapping incremental requests during one refresh cycle.
+  // autoRefreshETag belongs to the current page query and score projection.
   const autoRefreshETag = ref<string | null>(null)
-  const autoRefreshFetching = ref(false)
 
   // AUTO_REFRESH_SILENT_WINDOW_MS and autoRefreshSilentUntil delay polling after
   // local edits so recently updated rows remain visible before the next
@@ -149,11 +148,15 @@ export function useProviderList(options: ProviderListOptions) {
   const AUTO_REFRESH_SILENT_WINDOW_MS = 15000
   const autoRefreshSilentUntil = ref(0)
 
-  // hasPendingListSync marks local removals awaiting a full reload;
-  // pendingTodayStatsRefresh schedules statistics after loader-driven pagination
-  // or filter changes.
+  // hasPendingListSync marks local removals awaiting a full reload.
   const hasPendingListSync = ref(false)
-  const pendingTodayStatsRefresh = ref(false)
+  // Only the current request can publish rows or consume a deferred reveal. The
+  // reveal follows replacements while usage stays visible and clears on hide.
+  let activeListRequest: ProviderListRequest | null = null
+  let statsRevealPending = false
+  let firstListRequest = true
+  let filterTimer: ReturnType<typeof setTimeout> | null = null
+  let incrementalController: AbortController | null = null
 
   // loadSavedAutoRefresh restores the enabled flag and a supported interval from
   // browser storage. Invalid or unavailable storage leaves the initialized
@@ -233,146 +236,167 @@ export function useProviderList(options: ProviderListOptions) {
     requestParams.include_scheduler_score = options.includeSchedulerScore() ? '1' : '0'
   }
 
-  // The shared loader owns ordinary request cancellation and pagination while
-  // these wrappers add provider-specific ETag and usage refresh sequencing.
-  const {
-    items: providers,
-    loading,
-    params,
-    pagination,
-    load: baseLoad,
-    reload: baseReload,
-    debouncedReload: baseDebouncedReload,
-    handlePageChange: baseHandlePageChange,
-    handlePageSizeChange: baseHandlePageSizeChange,
-  } = useTableLoader<Provider, ProviderListParams>({
-    fetchFn: adminAPI.providers.list,
-    initialParams: {
-      platform: '',
-      type: '',
-      status: '',
-      privacy_mode: '',
-      group: '',
-      search: '',
-      include_scheduler_score: options.includeSchedulerScore() ? '1' : '0',
-      sort_by: sortState.sort_by,
-      sort_order: sortState.sort_order,
-    },
-  })
+  // The shared loader still owns ordinary request cancellation and row publication.
+  // Check the signal and request identity so even an abort-ignoring transport
+  // cannot publish an obsolete page or its former projection.
+  const { items: providers, loading, params, pagination, load: baseLoad } =
+    useTableLoader<Provider, ProviderListParams>({
+      fetchFn: async (page, size, requestParams, fetchOptions) => {
+        const request = activeListRequest
+        const filters = firstListRequest ? { ...requestParams, lite: '1' } : { ...requestParams }
+        firstListRequest = false
+        try {
+          const result = await adminAPI.providers.list(page, size, filters, fetchOptions)
+          if (!request || request !== activeListRequest || fetchOptions?.signal?.aborted) {
+            throw new DOMException('Superseded provider list query', 'AbortError')
+          }
+          request.receivedPage = true
+          return result
+        } catch (error) {
+          if (request !== activeListRequest || fetchOptions?.signal?.aborted) {
+            throw new DOMException('Superseded provider list query', 'AbortError')
+          }
+          throw error
+        }
+      },
+      initialParams: {
+        platform: '',
+        type: '',
+        status: '',
+        privacy_mode: '',
+        group: '',
+        search: '',
+        include_scheduler_score: options.includeSchedulerScore() ? '1' : '0',
+        sort_by: sortState.sort_by,
+        sort_order: sortState.sort_order,
+      },
+    })
 
-  // resetAutoRefreshCache discards the validator retained by incremental list
-  // refreshes. Call it when starting a full load or changing the page query so
-  // the next incremental request sends no cached ETag.
-  const resetAutoRefreshCache = () => {
-    // Query changes and full reloads invalidate the previous validator; clearing
-    // it prevents the next incremental request from validating against stale rows.
+  // cancelFilterReload removes a pending search when an immediate action consumes its filters.
+  const cancelFilterReload = () => {
+    if (filterTimer !== null) clearTimeout(filterTimer)
+    filterTimer = null
+  }
+
+  // invalidateQuery retires the previous projection, validator, and statistics.
+  const invalidateQuery = () => {
+    activeListRequest = null
+    cancelFilterReload()
     autoRefreshETag.value = null
-  }
-
-  // isFirstLoad controls lightweight initial rows and removes that request flag
-  // after the first load completes.
-  const isFirstLoad = ref(true)
-
-  // load fetches the current provider page and refreshes its usage observations.
-  // It clears pending synchronization and ETag state before the request. The
-  // first load sets lite on the shared parameters, then removes that parameter
-  // after the initial request completes.
-  //
-  // Successful completion delegates usage hydration and daily statistics to the
-  // page callback. The first-load flag is evaluated again after awaiting the
-  // loader, retaining the existing interaction with overlapping requests. Loader
-  // failures propagate before the completion callback runs.
-  const load = async () => {
-    const requestParams = params
-    syncProviderListDerivedParams()
+    incrementalController?.abort()
+    incrementalController = null
     hasPendingListSync.value = false
-    resetAutoRefreshCache()
-    pendingTodayStatsRefresh.value = false
-    if (isFirstLoad.value) {
-      requestParams.lite = '1'
-    }
-    await baseLoad()
-    if (isFirstLoad.value) {
-      isFirstLoad.value = false
-      delete requestParams.lite
-    }
-    await options.onLoaded()
+    options.invalidateTodayStats()
   }
 
-  // reload resets pagination through the shared loader and refreshes visible
-  // usage after completion. It clears pending list synchronization, cached ETag,
-  // and deferred-statistics state before starting the request.
-  const reload = async () => {
-    syncProviderListDerivedParams()
+  // startListRequest reserves ownership before a debounce timer or transport starts.
+  const startListRequest = () => {
+    const request: ProviderListRequest = { receivedPage: false }
+    activeListRequest = request
+    return request
+  }
+
+  // runListRequest releases ownership once. A successful page refreshes stats as usual.
+  // A failed page refreshes the retained rows only for a pending column reveal.
+  const runListRequest = async (request: ProviderListRequest, fetchPage: () => Promise<boolean>) => {
+    let accepted = false
+    try {
+      accepted = await fetchPage()
+    } finally {
+      if (activeListRequest === request) {
+        activeListRequest = null
+        const refreshStats = accepted || statsRevealPending
+        statsRevealPending = false
+        if (accepted) options.onLoaded()
+        if (refreshStats) await options.refreshTodayStats()
+      }
+    }
+  }
+
+  // An ordinary loader rejection propagates through runListRequest. If the loader
+  // absorbed cancellation, only a received page counts as a successful load.
+  const loadRequestedPage = (request: ProviderListRequest) => {
     hasPendingListSync.value = false
-    resetAutoRefreshCache()
-    pendingTodayStatsRefresh.value = false
-    await baseReload()
-    await options.onLoaded()
+    syncProviderListDerivedParams()
+    return runListRequest(request, async () => {
+      await baseLoad()
+      return request.receivedPage
+    })
   }
 
-  // debouncedReload clears selection and schedules a filtered list reload through
-  // the shared debounce. It resets ETag and pending synchronization immediately,
-  // then marks daily statistics for refresh when loading finishes.
+  // load consumes pending filters from the first page and accepts only the current
+  // list completion for cache hydration and daily statistics.
+  const load = () => {
+    if (filterTimer !== null) pagination.page = 1
+    invalidateQuery()
+    return loadRequestedPage(startListRequest())
+  }
+
+  // reload applies filter and mutation changes from the first page.
+  const reload = () => {
+    pagination.page = 1
+    return load()
+  }
+
+  // debouncedReload invalidates pending results as soon as filters change, then
+  // waits for the final input before restarting pagination.
   const debouncedReload = () => {
     options.clearSelection()
-    syncProviderListDerivedParams()
-    hasPendingListSync.value = false
-    resetAutoRefreshCache()
-    // The shared debounce performs the load later; the loading watcher supplies
-    // statistics when that deferred request completes.
-    pendingTodayStatsRefresh.value = true
-    baseDebouncedReload()
+    invalidateQuery()
+    const request = startListRequest()
+    filterTimer = setTimeout(() => {
+      filterTimer = null
+      pagination.page = 1
+      void loadRequestedPage(request).catch((error) => console.error('Failed to reload providers:', error))
+    }, SEARCH_DEBOUNCE_MS)
   }
 
-  // handlePageChange requests a page through the shared loader's pagination
-  // clamp. It updates derived query parameters, clears ETag and synchronization
-  // state, and schedules daily statistics after the page load finishes.
+  // handlePageChange preserves the current query and clamps the requested page.
   const handlePageChange = (page: number) => {
-    syncProviderListDerivedParams()
-    hasPendingListSync.value = false
-    resetAutoRefreshCache()
-    pendingTodayStatsRefresh.value = true
-    baseHandlePageChange(page)
+    pagination.page = Math.max(1, Math.min(page, pagination.pages || 1))
+    return load()
   }
 
-  // handlePageSizeChange delegates page-size persistence and reloading to the
-  // shared loader. It refreshes derived query parameters and resets ETag state
-  // before marking daily statistics for the resulting page.
+  // handlePageSizeChange saves the shared page-size preference before reloading.
   const handlePageSizeChange = (size: number) => {
-    syncProviderListDerivedParams()
-    hasPendingListSync.value = false
-    resetAutoRefreshCache()
-    pendingTodayStatsRefresh.value = true
-    baseHandlePageSizeChange(size)
+    pagination.page_size = size
+    setPersistedPageSize(size)
+    return reload()
   }
 
-  // handleSort updates the selected sort key and order before loading the first
-  // page. It synchronizes request parameters, resets ETag and pending
-  // synchronization, and marks statistics for refresh with the sorted rows.
+  // handleSort changes the accepted sort only for a visible key. Ignoring
+  // duplicate events lets the table reconcile its own fallback without a second request.
   const handleSort = (key: string, order: ProviderSortOrder) => {
+    if (!options.isSortKeyVisible(key)) return
+    if (sortState.sort_by === key && sortState.sort_order === order) return
+
     sortState.sort_by = key
     sortState.sort_order = order
-    const requestParams = params
-    requestParams.sort_by = key
-    requestParams.sort_order = order
-    syncProviderListDerivedParams()
-    pagination.page = 1
-    hasPendingListSync.value = false
-    resetAutoRefreshCache()
-    pendingTodayStatsRefresh.value = true
-    load()
+    params.sort_by = key
+    params.sort_order = order
+    saveSort(sortState)
+    return reload()
   }
 
-  // Deferred loader operations do not await the page wrapper, so their loading
-  // transition triggers the daily-statistics completion work here.
-  watch(loading, (isLoading, wasLoading) => {
-    if (wasLoading && !isLoading && pendingTodayStatsRefresh.value) {
-      pendingTodayStatsRefresh.value = false
-      options.refreshTodayStats().catch((error) => {
-        console.error('Failed to refresh provider today stats after table load:', error)
-      })
+  // reconcileColumnVisibility combines sort fallback and projection changes into
+  // one request, preserving the current page for projection-only updates.
+  const reconcileColumnVisibility = (key: string) => {
+    if (!options.isSortKeyVisible(sortState.sort_by)) {
+      return handleSort(defaultSort.sort_by, defaultSort.sort_order)
     }
+    if (key === 'status_schedule') return load()
+  }
+
+  // setTodayStatsVisible coalesces repeated reveals while a list request is pending.
+  const setTodayStatsVisible = (visible: boolean) => {
+    statsRevealPending = visible && activeListRequest !== null
+    if (!visible) options.invalidateTodayStats()
+    else if (!statsRevealPending) void options.refreshTodayStats()
+  }
+
+  onUnmounted(() => {
+    statsRevealPending = false
+    invalidateQuery()
   })
 
   // enterAutoRefreshSilentWindow delays automatic refresh after a local provider
@@ -421,6 +445,16 @@ export function useProviderList(options: ProviderListOptions) {
       current.overload_until !== next.overload_until ||
       current.temp_unschedulable_until !== next.temp_unschedulable_until ||
       current.proxy?.updated_at !== next.proxy?.updated_at ||
+      JSON.stringify(current.scheduler_scores ?? null) !==
+        JSON.stringify(next.scheduler_scores ?? null) ||
+      JSON.stringify(current.scheduler_score ?? null) !==
+        JSON.stringify(next.scheduler_score ?? null) ||
+      current.last_used_at !== next.last_used_at ||
+      current.current_rpm !== next.current_rpm ||
+      current.quota_used !== next.quota_used ||
+      current.quota_daily_used !== next.quota_daily_used ||
+      current.quota_weekly_used !== next.quota_weekly_used ||
+      current.quota_monthly_used !== next.quota_monthly_used ||
       upstreamConnectionChanged ||
       buildOpenAIUsageRefreshKey(current) !== buildOpenAIUsageRefreshKey(next) ||
       buildGrokUsageRefreshKey(current) !== buildGrokUsageRefreshKey(next)
@@ -478,53 +512,37 @@ export function useProviderList(options: ProviderListOptions) {
     }
   }
 
-  // refreshProvidersIncrementally fetches the current page with its saved ETag
-  // when no incremental request is active. A returned ETag replaces the previous
-  // value. Modified responses update pagination and reconcile rows, while
-  // not-modified responses retain the existing rows and still refresh visible
-  // usage observations.
-  //
-  // Errors are logged and the active-request flag is released in finally. The
-  // request uses the filters at invocation time; callers control interval
-  // admission and this function does not add a separate request-generation check
-  // for later filter changes.
+  // refreshProvidersIncrementally reconciles accepted responses and refreshes
+  // daily statistics for both changed and 304 pages.
   const refreshProvidersIncrementally = async () => {
-    if (autoRefreshFetching.value) return
+    if (incrementalController || activeListRequest || loading.value) return
     syncProviderListDerivedParams()
-    autoRefreshFetching.value = true
+    const controller = new AbortController()
+    incrementalController = controller
+    const request = startListRequest()
     try {
-      const result = await adminAPI.providers.listWithEtag(
-        pagination.page,
-        pagination.page_size,
-        toRaw(params) as {
-          platform?: string // Selected platform filter.
-          type?: string // Selected credential filter.
-          status?: string // Selected status filter.
-          privacy_mode?: string // Selected privacy filter.
-          group?: string // Selected group filter.
-          search?: string // Current name search.
-          sort_by?: string // Requested sorting column.
-          sort_order?: ProviderSortOrder // Requested sorting direction.
-        },
-        { etag: autoRefreshETag.value },
-      )
+      await runListRequest(request, async () => {
+        const result = await adminAPI.providers.listWithEtag(
+          pagination.page,
+          pagination.page_size,
+          { ...params },
+          { etag: autoRefreshETag.value, signal: controller.signal },
+        )
+        if (activeListRequest !== request || controller.signal.aborted) return false
+        if (result.etag) autoRefreshETag.value = result.etag
 
-      if (result.etag) {
-        autoRefreshETag.value = result.etag
-      }
-      if (!result.notModified && result.data) {
-        pagination.total = result.data.total || 0
-        pagination.pages = result.data.pages || 0
-        mergeProvidersIncrementally(result.data.items || [])
-        hasPendingListSync.value = false
-      }
-
-      // Hydrate after row reconciliation so cache identities use the returned provider revisions before daily statistics are requested.
-      await options.onLoaded()
+        if (!result.notModified && result.data) {
+          pagination.total = result.data.total || 0
+          pagination.pages = result.data.pages || 0
+          mergeProvidersIncrementally(result.data.items || [])
+          hasPendingListSync.value = false
+        }
+        return true
+      })
     } catch (error) {
-      console.error('Auto refresh failed:', error)
+      if (!controller.signal.aborted) console.error('Auto refresh failed:', error)
     } finally {
-      autoRefreshFetching.value = false
+      if (incrementalController === controller) incrementalController = null
     }
   }
 
@@ -534,7 +552,7 @@ export function useProviderList(options: ProviderListOptions) {
     async () => {
       if (!autoRefreshEnabled.value) return
       if (document.hidden) return
-      if (loading.value || autoRefreshFetching.value) return
+      if (activeListRequest || loading.value || incrementalController) return
       if (options.isRefreshPaused()) return
       if (inAutoRefreshSilentWindow()) {
         // Round remaining milliseconds up to seconds so the countdown includes
@@ -570,7 +588,8 @@ export function useProviderList(options: ProviderListOptions) {
     autoRefreshEnabled,
     autoRefreshIntervalSeconds,
     autoRefreshCountdown,
-    syncProviderListDerivedParams,
+    reconcileColumnVisibility,
+    setTodayStatsVisible,
     setAutoRefreshEnabled,
     setAutoRefreshInterval,
     load,

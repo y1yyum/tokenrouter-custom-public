@@ -1,6 +1,8 @@
 package authctx
 
 import (
+	"strings"
+
 	"github.com/gin-gonic/gin"
 
 	"github.com/TokenFlux/TokenRouter/internal/identity"
@@ -91,6 +93,24 @@ func recordFromContext(c *gin.Context) (authenticationRecord, bool) {
 func GetPrincipal(c *gin.Context) (identity.Principal, bool) {
 	r, ok := recordFromContext(c)
 	return r.Principal, ok
+}
+
+// CryptoSessionID returns the binding key for a validated panel Bearer JWT.
+// Use it after authentication middleware and before allowing any payment
+// operation, including reads. Machine credentials and WebSocket upgrades
+// supply no payment session. Older Bearer JWTs use the exact token digest.
+func CryptoSessionID(c *gin.Context) string {
+	principal, ok := GetPrincipal(c)
+	if !ok || principal.CredentialKind != "jwt" || principal.UserID <= 0 ||
+		len(c.Request.Header.Values("Authorization")) != 1 || len(c.Request.Header.Values("X-API-Key")) != 0 ||
+		strings.EqualFold(strings.TrimSpace(c.GetHeader("Upgrade")), "websocket") {
+		return ""
+	}
+	fields := strings.Fields(c.GetHeader("Authorization"))
+	if len(fields) != 2 || !strings.EqualFold(fields[0], "Bearer") {
+		return ""
+	}
+	return identity.CryptoSessionKey(principal.SessionID, fields[1])
 }
 
 // GetAuthSubjectFromContext returns the account and concurrency resolved for

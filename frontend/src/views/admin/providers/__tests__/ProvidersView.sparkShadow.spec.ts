@@ -288,7 +288,7 @@ const mountViewWithRow = () =>
           ],
           template: `<div>
             <div v-for="(row, idx) in (data || [])" :key="idx">
-              <slot name="cell-name" :row="row" :value="row.name" />
+              <slot name="cell-identity" :row="row" />
               <slot name="cell-platform_type" :row="row" />
             </div>
           </div>`,
@@ -388,6 +388,8 @@ describe('admin ProvidersView — 提供商行展示', () => {
     await flushPromises()
 
     expect(wrapper.text()).toContain('parent@example.com')
+    await wrapper.get('button[aria-label="parent@example.com"]').trigger('click')
+    expect(document.querySelector('[role="dialog"][aria-label="parent@example.com"]')?.textContent).toContain('chatgpt-abc123')
 
     const badge = wrapper.findComponent(PlatformTypeBadge)
     expect(badge.exists()).toBe(true)

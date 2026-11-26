@@ -8,6 +8,7 @@ import (
 
 	"github.com/TokenFlux/TokenRouter/internal/app/lifecycle"
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/ops"
 )
@@ -26,7 +27,8 @@ import (
 // callback is still returning. HTTP serving has its separate shutdown phase,
 // followed by application cleanup. First-attempt lifecycle results govern
 // later Cleanup calls and can report unfinished callbacks instead of complete
-// resource release.
+// resource release. Review startup selects the hooks needed to serve the
+// crypto console and skips the normal shared-data workers.
 
 // BuildInfo carries build metadata from the process entry point to application modules.
 type BuildInfo struct {
@@ -137,7 +139,8 @@ func installBackgroundTasks(manager *lifecycle.Manager) *lifecycle.Tasks {
 // independent of ctx and joins its error into the named result. HTTP shutdown
 // is handled separately by lifecycle.Serve. The started flag reflects the
 // selected startup result, so cancellation racing successful startup can still
-// choose rollback.
+// choose rollback. Review mode uses a restricted startup even when the local
+// interactive write switch is enabled.
 // @project-doc docs/architecture/system_architecture.md#startup_and_shutdown
 func (a *Application) Run(ctx context.Context) (err error) {
 	started := false
@@ -155,7 +158,13 @@ func (a *Application) Run(ctx context.Context) (err error) {
 	// Cancellation can leave the startup receive path before Start returns.
 	// Buffer its one result so that goroutine can finish publishing without this receiver.
 	result := make(chan error, 1)
-	go func() { result <- a.lifecycle.Start(ctx) }()
+	go func() {
+		if mode.TestInstance() {
+			result <- startReviewLifecycle(ctx, a.lifecycle)
+			return
+		}
+		result <- a.lifecycle.Start(ctx)
+	}()
 	select {
 	case err = <-result:
 		if err != nil {
@@ -166,6 +175,18 @@ func (a *Application) Run(ctx context.Context) (err error) {
 	}
 	started = true
 	return lifecycle.Serve(ctx, a.Server)
+}
+
+// startReviewLifecycle loads the console settings and chain runtime without
+// starting general maintenance or consuming shared queues. The chain runtime
+// owns its separate worker gate. Explicit writes also need the request audit
+// writer, whose retention is disabled for the review instance.
+func startReviewLifecycle(ctx context.Context, manager *lifecycle.Manager) error {
+	hooks := []string{"HTTPSettingsInitialization", "ChainDeposits"}
+	if !mode.ReadOnly() {
+		hooks = append(hooks, "AuditLogService")
+	}
+	return manager.StartOnly(ctx, hooks...)
 }
 
 // Cleanup requests the lifecycle manager's normal stop for constructed

@@ -66,6 +66,7 @@ var (
 	ConfigProviderPendingOrderProtectedConfigFields = map[string]map[string]struct{}{
 		TypeEasyPay:   {"pkey": {}, "pid": {}},
 		TypeEPUSDT:    {"secretkey": {}, "pid": {}, "currency": {}, "apibase": {}},
+		TypeCrypto:    {"currency": {}},
 		TypeAlipay:    {"privatekey": {}, "publickey": {}, "alipaypublickey": {}, "appid": {}},
 		TypeWxpay:     {"privatekey": {}, "apiv3key": {}, "publickey": {}, "appid": {}, "mpappid": {}, "mchid": {}, "publickeyid": {}, "certserial": {}},
 		TypeStripe:    {"secretkey": {}, "webhooksecret": {}, "currency": {}},
@@ -75,7 +76,7 @@ var (
 	// ConfigValidProviderKeys contains exact provider labels accepted by creation
 	// request validation and the configured adapter factory choices.
 	ConfigValidProviderKeys = map[string]bool{
-		TypeEasyPay: true, TypeAlipay: true, TypeWxpay: true, TypeStripe: true, TypeAirwallex: true, TypeEPUSDT: true,
+		TypeEasyPay: true, TypeAlipay: true, TypeWxpay: true, TypeStripe: true, TypeAirwallex: true, TypeEPUSDT: true, TypeCrypto: true,
 	}
 
 	// ConfigEasyPayCustomMethodCodePattern accepts nonempty lowercase ASCII
@@ -257,6 +258,9 @@ func (s *ConfigService) CreateProviderInstance(ctx context.Context, req CreatePr
 	if err := ConfigValidateProviderRequest(req.ProviderKey, req.Name, typesStr); err != nil {
 		return nil, err
 	}
+	if req.ProviderKey == TypeCrypto && (req.RefundEnabled || req.AllowUserRefund) {
+		return nil, ErrCryptoRefundUnsupported
+	}
 	if req.ProviderKey == TypeEPUSDT {
 		if req.RefundEnabled || req.AllowUserRefund {
 			return nil, infraerrors.BadRequest("REFUND_UNSUPPORTED", "epusdt automatic refunds are not supported")
@@ -365,6 +369,9 @@ func ConfigValidateProviderRequest(providerKey, name, supportedTypes string) err
 	if providerKey == TypeEPUSDT && supportedTypes != TypeEPUSDT {
 		return infraerrors.BadRequest("VALIDATION_ERROR", "epusdt supports only the cryptocurrency payment method")
 	}
+	if providerKey == TypeCrypto && supportedTypes != TypeCrypto {
+		return infraerrors.BadRequest("VALIDATION_ERROR", "crypto supports only the direct deposit method")
+	}
 	if !ConfigValidProviderKeys[providerKey] {
 		return infraerrors.BadRequest("VALIDATION_ERROR", fmt.Sprintf("invalid provider key: %s", providerKey))
 	}
@@ -457,6 +464,10 @@ func (s *ConfigService) UpdateProviderInstance(ctx context.Context, id int64, re
 	if err != nil {
 		return nil, fmt.Errorf("load provider instance: %w", err)
 	}
+	if current.ProviderKey == TypeCrypto &&
+		((req.RefundEnabled != nil && *req.RefundEnabled) || (req.AllowUserRefund != nil && *req.AllowUserRefund)) {
+		return nil, ErrCryptoRefundUnsupported
+	}
 	if current.ProviderKey == TypeEPUSDT {
 		if req.RefundEnabled != nil && *req.RefundEnabled || req.AllowUserRefund != nil && *req.AllowUserRefund {
 			return nil, infraerrors.BadRequest("REFUND_UNSUPPORTED", "epusdt automatic refunds are not supported")
@@ -485,6 +496,9 @@ func (s *ConfigService) UpdateProviderInstance(ctx context.Context, id int64, re
 	nextSupportedTypes := current.SupportedTypes
 	if req.SupportedTypes != nil {
 		nextSupportedTypes = ConfigJoinTypes(req.SupportedTypes)
+	}
+	if current.ProviderKey == TypeCrypto && nextSupportedTypes != TypeCrypto {
+		return nil, infraerrors.BadRequest("VALIDATION_ERROR", "crypto supports only the direct deposit method")
 	}
 	if current.ProviderKey == TypeEPUSDT && nextSupportedTypes != TypeEPUSDT {
 		return nil, infraerrors.BadRequest("VALIDATION_ERROR", "epusdt requires its cryptocurrency payment method")

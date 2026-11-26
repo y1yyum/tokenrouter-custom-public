@@ -2045,6 +2045,42 @@ func (r *UserStore) EnableTotp(ctx context.Context, userID int64) error {
 	return nil
 }
 
+// BindTotpIfDisabled installs encrypted proof and enables TOTP in one write.
+// The current account must still be an active administrator without an
+// authenticator, which prevents a delayed enrollment from replacing a factor.
+func (r *UserStore) BindTotpIfDisabled(ctx context.Context, userID int64, encryptedSecret string) error {
+	if encryptedSecret == "" {
+		return identitycore.ErrUserSecurityStateChanged
+	}
+	client := clientFromContext(ctx, r.client)
+	_, err := client.User.UpdateOneID(userID).
+		Where(dbuser.TotpEnabledEQ(false), dbuser.RoleEQ(identitycore.RoleAdmin),
+			dbuser.StatusEQ(identitycore.StatusActive), dbuser.DeletedAtIsNil()).
+		SetTotpSecretEncrypted(encryptedSecret).
+		SetTotpEnabled(true).
+		SetTotpEnabledAt(time.Now()).
+		Save(ctx)
+	return translatePersistenceError(err, identitycore.ErrUserSecurityStateChanged, nil)
+}
+
+// DisableTotpWithExpectedRole clears the enabled factor whose role and
+// ciphertext were verified. A changed account or authenticator fails the
+// predicate, so concurrent replacement cannot be cleared by stale proof.
+func (r *UserStore) DisableTotpWithExpectedRole(ctx context.Context, userID int64, role string, secret *string) error {
+	if role != identitycore.RoleAdmin || secret == nil || *secret == "" {
+		return identitycore.ErrUserSecurityStateChanged
+	}
+	client := clientFromContext(ctx, r.client)
+	_, err := client.User.UpdateOneID(userID).
+		Where(dbuser.RoleEQ(role), dbuser.StatusEQ(identitycore.StatusActive),
+			dbuser.DeletedAtIsNil(), dbuser.TotpEnabledEQ(true), dbuser.TotpSecretEncryptedEQ(*secret)).
+		SetTotpEnabled(false).
+		ClearTotpEnabledAt().
+		ClearTotpSecretEncrypted().
+		Save(ctx)
+	return translatePersistenceError(err, identitycore.ErrUserSecurityStateChanged, nil)
+}
+
 // DisableTotp clears account authenticator secret and activation time while
 // saving disabled state. It selects the context transaction client when
 // present and maps missing rows to ErrUserNotFound before returning.

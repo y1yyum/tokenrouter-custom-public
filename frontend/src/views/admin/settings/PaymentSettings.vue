@@ -24,6 +24,12 @@
       />
     </SettingsSection>
 
+    <SettingsSection>
+      <RouterLink :to="{ name: 'AdminCryptoSettings' }" class="text-link">
+        {{ t('admin.crypto.title') }}
+      </RouterLink>
+    </SettingsSection>
+
     <template v-if="form.payment_enabled">
       <SettingsSection>
         <div class="grid gap-4 sm:grid-cols-3">

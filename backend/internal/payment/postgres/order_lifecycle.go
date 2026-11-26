@@ -43,6 +43,8 @@ func (s *OrderStore) RecoverableFulfillmentIDs(ctx context.Context, now time.Tim
 	return s.client.PaymentOrder.Query().
 		Where(
 			paymentorder.PaidAtNotNil(),
+			paymentorder.Not(paymentorder.PaymentTypeEqualFold(payment.TypeCrypto)),
+			paymentorder.Or(paymentorder.ProviderKeyIsNil(), paymentorder.Not(paymentorder.ProviderKeyEqualFold(payment.TypeCrypto))),
 			paymentorder.Or(
 				paymentorder.And(
 					paymentorder.StatusIn(payment.OrderStatusPaid, payment.OrderStatusFailed),

@@ -9,7 +9,6 @@ import (
 	"log/slog"
 	"time"
 
-	"github.com/pquerna/otp"
 	"github.com/pquerna/otp/totp"
 
 	infraerrors "github.com/TokenFlux/TokenRouter/internal/pkg/apperror"
@@ -17,10 +16,11 @@ import (
 
 // totp_service.go manages TOTP enrollment, account verification, temporary
 // login challenges, and session step-up grants.
-// TOTP enrollment caches a plaintext secret and setup token before storing
-// the account's encrypted secret. Enabling the account follows that secret
-// write separately, while the ciphertext round-trip check produces
-// diagnostics and does not decide whether setup succeeds.
+// TOTP enrollment caches the setup token and secret before persistence. A
+// payment-enabled administrator uses an encrypted, JWT-bound challenge and a
+// conditional write that installs the secret and enabled flag together. The
+// same distributed lease coordinates general and payment enrollment because
+// both write the authenticator used to approve payments.
 //
 // Proof selection gives administrators password verification and lets other
 // accounts follow the runtime email switch. Login challenges and
@@ -56,6 +56,7 @@ var (
 	ErrTotpTooManyAttempts = infraerrors.TooManyRequests("TOTP_TOO_MANY_ATTEMPTS", "too many verification attempts, please try again later")
 	ErrVerifyCodeRequired  = infraerrors.BadRequest("VERIFY_CODE_REQUIRED", "email verification code is required")
 	ErrPasswordRequired    = infraerrors.BadRequest("PASSWORD_REQUIRED", "password is required")
+	ErrTotpUnavailable     = infraerrors.ServiceUnavailable("TOTP_UNAVAILABLE", "totp verification unavailable")
 )
 
 // TotpCache stores TOTP challenges, attempt counts and user/session-bound
@@ -129,12 +130,16 @@ type SecretEncryptor interface {
 	Decrypt(ciphertext string) (string, error)
 }
 
-// TotpSetupSession carries the cached plaintext enrollment secret and its
-// request proof.
+// TotpSetupSession carries the enrollment secret, proof, and optional JWT binding.
 type TotpSetupSession struct {
-	Secret     string    // base32 plaintext enrollment secret
-	SetupToken string    // random enrollment request proof
-	CreatedAt  time.Time // setup operation clock time
+	// Secret is the base32 seed for legacy state. SecretEncrypted selects
+	// ciphertext before verification, and CryptoSession identifies the session
+	// that must complete a bound challenge.
+	Secret          string    // seed or ciphertext
+	SetupToken      string    // random enrollment request proof
+	CreatedAt       time.Time // setup operation clock time
+	CryptoSession   string    // authenticated session digest
+	SecretEncrypted bool      // ciphertext representation flag
 }
 
 // TotpLoginSession carries account context for a temporary second-factor
@@ -199,6 +204,9 @@ type TotpService struct {
 	// nil.
 	emailService      VerificationEmail
 	emailQueueService VerificationQueue // verification email queue admission
+	// cryptoSecurity is set during payment handler construction before the app
+	// serves requests. Native administrator TOTP uses it to share replay state.
+	cryptoSecurity *CryptoSecurityService
 }
 
 // VerificationMethod names the proof selected for an account's TOTP settings
@@ -351,18 +359,32 @@ func (s *TotpService) InitiateSetup(ctx context.Context, userID int64, emailCode
 	if !s.settingService.IsTotpEnabled(ctx) {
 		return nil, ErrTotpNotEnabled
 	}
+	return s.initiateSetup(ctx, userID, emailCode, password, "", false)
+}
 
+// initiateSetup creates either a native challenge or a JWT-bound administrator
+// challenge. The payment service passes skipIdentity after checking its operator
+// allowlist and the HTTP layer verifies the caller's JWT before supplying the binding.
+func (s *TotpService) initiateSetup(ctx context.Context, userID int64, emailCode, password, binding string, skipIdentity bool) (*TotpSetupResponse, error) {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("get user: %w", err)
+	}
+	if user == nil {
+		return nil, ErrUserNotFound
 	}
 
 	if user.TotpEnabled {
 		return nil, ErrTotpAlreadyEnabled
 	}
+	if binding != "" && (!user.IsAdmin() || !user.IsActive() || user.DeletedAt != nil) {
+		return nil, ErrCryptoAdminRequired
+	}
 
-	if err := s.verifyIdentity(ctx, user, emailCode, password); err != nil {
-		return nil, err
+	if !skipIdentity {
+		if err := s.verifyIdentity(ctx, user, emailCode, password); err != nil {
+			return nil, err
+		}
 	}
 
 	key, err := totp.Generate(totp.GenerateOpts{
@@ -379,9 +401,19 @@ func (s *TotpService) InitiateSetup(ctx context.Context, userID int64, emailCode
 	}
 
 	session := &TotpSetupSession{
-		Secret:     key.Secret(),
-		SetupToken: setupToken,
-		CreatedAt:  s.now(),
+		Secret:        key.Secret(),
+		SetupToken:    setupToken,
+		CreatedAt:     s.now(),
+		CryptoSession: binding,
+	}
+	// Encrypt bound seeds before publishing challenges to the Redis instance
+	// shared by ordinary login, account settings, and payment security.
+	if binding != "" {
+		session.Secret, err = s.encryptor.Encrypt(session.Secret)
+		if err != nil {
+			return nil, ErrTotpUnavailable
+		}
+		session.SecretEncrypted = true
 	}
 
 	// Publish enrollment state before returning its secret/token pair, so
@@ -424,7 +456,7 @@ func (s *TotpService) CompleteSetup(ctx context.Context, userID int64, totpCode,
 		return ErrTotpSetupExpired
 	}
 
-	if session == nil {
+	if session == nil || session.CryptoSession != "" || session.SecretEncrypted {
 		return ErrTotpSetupExpired
 	}
 
@@ -498,11 +530,11 @@ func (s *TotpService) CompleteSetup(ctx context.Context, userID int64, totpCode,
 	return nil
 }
 
-// Disable verifies the account's selected email/password proof before asking
-// the repository to clear TOTP state. It requires an already enabled account,
-// accepts operation when the global TOTP feature switch is off, and returns
-// lookup/proof/write failures.
-func (s *TotpService) Disable(ctx context.Context, userID int64, emailCode, password string) error {
+// Disable clears an enabled TOTP factor after verifying the account's proof.
+// An allowlisted payment administrator supplies exactly one current TOTP code.
+// Other accounts use the configured email or password proof. The global
+// TOTP feature switch does not gate authenticator removal.
+func (s *TotpService) Disable(ctx context.Context, userID int64, emailCode, password string, codes ...string) error {
 	user, err := s.userRepo.GetByID(ctx, userID)
 	if err != nil {
 		return fmt.Errorf("get user: %w", err)
@@ -510,6 +542,15 @@ func (s *TotpService) Disable(ctx context.Context, userID int64, emailCode, pass
 
 	if !user.TotpEnabled {
 		return ErrTotpNotSetup
+	}
+
+	// The shared authenticator also protects payment operators. Require proof
+	// from the current factor before clearing it through account settings.
+	if user.IsAdmin() && s.cryptoSecurity.isOperator(userID) {
+		if len(codes) != 1 {
+			return ErrCryptoTotpRequired
+		}
+		return s.disablePaymentTotp(ctx, userID, codes[0])
 	}
 
 	if err := s.verifyIdentity(ctx, user, emailCode, password); err != nil {
@@ -581,22 +622,11 @@ func (s *TotpService) VerifyCode(ctx context.Context, userID int64, code string)
 		return infraerrors.InternalServer("TOTP_VERIFY_ERROR", "failed to verify totp code")
 	}
 
-	secretPrefix := "N/A"
-	// Limit verification diagnostics to a four-byte secret prefix.
-	if len(secret) >= 4 {
-		secretPrefix = secret[:4]
-	}
-	slog.Debug("totp_verify_decrypted",
-		"user_id", userID,
-		"secret_len", len(secret),
-		"secret_prefix", secretPrefix)
-
-	valid := s.validateCode(code, secret)
+	counter, valid := validateTotpCode(code, secret, s.now())
 	slog.Debug("totp_verify_result",
 		"user_id", userID,
 		"valid", valid,
 		"secret_len", len(secret),
-		"secret_prefix", secretPrefix,
 		"server_time", s.now().UTC().Format(time.RFC3339))
 
 	// Record failed proof before returning invalid-code, but suppress
@@ -605,6 +635,14 @@ func (s *TotpService) VerifyCode(ctx context.Context, userID int64, code string)
 	if !valid {
 		_, _ = s.cache.IncrementVerifyAttempts(ctx, userID)
 		return ErrTotpInvalidCode
+	}
+
+	// A JWT login or native step-up can verify the same administrator factor.
+	// Claim its matched counter before clearing failures or admitting another flow.
+	if user.IsAdmin() && s.cryptoSecurity.ready() {
+		if err := s.cryptoSecurity.consume(ctx, userID, counter, code); err != nil {
+			return err
+		}
 	}
 
 	// A proven code resets attempt history when cleanup succeeds; suppress
@@ -815,9 +853,6 @@ func (s *TotpService) SendVerifyCode(ctx context.Context, userID int64, locale .
 // service clock supplies UTC time so callers see the same rejection as an
 // incorrect code.
 func (s *TotpService) validateCode(code, secret string) bool {
-	// Accept the configured adjacent time steps for clock skew; library errors
-	// become invalid proof, keeping malformed secrets/codes out of the
-	// successful verification path.
-	valid, _ := totp.ValidateCustom(code, secret, s.now().UTC(), totp.ValidateOpts{Period: 30, Skew: 1, Digits: otp.DigitsSix, Algorithm: otp.AlgorithmSHA1})
+	_, valid := validateTotpCode(code, secret, s.now())
 	return valid
 }

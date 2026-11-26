@@ -27,16 +27,19 @@ const isStructuralColumn = (key: string) => key === 'select' || key === 'actions
 export function useTableColumnOrder(
   columns: () => Column[],
   storageKey: ComputedRef<string | undefined>,
+  initialOrder: () => readonly string[] = () => [],
 ) {
   const columnOrder = ref<string[]>([])
 
-  // readOrder loads unique movable keys from the requested browser preference.
-  // Missing keys, invalid JSON, non-array values, and storage errors produce an
-  // empty order for the current column merge.
+  // readOrder loads unique movable keys. A missing or unreadable preference
+  // can use the caller's in-memory migration result on the first mount.
   const readOrder = (key: string | undefined): string[] => {
     if (!key) return []
     try {
-      const stored: unknown = JSON.parse(localStorage.getItem(key) || '[]')
+      const raw = localStorage.getItem(key)
+      // A page may have migrated an earlier preference while writes to the new
+      // namespace were denied. Keep that order on its first render.
+      const stored: unknown = raw === null ? initialOrder() : JSON.parse(raw)
       if (!Array.isArray(stored)) return []
       return [
         ...new Set(
@@ -46,9 +49,9 @@ export function useTableColumnOrder(
         ),
       ]
     } catch {
-      // Treat inaccessible or malformed preferences as an empty order so the
-      // current columns remain available for rendering.
-      return []
+      // Keep a successfully migrated order even if a later read fails. Pages
+      // without a migration fall back to their declared column sequence.
+      return [...initialOrder()]
     }
   }
 

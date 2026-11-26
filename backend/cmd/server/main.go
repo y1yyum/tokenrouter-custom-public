@@ -23,6 +23,7 @@ import (
 	"github.com/TokenFlux/TokenRouter/internal/app"
 	"github.com/TokenFlux/TokenRouter/internal/app/lifecycle"
 	"github.com/TokenFlux/TokenRouter/internal/config"
+	"github.com/TokenFlux/TokenRouter/internal/cryptopay/mode"
 	"github.com/TokenFlux/TokenRouter/internal/infra/telemetry/logging"
 	"github.com/TokenFlux/TokenRouter/internal/server/middleware"
 	"github.com/TokenFlux/TokenRouter/internal/setup"
@@ -92,7 +93,8 @@ func main() {
 // Version output precedes offline configuration migration and terminal setup;
 // those command paths finish before signal registration. Normal startup initializes
 // from installation inputs, serves the
-// web setup wizard, or constructs the configured application.
+// web setup wizard, or constructs the configured application. Crypto review
+// instances require setup to be complete or bypassed before entering the server.
 //
 // The initial deferred log flush covers paths that end during this selection.
 // Setting syncOnReturn false transfers that responsibility to the selected
@@ -122,6 +124,9 @@ func run() (err error) {
 		return config.MigrateConfig(*configSource, *configOutput, os.Stdout, os.Stderr)
 	}
 	if *setupMode {
+		if mode.TestInstance() {
+			return errors.New("crypto review mode forbids setup")
+		}
 		return setup.RunCLI()
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
@@ -131,6 +136,9 @@ func run() (err error) {
 	// call runs, retiring timer work that also cancels the shared serving context.
 	defer restarter.Close()
 	if setup.NeedsSetup() {
+		if mode.TestInstance() {
+			return errors.New("crypto review mode requires an installed configuration or SKIP_SETUP=true")
+		}
 		if setup.AutoSetupEnabled() {
 			log.Println("Auto setup mode enabled...")
 			if err := setup.AutoSetupFromEnv(); err != nil {

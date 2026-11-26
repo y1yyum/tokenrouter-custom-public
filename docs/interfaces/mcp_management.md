@@ -17,12 +17,13 @@ TokenRouter 在主 HTTP 服务的 `/mcp` 提供 Streamable HTTP MCP，支持专�
 
 各模块的 `management_operations.go` 声明稳定的操作 ID、说明、HTTP 方法、路径、输入 schema、读写属性和交互要求；包初始化时经 `server/adminapi.Define` 注册，HTTP 经 `adminapi.Register` 挂载同一描述及原 handler。
 
-- 按实际路由装配：路由装配完成后按实际存在的路由构造目录，`/api/v1/admin/*` 缺少描述时启动失败，管理用 `/api/v1/pages` 显式登记。未挂载的接口不会暴露；操作 ID 独立于 handler 名称，改名保持已有权限含义。
+- 启动时按实际挂载的路由构造目录。每条 `/api/v1/admin/*` 路由须按 HTTP 方法和完整路径登记操作描述或声明仅供直接访问，缺失或重复声明会使启动失败。管理用 `/api/v1/pages` 显式登记。只有已挂载且具备操作描述的路由进入目录。操作 ID 独立于 handler 名称，改名保持已有权限含义。
+- 后台链上收款接口仅供具备支付操作员身份的管理员通过 JWT 直接访问。这些路由没有操作 ID，因此 MCP 工具、OAuth 授权和本文所述的 OpenAPI 导出均无对应条目。参见[专属地址链上充值](../domains/payments_and_entitlements.md#onchain_balance_deposits)。
 - 请求结构体与参数：复用 HTTP handler 解码的 Go 类型，`binding:"required"` 决定必填，指针允许显式 `null`，动态 map 保持开放键空间，业务校验仍由原 handler 和服务执行。查询参数单独声明为字符串，路径参数按名称提交；新增结构体字段自动进入 schema，手工读取的查询参数须同步登记。
 - 枚举与显式 null 约定：`omitempty` 位于 `oneof` 前时，字符串枚举保留空串；依赖原始 JSON 成员存在性区分默认值的接口需补充声明（例如告警规则允许 `enabled:null` 表示 `false`，省略则由 handler 默认启用）。
 - `request_source` 筛选：使用记录列表、统计、清理、后台导出及用量趋势、模型、分组、组合快照支持与 HTTP 相同的 `request_source`（`system` 汇总全部系统模型调用，或选 `group_probe`、`provider_test`、`scheduled_test`、`quota_probe`）。
 - `request_source` 默认口径：使用记录列表和统计默认包含全部来源；仪表盘图表默认统计用户流量，显式传 `all` 才合并系统请求。
-- 新增接口规范：在所属模块补充描述并使用共享注册函数。读写属性按业务填写（POST 查询可声明为只读，连接测试等触发真实上游动作的归执行工具），有限 SSE 声明终态事件，特殊交互填写浏览器入口。覆盖测试检查实际路由、目录、重复 ID 和查询别名，禁止未知接口自动获得通用调用入口。
+- 可委派接口在所属模块补充描述并使用共享注册函数。读写属性按业务填写（POST 查询可声明为只读，连接测试等触发真实上游动作的归执行工具），有限 SSE 声明终态事件，特殊交互填写浏览器入口。覆盖测试检查实际路由、目录、重复 ID 和查询别名，禁止未知接口自动获得通用调用入口。
 - 导出与升级标记：目录同时供 MCP 发现、管理页权限选择和 OpenAPI 导出（前端模块译名为展示文本，权限仍用后端 ID）。WebSocket 原路由以 `http_upgrade` 声明升级要求，OpenAPI 输出 101 响应；`x-tokenrouter-mcp-alias` 标明 MCP 等效查询操作。
 - 响应 schema：JSON 响应提供共享 HTTP envelope schema 并展开具体 DTO 字段（动态 map 保持开放，由操作说明解释）；`response_schema` 描述原 HTTP 结果，MCP 外层补充执行状态和关联 ID，并按凭据设置决定是否遮蔽响应字段。
 
