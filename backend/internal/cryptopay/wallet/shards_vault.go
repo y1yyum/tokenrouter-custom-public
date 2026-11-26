@@ -152,8 +152,7 @@ func (m *Manager) sealMasterContext(plaintext []byte, context string) (string, e
 	if err != nil {
 		return "", ErrVaultUnavailable
 	}
-	sealed := aead.Seal(nil, nil, plaintext, []byte(context))
-	return base64.StdEncoding.EncodeToString(sealed), nil
+	return sealWalletEnvelope(aead, plaintext, context, "")
 }
 
 func (m *Manager) openMasterContext(value, context string) ([]byte, error) {
@@ -318,10 +317,7 @@ func (m *Manager) VerifyShardShare(ctx context.Context, share string) error {
 	auditCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	auditCtx = WithAuditActor(auditCtx, AuditActorFromContext(ctx))
-	if err := m.audit(auditCtx, auditEntry{op: "signer_share_verify", result: "ok"}); err != nil {
-		return err
-	}
-	return nil
+	return m.audit(auditCtx, auditEntry{op: "signer_share_verify", result: "ok"})
 }
 
 // VerifyInstallationKey proves the installation key can still unseal the
