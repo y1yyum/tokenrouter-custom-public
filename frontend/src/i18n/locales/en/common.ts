@@ -6,6 +6,9 @@
 export default {
   // Common
   common: {
+    apply: 'Apply',
+    creating: 'Creating…',
+    required: 'is required',
     submitting: 'Submitting…',
     sending: 'Sending…',
     tryAgain: 'Try again',

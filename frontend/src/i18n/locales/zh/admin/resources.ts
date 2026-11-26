@@ -247,6 +247,7 @@ export default {
   },
   // Redeem Codes Management
   redeem: {
+    expiryDaysRequired: '请输入到期日期。',
     requiresPayment: '付过款才能领取',
     requiresPaymentHint: '用户有过至少一笔成功付款记录即可领取，不限金额。',
     title: '兑换码管理',

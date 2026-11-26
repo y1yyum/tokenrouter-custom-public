@@ -254,6 +254,7 @@ export default {
   },
   // Redeem Codes
   redeem: {
+    expiryDaysRequired: 'Enter an expiry date.',
     requiresPayment: 'Requires a previous payment',
     requiresPaymentHint:
       'Users need at least one successful payment of any amount to redeem this code.',

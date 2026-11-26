@@ -1,4 +1,5 @@
 import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest'
+import { createPinia, setActivePinia } from 'pinia'
 import { mount } from '@vue/test-utils'
 import TotpSetupModal from '@/components/user/profile/TotpSetupModal.vue'
 import TotpDisableDialog from '@/components/user/profile/TotpDisableDialog.vue'
@@ -20,7 +21,8 @@ const mocks = vi.hoisted(() => ({
   disable: vi.fn(),
 }))
 
-vi.mock('vue-i18n', () => ({
+vi.mock('vue-i18n', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('vue-i18n')>()),
   useI18n: () => ({
     t: (key: string) => key,
   }),
@@ -64,6 +66,7 @@ describe('TOTP 弹窗定时器清理', () => {
   let clearIntervalSpy: ReturnType<typeof vi.spyOn>
 
   beforeEach(() => {
+    setActivePinia(createPinia())
     intervalSeed = 1000
     mocks.showSuccess.mockReset()
     mocks.showError.mockReset()

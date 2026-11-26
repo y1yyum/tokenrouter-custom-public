@@ -6,6 +6,9 @@
 export default {
   // Common
   common: {
+    apply: '应用',
+    creating: '创建中…',
+    required: '为必填项',
     submitting: '提交中…',
     sending: '发送中…',
     tryAgain: '重试',
