@@ -18,6 +18,13 @@
 
 ## 未发布与近期升级
 
+### 迁移 337：校正用户 ID 池计数
+
+- 升级时锁住 `users` 的写入，并用现有行重算 4～8 位池计数。已有用户 ID 和历史 Ops 事件保留原值。
+- 计数和容量事件随实际插入的用户一起提交或回滚。`ON CONFLICT DO NOTHING` 跳过的行不占容量。跨过容量阈值时仍发出 PostgreSQL 警告。事务回滚会撤销 Ops 事件，已发出的警告无法撤回。
+- 随机选号沿用原有阶梯和事务锁，只有省略 ID 的插入才取得这把锁。多行插入在语句结束时更新计数，下一条插入语句按更新后的计数判断是否扩池。
+- 升级后按各段的 `min_id` 和 `max_id` 与 `users` 实际行数核对 `user_id_pool_tiers.used_count`。手工维护需要重算时，暂停用户表写入后执行 `SELECT recalibrate_user_id_pool_tiers();`。
+
 ### 迁移 336：用户 ID 随机阶梯分配与容量告警
 
 - 变更要点：`336_random_user_id_allocation.sql` 创建 `user_id_pool_tiers`（覆盖 4~8 位 ID 区间并按现有 `users` 行回填计数），执行 `ALTER TABLE users ALTER COLUMN id DROP DEFAULT`，并安装 `BEFORE INSERT`（`allocate_random_user_id`）与 `AFTER DELETE`（`handle_user_id_pool_on_delete`）触发器及校准函数 `recalibrate_user_id_pool_tiers()`。

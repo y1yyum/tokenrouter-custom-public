@@ -33,7 +33,7 @@
 
 | 实体 | 含义 | 关键约束 |
 | --- | --- | --- |
-| `User` | 本地账户，记录角色、状态、余额和并发额度 | `users.id` 移除自增默认值，未显式指定 ID 时由数据库触发器按 `user_id_pool_tiers` 4~8 位阶梯池随机分配（前一级过半解锁下一位数，显式 ID 仍保留并计入池统计；物理删除递减计数，`recalibrate_user_id_pool_tiers()` 可校准）；软删除；登录和每次请求复核启用状态；`token_version` 由当前邮箱和密码哈希推导，JWT 声明须与当前指纹一致 |
+| `User` | 本地账户，记录角色、状态、余额和并发额度 | `users.id` 移除自增默认值，未显式指定 ID 时由数据库触发器按 `user_id_pool_tiers` 4~8 位阶梯池随机分配（前一级过半解锁下一位数）。显式 ID 保留原值。实际插入的 4～8 位 ID 计入对应分段，物理删除递减计数。普通删除为软删除。登录和每次请求复核启用状态；`token_version` 由当前邮箱和密码哈希推导，JWT 声明须与当前指纹一致 |
 | `AuthIdentity` | 外部认证提供方中的稳定身份，归属一个用户 | `(provider_type, provider_key, provider_subject)` 全局唯一；须使用全局主体，渠道级标识不足以判重 |
 | `PendingAuthSession` | OAuth 等跨页面流程的短期一次性状态 | 绑定浏览器会话、完成码摘要和过期时间，完成时原子消费 |
 | JWT access token | 短期访问声明，用户状态以数据库为准 | 携带用户、角色、token version、refresh family `sid` 和可选绑定摘要；每次请求仍查询当前用户 |

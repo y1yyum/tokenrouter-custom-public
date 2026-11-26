@@ -18,18 +18,18 @@ import (
 	"github.com/TokenFlux/TokenRouter/migrations"
 )
 
-// Migration fixtures use either the fully migrated shared database or a
-// separate database stopped before a named SQL file. Historical fixtures select
-// embedded files by lexical filename comparison, so their callers supply a
-// complete cutoff or a prefix matching the migration ordering they intend to
+// helpers_integration_test.go prepares a shared migrated database or a
+// test-owned database for an earlier schema. Historical fixtures
+// select embedded files by lexical filename comparison, so their callers supply
+// a complete cutoff or a prefix matching the migration order they intend to
 // reproduce. The selected history is committed by ApplyMigrations before
 // fixture writes begin in a separate transaction.
 //
-// A historical database belongs to one test. Cleanup registrations unwind its
-// transaction before closing the pool and force-dropping the database through
-// the shared connection; registering deletion immediately after creation also
-// covers later setup failures. Ordinary testTx fixtures instead roll back their
-// changes on the shared database when the test finishes.
+// A test-owned database lets a fixture commit writes before an upgrade runs
+// through the production runner. Its pool closes before the shared connection
+// force-drops the database, keeping committed fixtures away from other cases.
+// Ordinary testTx fixtures instead roll back their changes on the shared database
+// when the test finishes.
 
 // integrationDSN and integrationDB are initialized together by
 // runPostgresTests. Historical fixtures replace the DSN's database path and use
@@ -67,6 +67,25 @@ func testTx(t *testing.T) *sql.Tx {
 // deletion errors fail the test.
 func historicalTx(t *testing.T, before string) *sql.Tx {
 	t.Helper()
+
+	db := isolatedMigrationDB(t, before)
+	tx, err := db.BeginTx(context.Background(), nil)
+	require.NoError(t, err)
+	// Unwind this transaction before the fixture closes its pool and drops the
+	// database, including when an assertion stops the test early.
+	t.Cleanup(func() { _ = tx.Rollback() })
+	return tx
+}
+
+// isolatedMigrationDB creates a database for one test and applies embedded files
+// before the lexical cutoff. Callers can commit fixture writes and then apply
+// the pending migrations to that same database.
+//
+// The runner commits each selected migration before returning the pool. Cleanup
+// closes the pool before the shared connection force-drops the owned database,
+// and both teardown steps are registered before fixture setup can fail.
+func isolatedMigrationDB(t *testing.T, before string) *sql.DB {
+	t.Helper()
 	ctx := context.Background()
 	name := fmt.Sprintf("migration_history_%d", time.Now().UnixNano())
 	_, err := integrationDB.ExecContext(ctx, "CREATE DATABASE "+name)
@@ -101,15 +120,8 @@ func historicalTx(t *testing.T, before string) *sql.Tx {
 		// including nontransactional migration suffixes.
 		history[entry.Name()] = &fstest.MapFile{Data: data}
 	}
-	// ApplyMigrations establishes committed historical schema before
-	// fixture writes begin; the later rollback removes test changes while
-	// database deletion removes that committed history.
+	// Apply the selected history through the production runner so the test can
+	// make committed writes before applying any remaining migrations.
 	require.NoError(t, postgresinfra.ApplyMigrations(ctx, db, history))
-	tx, err := db.BeginTx(ctx, nil)
-	require.NoError(t, err)
-	// This final registration runs first at cleanup, attempting rollback
-	// before the pool-close and database-drop callbacks; its error is
-	// discarded after fixture work ends.
-	t.Cleanup(func() { _ = tx.Rollback() })
-	return tx
+	return db
 }
