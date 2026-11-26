@@ -222,7 +222,13 @@ def run(commands):
             # Forward argument boundaries through the pnpm shell shim, including
             # filenames containing whitespace or shell metacharacters.
             args = [shutil.which('bash') or 'bash', '-c', 'exec pnpm "$@"', 'pnpm', *args[1:]]
-        code = subprocess.call(args, cwd=ROOT / directory)
+        env = None
+        if args == ['make', 'test-tools'] or args[:3] == ['python3', '-m', 'unittest']:
+            # These suites initialize temporary repositories. Hook variables such as
+            # GIT_DIR would redirect a fixture's git init into the developer's checkout.
+            local_vars = git('rev-parse', '--local-env-vars').splitlines()
+            env = {key: value for key, value in os.environ.items() if key not in local_vars}
+        code = subprocess.call(args, cwd=ROOT / directory, env=env)
         if code:
             print('快检失败。修复后重新推送；确需跳过时使用 git push --no-verify。', file=sys.stderr)
             return code
