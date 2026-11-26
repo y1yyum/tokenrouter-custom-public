@@ -1,6 +1,42 @@
 <template>
   <AppLayout>
-    <div class="space-y-4">
+    <div
+      v-segmented
+      class="segmented mb-4"
+      role="group"
+      :aria-label="t('admin.usage.requestSource')"
+    >
+      <button
+        type="button"
+        class="segmented-item px-3 py-1.5 text-sm"
+        :class="{ 'segmented-item-active': !historyRange }"
+        :aria-pressed="!historyRange"
+        @click="historyRange = null"
+        >{{ t('admin.usage.imported.local') }}</button
+      >
+      <button
+        type="button"
+        class="segmented-item px-3 py-1.5 text-sm"
+        :class="{ 'segmented-item-active': historyRange }"
+        :aria-pressed="!!historyRange"
+        @click="historyRange ??= { startDate, endDate }"
+        >{{ t('admin.usage.imported.tab') }}</button
+      >
+    </div>
+    <ImportedCallsPanel
+      v-if="historyRange"
+      view="minutes"
+      :start-date="historyRange.startDate"
+      :end-date="historyRange.endDate"
+    >
+      <template #selected-dates>
+        <DateRangePicker
+          v-model:start-date="historyRange.startDate"
+          v-model:end-date="historyRange.endDate"
+        />
+      </template>
+    </ImportedCallsPanel>
+    <div v-show="!historyRange" class="space-y-4">
       <UsageStatsCards :stats="usageStats" :loading="inboundEndpointLoading" />
       <!-- Charts Section -->
       <div class="space-y-4">
@@ -275,6 +311,7 @@
 <script setup lang="ts">
 import MotionTransition from '@/components/common/MotionTransition.vue'
 import { vContentReveal } from '@/directives/contentReveal'
+import { vSegmented } from '@/directives/segmented'
 
 import { ref, reactive, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -290,6 +327,7 @@ import Pagination from '@/components/common/Pagination.vue'
 import Select from '@/components/common/Select.vue'
 import DateRangePicker from '@/components/common/DateRangePicker.vue'
 import UsageStatsCards from '@/components/admin/usage/UsageStatsCards.vue'
+import ImportedCallsPanel from '@/components/admin/usage/ImportedCallsPanel.vue'
 import UsageFilters from '@/components/admin/usage/UsageFilters.vue'
 import UsageTable from '@/components/admin/usage/UsageTable.vue'
 import { getUsageTableColumns } from '@/components/admin/usage/usageTableColumns'
@@ -330,7 +368,8 @@ import type { UsageExportFilterLabel } from '@/types/ui'
 // model-source caches have separate invalidation rules. Column preferences are stored
 // independently for usage and errors, and hidden-column migration appends newly hidden
 // defaults while retaining saved choices. Ranking mounts on first selection and continues
-// following shared filters afterward.
+// following shared filters afterward. Opening imported history copies the native date
+// selection into a separate picker and leaves the native filter components mounted.
 
 // Translation and application notifications provide labels and request feedback for usage
 // records, filters, and export actions.
@@ -525,6 +564,12 @@ const defaultRange = getLast24HoursRangeDates()
 // granularity when the range changes.
 const startDate = ref(defaultRange.start)
 const endDate = ref(defaultRange.end)
+// historyRange holds a copy of the native bounds for one visit to the historical
+// view. Returning to local records restores the still-mounted filters and pagination.
+const historyRange = ref<{
+  startDate: string // Local history range start.
+  endDate: string // Local history range end.
+} | null>(null)
 // requestDateParams removes both date predicates when a request ID is selected. Otherwise
 // it returns an empty override object so the existing selected dates remain in the query.
 const requestDateParams = () =>

@@ -193,13 +193,16 @@ type MarketplaceCapacity interface {
 	GetGroupCapacityByIDs(context.Context, []int64) (map[int64]GroupCapacitySummary, error)
 }
 
-// MarketplaceAvailability reads saved probe summaries for selected authorized
-// groups.
+// MarketplaceAvailability reads probe and imported call summaries for authorized groups.
 type MarketplaceAvailability interface {
 	// GetSummaryByGroupIDs reads availability counts and the latest stored status
 	// for the selected groups. Window and bucket sizes govern the time series,
 	// while the supplied timezone and query time define its observation range.
 	GetSummaryByGroupIDs(context.Context, []int64, int, int, string, time.Time) (map[int64]*GroupAvailabilitySummary, error)
+	// GetImportedSummaryByGroupIDs returns weighted call counts for groups with
+	// imported observations inside the requested window. Groups without
+	// observations have no entry, and imported counts carry no latest probe status.
+	GetImportedSummaryByGroupIDs(context.Context, []int64, int, int, string, time.Time) (map[int64]*GroupAvailabilitySummary, error)
 }
 
 // MarketplaceQuoteRequest identifies the group and model used for a public
@@ -232,11 +235,11 @@ type MarketplaceOptions struct {
 	// attribute modalities, even when an error leaves results unknown.
 	// optional batched route attribute reader
 	Attributes func(context.Context, map[int64][]RequestableModel) (map[int64]map[string]MarketplaceModelAttributes, error)
-	// Timezone is trimmed before probe-summary queries and defaults to UTC when
+	// Timezone is trimmed before availability queries and defaults to UTC when
 	// blank. The history reader decides its response to an invalid nonblank
 	// timezone.
 	Timezone string // availability bucket interpretation timezone
-	// Now is called when querying a nonempty set of visible probe-enabled groups.
+	// Now is called when querying availability for visible groups with active providers.
 	// NewMarketplace retains it as supplied, so that observation path requires a
 	// configured callback.
 	Now func() time.Time // availability query time callback
@@ -255,13 +258,13 @@ type Marketplace struct {
 	requestable  RequestableResolver     // prefetched-provider model eligibility resolver
 	prices       MarketplacePrices       // public model quote reader
 	capacity     MarketplaceCapacity     // optional runtime capacity reader
-	availability MarketplaceAvailability // optional probe-history summary reader
+	availability MarketplaceAvailability // optional group availability reader
 	options      MarketplaceOptions      // attribute and observation callbacks
 }
 
 // NewMarketplace retains readers for active groups, models, prices, and
 // optional observations. Construction performs no queries; callers configure
-// Now when querying enabled probe history and Warn for provider-prefetch or
+// Now when querying group availability and Warn for provider-prefetch or
 // attribute-error reporting paths.
 func NewMarketplace(groups MarketplaceGroups, settings MarketplaceSettings, models MarketplaceModels, resolver RequestableResolver, prices MarketplacePrices, capacity MarketplaceCapacity, availability MarketplaceAvailability, options MarketplaceOptions) *Marketplace {
 	return &Marketplace{groups: groups, settings: settings, models: models, requestable: resolver, prices: prices, capacity: capacity, availability: availability, options: options}
@@ -494,25 +497,30 @@ func marketplaceGroupCapacity(capacityMap map[int64]GroupCapacitySummary, groupI
 	return &capacity
 }
 
-// getVisibleAvailabilityMap reads optional history for authorized probe-enabled
-// groups with active providers. Missing readers, empty usable IDs, or query
-// failure returns nil; it passes the normalized display window, trimmed
-// timezone or UTC, and injected query time.
+// getVisibleAvailabilityMap reads availability for authorized groups with active
+// providers. Enabled groups with observations in the current window retain their
+// probe summary. Groups without recent probes can use imported call counts, so
+// history can be displayed independently of probe scheduling.
+//
+// Both sources use one query time and window. If one read fails, summaries from
+// the other remain usable. An enabled group's empty probe summary remains visible
+// when imported history is absent.
 func (s *Marketplace) getVisibleAvailabilityMap(ctx context.Context, groups []Group) map[int64]*GroupAvailabilitySummary {
 	if s.availability == nil || len(groups) == 0 {
 		return nil
 	}
 
 	groupIDs := make([]int64, 0, len(groups))
+	probeGroupIDs := make([]int64, 0, len(groups))
 	for i := range groups {
 		group := &groups[i]
 		if group.ActiveProviderCount <= 0 {
 			continue
 		}
-		if !group.AvailabilityProbeConfig.Enabled {
-			continue
-		}
 		groupIDs = append(groupIDs, group.ID)
+		if group.AvailabilityProbeConfig.Enabled {
+			probeGroupIDs = append(probeGroupIDs, group.ID)
+		}
 	}
 	if len(groupIDs) == 0 {
 		return nil
@@ -522,13 +530,35 @@ func (s *Marketplace) getVisibleAvailabilityMap(ctx context.Context, groups []Gr
 	if strings.TrimSpace(s.options.Timezone) != "" {
 		timezone = strings.TrimSpace(s.options.Timezone)
 	}
-	// Probe history is optional observation data, so a failed read yields unknown
-	// history while the already resolved model catalog and quotes remain
-	// available.
 	windowDays, bucketMinutes := s.resolveMarketplaceAvailabilityWindow(ctx)
-	availabilityMap, err := s.availability.GetSummaryByGroupIDs(ctx, groupIDs, windowDays, bucketMinutes, timezone, s.options.Now())
-	if err != nil {
-		return nil
+	now := s.options.Now()
+	availabilityMap := make(map[int64]*GroupAvailabilitySummary)
+	if len(probeGroupIDs) > 0 {
+		// A failed probe read leaves imported history eligible for the same groups
+		// and keeps the catalog available even when history storage is unavailable.
+		probes, err := s.availability.GetSummaryByGroupIDs(ctx, probeGroupIDs, windowDays, bucketMinutes, timezone, now)
+		if err == nil {
+			for groupID, summary := range probes {
+				availabilityMap[groupID] = summary
+			}
+		}
+	}
+	importGroupIDs := make([]int64, 0, len(groupIDs))
+	for _, groupID := range groupIDs {
+		if summary := availabilityMap[groupID]; summary == nil || summary.TotalCount == 0 {
+			importGroupIDs = append(importGroupIDs, groupID)
+		}
+	}
+	if len(importGroupIDs) == 0 {
+		return availabilityMap
+	}
+	// Missing imported history or a failed read retains any existing summaries
+	// and leaves groups without either observation source absent from the map.
+	imported, err := s.availability.GetImportedSummaryByGroupIDs(ctx, importGroupIDs, windowDays, bucketMinutes, timezone, now)
+	if err == nil {
+		for groupID, summary := range imported {
+			availabilityMap[groupID] = summary
+		}
 	}
 	return availabilityMap
 }

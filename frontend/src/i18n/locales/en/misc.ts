@@ -45,6 +45,10 @@ export default {
     availabilityHint:
       '{days}-day active probe availability {rate} ({success} success / {total} total)',
     availabilityHintNoData: 'No active probe data in the last {days} days',
+    availabilityImportedCalls: 'Past calls',
+    availabilityImportedHint:
+      'In the last {days} days, {success} of {total} calls in the imported history succeeded ({rate}).',
+    availabilityImportedHintNoData: 'No data from imported call history for the last {days} days',
     rateMultiplier: 'Group Multiplier',
     rateMultiplierValue: 'Group Multiplier {multiplier}',
     maxDiscountHint:

@@ -194,6 +194,61 @@ export async function getStats(
   return data
 }
 
+/** ImportedCallGroup contains raks counters summed over the selected group and local interval. */
+export interface ImportedCallGroup {
+  group_id: number // Destination group identifier.
+  group_name: string // Destination group name.
+  success_requests: number // Successful source requests.
+  error_requests: number // Failed source requests.
+  input_tokens: number // Recorded input tokens.
+  output_tokens: number // Recorded output tokens.
+  cache_creation_tokens: number // Recorded cache writes in tokens.
+  cache_read_tokens: number // Recorded cache reads in tokens.
+  duration_sum_ms: number // Summed request duration in milliseconds.
+  duration_count: number // Requests with duration observations.
+  ttft_sum_ms: number // Summed first-token latency in milliseconds.
+  ttft_count: number // Requests with first-token observations.
+}
+
+/** ImportedCallMinute identifies a source minute, group and model within a results page. */
+export interface ImportedCallMinute extends ImportedCallGroup {
+  bucket_start: string // ISO timestamp at the start of the source minute.
+  model: string // Source request model.
+  source_platform: string // Source platform identifier.
+}
+
+/** ImportedCallReport carries date-scoped groups and the optional minute detail page. */
+export interface ImportedCallReport {
+  source: 'raks' // Historical traffic origin.
+  // Minute queries return all groups in the interval even when detail filters narrow the rows.
+  groups: ImportedCallGroup[]
+  items?: ImportedCallMinute[] // Minute view page entries.
+  total?: number // Matching minute rows across pages.
+  page?: number // Returned one-based page.
+  page_size?: number // Minute rows per page.
+}
+
+/** getImportedCalls reads historical aggregates separately from local records and billing statistics. */
+export async function getImportedCalls(
+  params: {
+    start_date?: string // Omit both date bounds to read the complete imported archive.
+    end_date?: string // Local range end, inclusive for calendar dates without a time.
+    timezone: string // Browser IANA timezone.
+    view: 'groups' | 'minutes' // Requested aggregation level.
+    group_id?: number // Optional destination group.
+    model?: string // Exact source model.
+    page?: number // One-based minute page.
+    page_size?: number // Minute rows per page.
+  },
+  signal: AbortSignal,
+): Promise<ImportedCallReport> {
+  const { data } = await apiClient.get<ImportedCallReport>('/admin/usage/imported-calls', {
+    params,
+    signal,
+  })
+  return data
+}
+
 /**
  * searchUsers searches users by email keyword (admin only).
  */
@@ -338,6 +393,7 @@ export async function createExportDownloadTicket(
  */
 export const adminUsageAPI = {
   list,
+  getImportedCalls,
   getStats,
   searchUsers,
   searchApiKeys,

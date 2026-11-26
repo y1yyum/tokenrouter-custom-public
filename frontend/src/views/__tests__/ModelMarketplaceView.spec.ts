@@ -7,7 +7,11 @@ import {
   type VueWrapper,
 } from '@vue/test-utils'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { createI18n, useI18n } from 'vue-i18n'
 import ModelMarketplaceView from '../ModelMarketplaceView.vue'
+import GroupAvailabilityBar from '@/components/marketplace/GroupAvailabilityBar.vue'
+import en from '@/i18n/locales/en/misc'
+import zh from '@/i18n/locales/zh/misc'
 import { modelIconData } from '@/utils/modelIconData'
 import type { MarketplaceGroup, MarketplaceModelPricing } from '@/api/marketplace.types'
 
@@ -84,7 +88,7 @@ vi.mock('vue-i18n', async () => {
   return {
     ...actual,
     // useI18n provides observable translation arguments for group pricing labels.
-    useI18n: () => ({
+    useI18n: vi.fn(() => ({
       // t exposes multiplier and discount arguments for the three pricing messages.
       // Omitted parameters produce empty interpolation text for those keys, while
       // every other key is returned unchanged for assertions.
@@ -101,7 +105,7 @@ vi.mock('vue-i18n', async () => {
 
         return key
       },
-    }),
+    })),
   }
 })
 
@@ -532,6 +536,58 @@ describe('ModelMarketplaceView', () => {
     expect(wrapper.get('[data-testid="marketplace-group-availability"]').classes()).toContain(
       'xl:w-[560px]',
     )
+  })
+
+  // The same group can report imported calls, an empty history, or active probes.
+  // Both languages identify the source while preserving the percentage and bucket colors.
+  it.each([
+    ['en', 'Past calls', 'imported', 'active probe', 'No data'],
+    ['zh', '历史调用', '导入的历史调用记录', '主动探测', '暂无数据'],
+  ])('labels imported availability in %s', async (locale, caption, source, probe, noData) => {
+    const actual = await vi.importActual<typeof import('vue-i18n')>('vue-i18n')
+    vi.mocked(useI18n).mockImplementationOnce(actual.useI18n)
+    const i18n = createI18n({ legacy: false, locale, messages: { en, zh } })
+    const summary = {
+      window_days: 2,
+      success_count: 2,
+      total_count: 3,
+      availability_rate: 2 / 3,
+      days: [{ date: '2026-11-23', success_count: 2, total_count: 3, availability_rate: 2 / 3 }],
+    }
+    const bar = mount(GroupAvailabilityBar, {
+      props: { availability: summary },
+      global: { plugins: [i18n] },
+    })
+    const grid = bar.get('[role="img"]')
+    expect(bar.text()).toBe('66.67%')
+    expect(bar.attributes('title')).toContain(probe)
+    expect(grid.attributes('aria-label')).toContain('66.67%')
+    const colors = grid.findAll('span').map((cell) => cell.classes())
+    expect(colors[0]).toContain('bg-gray-200')
+    expect(colors[1]).toContain('bg-rose-400')
+
+    await bar.setProps({ availability: { ...summary, source: 'imported_calls' } })
+    expect(bar.text()).toContain(caption)
+    expect(bar.text()).toContain('66.67%')
+    expect(bar.attributes('title')).toContain(source)
+    expect(bar.attributes('title')).toContain('66.67%')
+    expect(grid.attributes('aria-label')).toBe(bar.attributes('title'))
+    expect(grid.findAll('span').map((cell) => cell.classes())).toEqual(colors)
+
+    await bar.setProps({
+      availability: {
+        source: 'imported_calls',
+        window_days: 2,
+        success_count: 0,
+        total_count: 0,
+        days: [],
+      },
+    })
+    expect(bar.text()).toContain(noData)
+    expect(bar.text()).toContain(caption)
+    expect(bar.attributes('title')).toContain(source)
+    expect(bar.attributes('title')).not.toContain('%')
+    expect(grid.attributes('aria-label')).toBe(bar.attributes('title'))
   })
 
   // Groups provide discounted, undiscounted, and missing official-price ratios.

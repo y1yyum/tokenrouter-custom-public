@@ -198,12 +198,15 @@ type ModelMarketplaceAvailabilityDay struct {
 type ModelMarketplaceAvailability struct {
 	WindowDays    int `json:"window_days"`    // configured observation window days
 	BucketMinutes int `json:"bucket_minutes"` // configured time-bucket size minutes
+	// Source is set for imported calls and omitted when counts originate in the
+	// native probe history.
+	Source string `json:"source,omitempty"`
 	// SuccessCount, TotalCount, and AvailabilityRate summarize the observation
 	// window. AvailabilityRate is success divided by total, and nil indicates
-	// that the window contains no recorded rounds.
-	SuccessCount     int64    `json:"success_count"`               // successful window round count
-	TotalCount       int64    `json:"total_count"`                 // recorded window round count
-	AvailabilityRate *float64 `json:"availability_rate,omitempty"` // window successful round proportion
+	// that the window contains no recorded observations.
+	SuccessCount     int64    `json:"success_count"`               // successful observation count
+	TotalCount       int64    `json:"total_count"`                 // recorded observation count
+	AvailabilityRate *float64 `json:"availability_rate,omitempty"` // window success fraction
 	// LastStatus and LastCheckedAt describe the latest stored probe round even
 	// when it predates the observation window. LastCheckedAt is that round's
 	// finish time; absent history leaves these values unset.
@@ -315,6 +318,7 @@ func modelMarketplaceAvailabilityFromRouting(availability *routing.GroupAvailabi
 	return &ModelMarketplaceAvailability{
 		WindowDays:       availability.WindowDays,
 		BucketMinutes:    availability.BucketMinutes,
+		Source:           availability.Source,
 		SuccessCount:     availability.SuccessCount,
 		TotalCount:       availability.TotalCount,
 		AvailabilityRate: availability.AvailabilityRate,

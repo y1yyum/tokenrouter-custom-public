@@ -6,7 +6,7 @@ import (
 )
 
 // group_availability_probe.go defines probe outcomes, availability summaries,
-// and their persistence interface.
+// and the persistence interface shared with imported call history.
 // Availability history stores one final outcome per probe round, independently
 // of transient failures within retries. Group summaries combine counts in a
 // bounded window with the latest recorded status, and a bucket without
@@ -17,6 +17,10 @@ import (
 const (
 	GroupAvailabilityProbeStatusSuccess = "success" // completed successful probe
 	GroupAvailabilityProbeStatusFailed  = "failed"  // completed failed probe
+
+	// The imported source label lets marketplace clients identify metrics backed
+	// by historical calls instead of current probe rounds.
+	GroupAvailabilitySourceImportedCalls = "imported_calls"
 )
 
 // GroupAvailabilityProbeDueGroup contains the saved configuration claimed for
@@ -53,11 +57,11 @@ type GroupAvailabilityProbeResult struct {
 	FinishedAt time.Time // recorded attempt finish time
 }
 
-// GroupAvailabilityBucket aggregates recorded probe outcomes within one
+// GroupAvailabilityBucket aggregates recorded observations within one
 // marketplace time bucket.
 type GroupAvailabilityBucket struct {
 	Date string // formatted time-bucket start label
-	// SuccessCount and TotalCount count saved round observations within the
+	// SuccessCount and TotalCount count probe rounds or historical calls within the
 	// bucket. AvailabilityRate divides those counts and is nil when the bucket has
 	// no observations.
 	SuccessCount     int64    // successful observations in bucket
@@ -65,12 +69,14 @@ type GroupAvailabilityBucket struct {
 	AvailabilityRate *float64 // success fraction in bucket
 }
 
-// GroupAvailabilitySummary combines window observations with the latest
-// recorded probe status.
+// GroupAvailabilitySummary holds observations from one source and optional probe status.
 type GroupAvailabilitySummary struct {
 	WindowDays    int // nominal observation-window day count
 	BucketMinutes int // observation bucket width in minutes
-	// SuccessCount and TotalCount count saved rounds within the observation
+	// Source identifies imported call history. The empty value denotes native probes
+	// and keeps their existing response representation.
+	Source string
+	// SuccessCount and TotalCount count observations within the display
 	// window. AvailabilityRate is their success fraction and remains nil when that
 	// window contains no observations.
 	SuccessCount     int64    // successful observations in window
@@ -85,7 +91,7 @@ type GroupAvailabilitySummary struct {
 }
 
 // GroupAvailabilityProbeRepository manages probe claims, atomic result
-// scheduling, and observation queries.
+// scheduling, and marketplace observation queries.
 type GroupAvailabilityProbeRepository interface {
 	// ClaimDue leases due groups until lockUntil for the supplied instance
 	// identity. PostgreSQL selects ten when limit is nonpositive and otherwise
@@ -103,11 +109,7 @@ type GroupAvailabilityProbeRepository interface {
 	// schedule by GroupID alone, so callers finish within the claim lease; a late
 	// save can clear a newer owner's lease.
 	SaveResultAndScheduleNext(ctx context.Context, result *GroupAvailabilityProbeResult, nextRunAt time.Time) error
-	// GetSummaryByGroupIDs returns window counts, time buckets, and the latest
-	// status for selected groups. Ratios use success divided by total and remain
-	// nil when unobserved; latest status is queried separately and may precede the
-	// window.
-	GetSummaryByGroupIDs(ctx context.Context, groupIDs []int64, days int, bucketMinutes int, timezone string, now time.Time) (map[int64]*GroupAvailabilitySummary, error)
+	MarketplaceAvailability
 	// CleanupOldResults deletes stored probe observations older than the supplied
 	// cutoff. The runner schedules this as retention maintenance with its own
 	// timeout, allowing a failure to leave probes and later cleanup attempts

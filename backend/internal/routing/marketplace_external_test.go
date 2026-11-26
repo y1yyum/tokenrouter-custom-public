@@ -62,8 +62,11 @@ type marketplaceLoadingObservations struct {
 	// capacityGroups and availabilityGroups retain the caller's ID slices
 	// directly. Tests inspect them after synchronous ListPublic returns and keep
 	// the supplied slices unchanged.
-	capacityGroups     []int64 // borrowed queried capacity group IDs
-	availabilityGroups []int64 // borrowed queried history group IDs
+	capacityGroups     []int64                                     // borrowed queried capacity group IDs
+	availabilityGroups []int64                                     // borrowed queried probe group IDs
+	importedGroups     []int64                                     // borrowed queried historical group IDs
+	probes             map[int64]*routing.GroupAvailabilitySummary // configured probe summaries
+	imported           map[int64]*routing.GroupAvailabilitySummary // configured imported summaries
 }
 
 // marketplaceLoadingPrices records quote requests and legacy modality-reader
@@ -210,6 +213,33 @@ func TestMarketplaceBatchAttributesAndOptionalCapacity(t *testing.T) {
 			}
 		}
 	}
+}
+
+// TestMarketplaceImportedCallAvailability exercises imported history with active
+// probes, an empty probe window, and an inaccessible group. It verifies that
+// imported counts only replace missing observations for visible groups.
+func TestMarketplaceImportedCallAvailability(t *testing.T) {
+	probeConfig := routing.GroupAvailabilityProbeConfig{Enabled: true}
+	groups := &marketplaceGroupRepoStub{groups: []routing.Group{
+		{ID: 1, ActiveProviderCount: 1, AvailabilityProbeConfig: probeConfig},
+		{ID: 2, ActiveProviderCount: 1, AvailabilityProbeConfig: probeConfig},
+		{ID: 4, ActiveProviderCount: 1, IsExclusive: true},
+	}}
+	probeSummary := &routing.GroupAvailabilitySummary{TotalCount: 1}
+	importedSummary := &routing.GroupAvailabilitySummary{Source: routing.GroupAvailabilitySourceImportedCalls, TotalCount: 10}
+	observations := &marketplaceLoadingObservations{
+		probes:   map[int64]*routing.GroupAvailabilitySummary{1: probeSummary, 2: {}},
+		imported: map[int64]*routing.GroupAvailabilitySummary{2: importedSummary},
+	}
+
+	svc := routing.NewMarketplace(groups, nil, marketplaceLoadingModels{}, routing.RequestableResolver{}, &marketplaceLoadingPrices{}, nil, observations, routing.MarketplaceOptions{Now: time.Now})
+	result, err := svc.ListPublic(t.Context(), routing.MarketplaceListOptions{})
+	require.NoError(t, err)
+	require.Len(t, result, 2)
+	require.Equal(t, []int64{1, 2}, observations.availabilityGroups)
+	require.Equal(t, []int64{2}, observations.importedGroups)
+	require.Same(t, probeSummary, result[0].Availability)
+	require.Same(t, importedSummary, result[1].Availability)
 }
 
 // TestParseMarketplaceAvailabilityWindowSettings supplies missing, valid,
@@ -1005,7 +1035,16 @@ func (o *marketplaceLoadingObservations) GetGroupCapacityByIDs(_ context.Context
 // ignored by this observation fixture.
 func (o *marketplaceLoadingObservations) GetSummaryByGroupIDs(_ context.Context, ids []int64, _ int, _ int, _ string, _ time.Time) (map[int64]*routing.GroupAvailabilitySummary, error) {
 	o.availabilityGroups = ids
+	if o.probes != nil {
+		return o.probes, nil
+	}
 	return map[int64]*routing.GroupAvailabilitySummary{1: {WindowDays: 3}}, nil
+}
+
+// GetImportedSummaryByGroupIDs captures the supplied scope and returns configured summaries.
+func (o *marketplaceLoadingObservations) GetImportedSummaryByGroupIDs(_ context.Context, ids []int64, _ int, _ int, _ string, _ time.Time) (map[int64]*routing.GroupAvailabilitySummary, error) {
+	o.importedGroups = ids
+	return o.imported, nil
 }
 
 // Quote records the request and returns a priced input token amount equal to

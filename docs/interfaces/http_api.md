@@ -306,6 +306,15 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 
 管理员用量统计 `GET /api/v1/admin/usage/stats` 的可选参数 `endpoint_source` 接受 `inbound`、`upstream`、`path`；省略、空值或 `all` 返回全部端点维度，其他值返回 400。摘要字段照常返回，缓存按端点来源分别保存；管理页先加载摘要和入站端点，切换图表后再拉取上游端点或路径，筛选变化和离开页面时取消过期请求。
 
+后台仪表盘和使用记录通过管理员接口 `GET /api/v1/admin/usage/imported-calls` 读取 `source=raks` 的历史调用。未登录返回 401，已登录的普通用户返回 403。无日期参数时返回完整导入范围。日期参数按 `timezone` 解析，纯日期的 `end_date` 包含当日，带时间的上界为开区间。
+
+| 视图 | 返回 |
+| --- | --- |
+| `view=groups` | 按目标分组汇总请求、四类 Token、总耗时及首 Token 延迟的毫秒合计与采样数。 |
+| `view=minutes` | 按分钟、分组、源平台和模型分页，`total` 为匹配的分钟汇总条数。分组选项取自完整日期范围，明细可通过 `group_id` 和 `model` 精确筛选。 |
+
+总请求为成功与失败之和。Token 合计包含输入、输出、缓存写入及缓存读取。两类平均延迟各用合计除以采样数，零样本显示「—」。历史调用独立于本站使用记录、计费、导出和清理任务。
+
 <a id="announcement_api"></a>
 ### 公告接口
 

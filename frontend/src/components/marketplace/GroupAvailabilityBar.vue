@@ -20,6 +20,9 @@
       <div class="text-base font-semibold leading-5 text-gray-900 dark:text-white">
         {{ rateLabel }}
       </div>
+      <div v-if="isImported" class="text-xs text-gray-500 dark:text-dark-300">
+        {{ t('marketplace.availabilityImportedCalls') }}
+      </div>
     </div>
   </div>
 </template>
@@ -111,14 +114,21 @@ const rateLabel = computed(() => {
   return `${(rate * 100).toFixed(2)}%`
 })
 
+// The summary source selects the caption and descriptions for the whole window.
+// Probes omit the source field, including in responses from older servers.
+const isImported = computed(() => props.availability?.source === 'imported_calls')
 const tooltip = computed(() => {
   const availability = props.availability
   if (!availability || typeof availability.availability_rate !== 'number') {
-    return t('marketplace.availabilityHintNoData', {
-      days: windowDays.value,
-    })
+    const key = isImported.value
+      ? 'marketplace.availabilityImportedHintNoData'
+      : 'marketplace.availabilityHintNoData'
+    return t(key, { days: windowDays.value })
   }
-  return t('marketplace.availabilityHint', {
+  const key = isImported.value
+    ? 'marketplace.availabilityImportedHint'
+    : 'marketplace.availabilityHint'
+  return t(key, {
     days: windowDays.value,
     rate: rateLabel.value,
     success: availability.success_count,
@@ -126,8 +136,10 @@ const tooltip = computed(() => {
   })
 })
 
-const ariaLabel = computed(
-  () => `${t('marketplace.availabilityWindow', { days: windowDays.value })}: ${rateLabel.value}`,
+const ariaLabel = computed(() =>
+  isImported.value
+    ? tooltip.value
+    : `${t('marketplace.availabilityWindow', { days: windowDays.value })}: ${rateLabel.value}`,
 )
 
 // bucketClass maps measured success rates to the shared availability color bands.
