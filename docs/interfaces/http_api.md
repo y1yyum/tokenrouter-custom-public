@@ -96,7 +96,7 @@ RequestLogger
 | --- | --- | --- |
 | JWT access token | 面板 `Authorization: Bearer`，少数 WebSocket 用子协议 | 校验用户状态、token version 及可选会话绑定；管理员路由另校验角色 |
 | Refresh token | `/api/v1/auth/refresh` 及 logout 约定 payload 或 cookie | 仅用于令牌轮换和撤销，不可直接访问业务资源 |
-| 管理 API Key | 管理接口 `x-api-key` | 站点只保存一个当前值，以 ID 最小的启用管理员为 actor。轮换或删除后旧值失效。此 Key 无独立到期时间、逐操作授权或团队范围，要求浏览器会话或近期 TOTP 的路由另行校验 |
+| 管理 API Key | 管理接口 `x-api-key` | 站点只保存一个当前值，以最早创建（`created_at` 最小、`id` 最小兜底）的启用管理员为 actor。轮换或删除后旧值失效。此 Key 无独立到期时间、逐操作授权或团队范围，要求浏览器会话或近期 TOTP 的路由另行校验 |
 | TokenRouter API Key | 网关 `Authorization: Bearer`、`x-api-key`，Gemini 入口另支持 `x-goog-api-key` | 校验 Key、用户与团队、分组、IP、额度、订阅和资源归属；通用网关拒绝 query 参数传 Key |
 | MCP 专用令牌、MCP OAuth access token | `/mcp` 的 `Authorization: Bearer` | 归属当前启用的全局管理员，按操作 ID 授权。OAuth 另绑定站点的 MCP resource。到期、撤销及审计归属见 [MCP 管理接口](mcp_management.md#access_tokens) |
 | OAuth 与 pending 补全状态 | auth callback 与补全接口 | 由 provider state、浏览器会话、一次性完成码和过期时间共同约束 |
@@ -314,6 +314,8 @@ POST /api/v1/creative/runs/{id}/outputs/{index}/ack
 | `view=minutes` | 按分钟、分组、源平台和模型分页，`total` 为匹配的分钟汇总条数。分组选项取自完整日期范围，明细可通过 `group_id` 和 `model` 精确筛选。 |
 
 总请求为成功与失败之和。Token 合计包含输入、输出、缓存写入及缓存读取。两类平均延迟各用合计除以采样数，零样本显示「—」。历史调用独立于本站使用记录、计费、导出和清理任务。
+
+管理员总览接口 `GET /api/v1/admin/dashboard/stats` 与 `GET /api/v1/admin/dashboard/snapshot-v2`（`include_stats=true`）在 8 位用户 ID 池使用率达到 50% / 75% / 90% 时附加可空 `user_id_pool_alert`（含 `tier_digit`、`used_count`、`capacity`、`usage_percent`、`threshold`、`severity` 与 `message`）；缺表或低于 50% 时省略该字段。
 
 <a id="announcement_api"></a>
 ### 公告接口

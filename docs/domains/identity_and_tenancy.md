@@ -33,7 +33,7 @@
 
 | 实体 | 含义 | 关键约束 |
 | --- | --- | --- |
-| `User` | 本地账户，记录角色、状态、余额和并发额度 | 软删除；登录和每次请求复核启用状态；`token_version` 由当前邮箱和密码哈希推导，JWT 声明须与当前指纹一致 |
+| `User` | 本地账户，记录角色、状态、余额和并发额度 | `users.id` 移除自增默认值，未显式指定 ID 时由数据库触发器按 `user_id_pool_tiers` 4~8 位阶梯池随机分配（前一级过半解锁下一位数，显式 ID 仍保留并计入池统计；物理删除递减计数，`recalibrate_user_id_pool_tiers()` 可校准）；软删除；登录和每次请求复核启用状态；`token_version` 由当前邮箱和密码哈希推导，JWT 声明须与当前指纹一致 |
 | `AuthIdentity` | 外部认证提供方中的稳定身份，归属一个用户 | `(provider_type, provider_key, provider_subject)` 全局唯一；须使用全局主体，渠道级标识不足以判重 |
 | `PendingAuthSession` | OAuth 等跨页面流程的短期一次性状态 | 绑定浏览器会话、完成码摘要和过期时间，完成时原子消费 |
 | JWT access token | 短期访问声明，用户状态以数据库为准 | 携带用户、角色、token version、refresh family `sid` 和可选绑定摘要；每次请求仍查询当前用户 |
@@ -46,7 +46,7 @@
 - 角色隔离：`User.role` 中的 `admin` 是全局后台角色，`TeamMember.role` 的 `owner` 和 `member` 仅在单团队内有效。请求授权由用户状态、团队状态、成员关系和资源归属共同决定。
 - MCP 专用令牌：归属签发管理员，保存独立权限、有效期和撤销状态；认证校验摘要，完整令牌加密存储供所属管理员复制。每次调用读取当前用户和令牌，内部请求使用 `mcp_token` 身份，敏感操作默认需所属管理员浏览器会话确认（单令牌可配置跳过，近期 TOTP 要求仍生效）。
 - MCP OAuth 应用授权：维护独立客户端、权限与撤销记录，使用短期访问凭据和轮换刷新凭据，以来源类型加稳定授权 ID 区分归属，刷新不改变确认归属。详见 [MCP 管理接口](../interfaces/mcp_management.md#access_tokens)。
-- 管理用户列表查询：最近使用时间取自事务内维护的[用户活动汇总](../operations/observability_and_data_lifecycle.md#user_activity_summary)。排序在筛选后、分页前执行，升序空值在前、降序空值在后，相同时间按同方向用户 ID 排序。搜索按邮箱、用户名、备注和 API Key 分别查候选用户 ID 后去重合并，计数与分页共用条件。
+- 管理用户列表查询与首个管理员选择：最近使用时间取自事务内维护的[用户活动汇总](../operations/observability_and_data_lifecycle.md#user_activity_summary)。排序在筛选后、分页前执行，升序空值在前、降序空值在后；未传或未知排序字段默认按 `created_at` 排序（同值按同方向用户 ID 决胜），显式传 `sort_by=id` 才按用户 ID 排序。搜索按邮箱、用户名、备注和 API Key 分别查候选用户 ID 后去重合并，计数与分页共用条件。`GetFirstAdmin` 按 `created_at ASC, id ASC` 选取最早创建的启用管理员。
 - 语言与属性原文：`User.preferred_locale` 为可空账户语言偏好，选择顺序见[用户侧国际化](../interfaces/user_localization.md#language_selection)。管理员用户属性表单的定义和值按原文保存。
 
 <a id="authentication_boundaries"></a>

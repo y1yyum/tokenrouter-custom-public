@@ -871,9 +871,11 @@ func identityUserSearch(search string) predicate.User {
 }
 
 // IdentityUserListOrder returns the selected field order with an ID tie break
-// in the same direction. Unknown fields select ID; last_active_at and personal
-// recharge rates place nulls last in either direction. Last_used_at delegates
-// its activity-specific ordering.
+// in the same direction. Explicit ID selects account ID without a duplicate tie
+// break, while empty or unknown fields select created_at so randomized IDs do
+// not scramble signup order. Last_active_at and personal recharge rates place
+// nulls last in either direction, and last_used_at delegates its
+// activity-specific ordering.
 func IdentityUserListOrder(params pagination.PaginationParams) []func(*entsql.Selector) {
 	sortBy := strings.ToLower(strings.TrimSpace(params.SortBy))
 	sortOrder := params.NormalizedSortOrder(pagination.SortOrderDesc)
@@ -915,8 +917,12 @@ func IdentityUserListOrder(params pagination.PaginationParams) []func(*entsql.Se
 		field = dbuser.FieldLastActiveAt
 		defaultField = false
 		nullsLastField = true
-	default:
+	case "id":
 		field = dbuser.FieldID
+	default:
+		// Account IDs are randomly allocated, so created_at defines default signup order.
+		field = dbuser.FieldCreatedAt
+		defaultField = false
 	}
 
 	if sortOrder == pagination.SortOrderAsc {
@@ -1613,16 +1619,17 @@ func (r *UserStore) RemoveGroupFromUserAllowedGroups(ctx context.Context, userID
 	return err
 }
 
-// GetFirstAdmin returns the first active administrator by ascending account ID
-// through the configured client. It loads sorted grant and denial data and
-// marks complete restrictions; no matching account maps to ErrUserNotFound.
+// GetFirstAdmin returns the earliest active administrator by ascending
+// created_at and account ID through the configured client. It loads sorted
+// grant and denial data and marks complete restrictions; no matching account
+// maps to ErrUserNotFound.
 func (r *UserStore) GetFirstAdmin(ctx context.Context) (*identitycore.User, error) {
 	m, err := r.client.User.Query().
 		Where(
 			dbuser.RoleEQ(identitycore.RoleAdmin),
 			dbuser.StatusEQ(identitycore.StatusActive),
 		).
-		Order(dbent.Asc(dbuser.FieldID)).
+		Order(dbent.Asc(dbuser.FieldCreatedAt), dbent.Asc(dbuser.FieldID)).
 		First(ctx)
 	if err != nil {
 		return nil, translatePersistenceError(err, identitycore.ErrUserNotFound, nil)

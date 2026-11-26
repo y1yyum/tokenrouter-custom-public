@@ -54,6 +54,20 @@ export interface DashboardStats {
   // System throughput observations.
   rpm: number // Mean requests per minute over five minutes.
   tpm: number // Mean tokens per minute over five minutes.
+
+  // Capacity warning for the eight-digit random user ID tier.
+  user_id_pool_alert?: UserIDPoolAlert
+}
+
+// UserIDPoolAlert describes an active capacity warning for the eight-digit user ID pool tier.
+export interface UserIDPoolAlert {
+  tier_digit: number // Monitored digit length tier (8).
+  used_count: number // Count of occupied IDs currently assigned to the tier.
+  capacity: number // Maximum allocatable user IDs in the tier.
+  usage_percent: number // Ratio of used_count to capacity expressed as a percentage.
+  threshold: number // Highest crossed alert gate percentage (50, 75, or 90).
+  severity: 'warning' | 'critical' // Visual severity level for dashboard alerts.
+  message: string // Localized capacity alert text returned by the backend.
 }
 
 // UserBreakdownItem summarizes one user's requests, token consumption, and billing

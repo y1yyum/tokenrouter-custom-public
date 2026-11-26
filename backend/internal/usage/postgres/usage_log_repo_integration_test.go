@@ -2165,3 +2165,32 @@ func testMaxTime(a, b time.Time) time.Time {
 	}
 	return b
 }
+
+// TestDashboardStats_UserIDPoolAlert updates tier-8 consumption inside the
+// case transaction and verifies that GetDashboardStats omits the alert below
+// fifty percent and reports warning or critical thresholds at and above fifty
+// and ninety percent.
+func (s *UsageLogRepoSuite) TestDashboardStats_UserIDPoolAlert() {
+	_, err := s.tx.ExecContext(s.ctx, `UPDATE user_id_pool_tiers SET used_count = 44999999 WHERE tier_digit = 8`)
+	s.Require().NoError(err)
+	below, err := s.repo.GetDashboardStats(s.ctx)
+	s.Require().NoError(err)
+	s.Require().Nil(below.UserIDPoolAlert)
+
+	_, err = s.tx.ExecContext(s.ctx, `UPDATE user_id_pool_tiers SET used_count = 45000000 WHERE tier_digit = 8`)
+	s.Require().NoError(err)
+	warning, err := s.repo.GetDashboardStats(s.ctx)
+	s.Require().NoError(err)
+	s.Require().NotNil(warning.UserIDPoolAlert)
+	s.Require().Equal(8, warning.UserIDPoolAlert.TierDigit)
+	s.Require().Equal(50, warning.UserIDPoolAlert.Threshold)
+	s.Require().Equal("warning", warning.UserIDPoolAlert.Severity)
+
+	_, err = s.tx.ExecContext(s.ctx, `UPDATE user_id_pool_tiers SET used_count = 81000000 WHERE tier_digit = 8`)
+	s.Require().NoError(err)
+	critical, err := s.repo.GetDashboardStats(s.ctx)
+	s.Require().NoError(err)
+	s.Require().NotNil(critical.UserIDPoolAlert)
+	s.Require().Equal(90, critical.UserIDPoolAlert.Threshold)
+	s.Require().Equal("critical", critical.UserIDPoolAlert.Severity)
+}

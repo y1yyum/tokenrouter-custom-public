@@ -57,6 +57,13 @@ type userBreakdownRepoCapture struct {
 	result                   []usage.UserBreakdownItem    // configured shared payer breakdown rows
 }
 
+// dashboardStatsRepoStub serves configured DashboardStats payloads for GetStats
+// and GetSnapshotV2 HTTP handler tests.
+type dashboardStatsRepoStub struct {
+	usage.UsageLogRepository                       // unused usage repository method slots
+	stats                    *usage.DashboardStats // configured stats returned to handler
+}
+
 // GetUsageTrendWithFilters counts the service-cache load and returns fixed
 // trend fields for HTTP assertions.
 func (r *dashboardUsageRepoCacheProbe) GetUsageTrendWithFilters(
@@ -97,6 +104,11 @@ func (r *dashboardUsageRepoCacheProbe) GetUserUsageTrend(
 		Cost:       2,
 		ActualCost: 1,
 	}}, nil
+}
+
+// GetDashboardStats returns the stub's configured DashboardStats payload.
+func (s *dashboardStatsRepoStub) GetDashboardStats(context.Context) (*usage.DashboardStats, error) {
+	return s.stats, nil
 }
 
 // resetDashboardReadCachesForTest replaces the process-wide composite
@@ -744,5 +756,73 @@ func TestParseTimeRangeInjectedCalendar(t *testing.T) {
 			require.Equal(t, time.Date(2026, 3, 9, 0, 0, 0, 0, tc.location), end)
 			require.Equal(t, tc.duration, end.Sub(start))
 		})
+	}
+}
+
+// TestDashboardHandler_GetStatsAndSnapshotV2_UserIDPoolAlert verifies that
+// both /admin/dashboard/stats and /admin/dashboard/snapshot-v2 omit
+// user_id_pool_alert when nil and include full alert metadata when populated.
+func TestDashboardHandler_GetStatsAndSnapshotV2_UserIDPoolAlert(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+
+	makeRouter := func(stats *usage.DashboardStats) *gin.Engine {
+		svc := usage.NewDashboardService(&dashboardStatsRepoStub{stats: stats}, nil, nil, nil)
+		h := NewDashboardHandler(svc, timezone.NewCalendar(time.UTC))
+		r := gin.New()
+		r.GET("/admin/dashboard/stats", h.GetStats)
+		r.GET("/admin/dashboard/snapshot-v2", h.GetSnapshotV2)
+		return r
+	}
+
+	withoutAlertRouter := makeRouter(&usage.DashboardStats{TotalUsers: 10})
+	statsReq := httptest.NewRequest(http.MethodGet, "/admin/dashboard/stats", nil)
+	statsRec := httptest.NewRecorder()
+	withoutAlertRouter.ServeHTTP(statsRec, statsReq)
+	require.Equal(t, http.StatusOK, statsRec.Code)
+	require.NotContains(t, statsRec.Body.String(), "user_id_pool_alert")
+
+	snapAbsentReq := httptest.NewRequest(http.MethodGet, "/admin/dashboard/snapshot-v2?start_date=2025-02-01&end_date=2025-02-02&include_stats=true&include_trend=false&include_model_stats=false&include_group_stats=false&include_users_trend=false", nil)
+	snapAbsentRec := httptest.NewRecorder()
+	withoutAlertRouter.ServeHTTP(snapAbsentRec, snapAbsentReq)
+	require.Equal(t, http.StatusOK, snapAbsentRec.Code)
+	require.NotContains(t, snapAbsentRec.Body.String(), "user_id_pool_alert")
+
+	withAlertRouter := makeRouter(&usage.DashboardStats{
+		TotalUsers: 50000000,
+		UserIDPoolAlert: &usage.UserIDPoolAlert{
+			TierDigit:    8,
+			UsedCount:    81000000,
+			Capacity:     90000000,
+			UsagePercent: 90.0,
+			Threshold:    90,
+			Severity:     "critical",
+			Message:      "8位数账号ID池使用已超过 90% (81000000/90000000)，请注意扩容或规划后续ID策略！",
+		},
+	})
+
+	for _, path := range []string{
+		"/admin/dashboard/stats",
+		"/admin/dashboard/snapshot-v2?start_date=2025-02-03&end_date=2025-02-04&include_stats=true&include_trend=false&include_model_stats=false&include_group_stats=false&include_users_trend=false",
+	} {
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		rec := httptest.NewRecorder()
+		withAlertRouter.ServeHTTP(rec, req)
+		require.Equal(t, http.StatusOK, rec.Code)
+
+		var decoded map[string]any
+		require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &decoded))
+		dataMap, ok := decoded["data"].(map[string]any)
+		require.True(t, ok, "expected data object in %s", path)
+		var statsObj map[string]any
+		if nested, ok := dataMap["stats"].(map[string]any); ok {
+			statsObj = nested
+		} else {
+			statsObj = dataMap
+		}
+		alertObj, ok := statsObj["user_id_pool_alert"].(map[string]any)
+		require.True(t, ok, "expected user_id_pool_alert in %s", path)
+		require.Equal(t, float64(8), alertObj["tier_digit"])
+		require.Equal(t, float64(90), alertObj["threshold"])
+		require.Equal(t, "critical", alertObj["severity"])
 	}
 }

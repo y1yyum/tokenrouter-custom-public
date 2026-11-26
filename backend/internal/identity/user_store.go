@@ -117,10 +117,11 @@ type UserRepository interface {
 	// multiple matches return a conflict; callers do not treat lookup success as
 	// password or provider proof.
 	GetByEmail(ctx context.Context, email string) (*User, error)
-	// GetFirstAdmin reads the lowest-ID active undeleted administrator in
-	// PostgreSQL. Missing state returns ErrUserNotFound; management-key
-	// authentication validates its credential separately before using this
-	// account as the administrator identity.
+	// GetFirstAdmin reads the earliest-created active undeleted administrator
+	// ordered by creation time and ascending ID in PostgreSQL. Missing state
+	// returns ErrUserNotFound; management-key authentication validates its
+	// credential separately before using this account as the administrator
+	// identity.
 	GetFirstAdmin(ctx context.Context) (*User, error)
 	// Update persists selected account columns and relations from a supplied
 	// snapshot. Balance and total-recharged fields are excluded, and nil input

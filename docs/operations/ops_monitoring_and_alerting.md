@@ -34,6 +34,7 @@
 - 评估流程：告警规则包含 `enabled`、metric type、operator、threshold、window、sustained minutes、scope/filter 与通知动作。评估器竞争任务锁周期运行，连续超阈值达到持续时间后创建或更新 active 事件，恢复后关闭或标为 resolved。
 - 静默与通知：静默仅在匹配范围与时间窗口内抑制通知与动作，不影响原始指标采集。邮件通知受全局与运行时限流约束，发送失败写入 heartbeat 与日志且不标为已送达。
 - 监控跳过边界：错误规则的 `skip_monitoring` 仅跳过指定客户端错误的常规监控记录，不影响健康、访问、计费与安全审计，详见[网关错误响应策略](../interfaces/gateway_error_policy.md)。
+- 用户 ID 池容量告警：PostgreSQL 插入 8 位数用户 ID 并跨越 `user_id_pool_tiers`（总容量 90,000,000）的 50% / 75%（`warning`）或 90%（`critical`）阈值时，触发 `RAISE WARNING` 并写入可空 `rule_id` 的 `ops_alert_events`（`dimensions` 含 `{"tier": 8, "threshold": "50%|75%|90%"}`）。管理员总览统计（`/api/v1/admin/dashboard/stats` 与 `snapshot-v2`）读取 tier 8 当前用量并在达到 50% 后附加 `user_id_pool_alert` 供顶部横幅展示；缺表或无行时忽略错误以免阻断统计。
 
 ## 计划报告
 

@@ -264,4 +264,72 @@ describe('admin DashboardView', () => {
     expect(getSnapshotV2).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
+
+  // Capacity alerts must only appear when tier-8 user ID pool usage crosses threshold.
+  it('user_id_pool_alert 不存在时不显示 ID 池告警横幅', async () => {
+    const wrapper = mountDashboard()
+    await flushPromises()
+    expect(wrapper.find('[data-test="user-id-pool-alert"]').exists()).toBe(false)
+    wrapper.unmount()
+  })
+
+  // Warning alerts use amber styling and render the formatted percentage badge.
+  it('渲染 warning 级别用户 ID 池告警横幅', async () => {
+    const stats = createDashboardStats()
+    stats.user_id_pool_alert = {
+      tier_digit: 8,
+      used_count: 50000000,
+      capacity: 90000000,
+      usage_percent: 55.56,
+      threshold: 50,
+      severity: 'warning',
+      message: '8位数账号ID池使用已超过 50% (50000000/90000000)！',
+    }
+    getSnapshotV2.mockResolvedValueOnce({
+      stats,
+      trend: [],
+      models: [],
+    })
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const banner = wrapper.get('[data-test="user-id-pool-alert"]')
+    expect(banner.text()).toContain('8位数账号ID池使用已超过 50% (50000000/90000000)！')
+    expect(banner.text()).toContain('55.6%')
+    expect(banner.classes()).toContain('border-amber-300')
+    expect(banner.classes()).not.toContain('border-red-300')
+    wrapper.unmount()
+  })
+
+  // Critical alerts switch banner classes to red while preserving message and ratio output.
+  it('渲染 critical 级别用户 ID 池告警横幅', async () => {
+    const stats = createDashboardStats()
+    stats.user_id_pool_alert = {
+      tier_digit: 8,
+      used_count: 82000000,
+      capacity: 90000000,
+      usage_percent: 91.11,
+      threshold: 90,
+      severity: 'critical',
+      message: '8位数账号ID池使用已超过 90% (82000000/90000000)，请注意扩容或规划后续ID策略！',
+    }
+    getSnapshotV2.mockResolvedValueOnce({
+      stats,
+      trend: [],
+      models: [],
+    })
+
+    const wrapper = mountDashboard()
+    await flushPromises()
+
+    const banner = wrapper.get('[data-test="user-id-pool-alert"]')
+    expect(banner.text()).toContain(
+      '8位数账号ID池使用已超过 90% (82000000/90000000)，请注意扩容或规划后续ID策略！',
+    )
+    expect(banner.text()).toContain('91.1%')
+    expect(banner.classes()).toContain('border-red-300')
+    expect(banner.classes()).not.toContain('border-amber-300')
+    wrapper.unmount()
+  })
 })

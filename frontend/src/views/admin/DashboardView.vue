@@ -16,6 +16,33 @@
       <DashboardSkeleton v-if="loading && !stats" />
 
       <template v-else-if="stats">
+        <!-- User ID Pool Capacity Alert Banner -->
+        <div
+          v-if="stats.user_id_pool_alert"
+          data-test="user-id-pool-alert"
+          :class="[
+            'flex items-center justify-between rounded-surface border p-4 text-sm font-medium',
+            stats.user_id_pool_alert.severity === 'critical'
+              ? 'border-red-300 bg-red-50 text-red-800 dark:border-red-800 dark:bg-red-950/40 dark:text-red-200'
+              : 'border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-200',
+          ]"
+        >
+          <div class="flex items-center gap-3">
+            <Icon name="exclamationTriangle" size="md" />
+            <span>{{ stats.user_id_pool_alert.message }}</span>
+          </div>
+          <span
+            :class="[
+              'rounded-full px-2.5 py-0.5 text-xs font-semibold',
+              stats.user_id_pool_alert.severity === 'critical'
+                ? 'bg-red-200 text-red-900 dark:bg-red-900 dark:text-red-100'
+                : 'bg-amber-200 text-amber-900 dark:bg-amber-900 dark:text-amber-100',
+            ]"
+          >
+            {{ stats.user_id_pool_alert.usage_percent.toFixed(1) }}%
+          </span>
+        </div>
+
         <div class="grid grid-cols-2 gap-4 lg:grid-cols-4">
           <div class="card p-4">
             <div class="flex flex-col gap-2 lg:flex-row lg:items-center">
