@@ -7,19 +7,35 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Tag to release (e.g., v1.0.0)'
+        description: 'Release tag to publish or create (e.g., v1.0.0)'
         required: true
         type: string
-      simple_release:
-        description: 'Simple release: only x86_64 GHCR image, skip other artifacts'
+      target_ref:
+        description: 'Branch or commit SHA to tag when tag does not exist yet'
+        required: false
+        type: string
+        default: 'main'
+      release_mode:
+        description: 'Release scope (linux_amd64 builds archive + checksums + Docker for UI updates)'
+        required: false
+        type: choice
+        default: 'linux_amd64'
+        options:
+          - linux_amd64
+          - all
+          - simple
+      release_notes:
+        description: 'Optional Markdown release notes when creating a new tag from workflow_dispatch'
+        required: false
+        type: string
+        default: ''
+      sync_version_file:
+        description: 'Commit backend/cmd/server/VERSION back to default branch'
         required: false
         type: boolean
         default: false
 
-# 环境变量：合并 workflow_dispatch 输入和 repository variable
-# tag push 触发时读取 vars.SIMPLE_RELEASE，workflow_dispatch 时使用输入参数
 env:
-  SIMPLE_RELEASE: ${{ github.event.inputs.simple_release == 'true' || vars.SIMPLE_RELEASE == 'true' }}
   DOCKERHUB_ENABLED: ${{ secrets.DOCKERHUB_USERNAME != '' && secrets.DOCKERHUB_TOKEN != '' }}
 
 permissions:
@@ -27,46 +43,155 @@ permissions:
   packages: write
 
 jobs:
-  # Update VERSION file with tag version
+  # Prepare release metadata and create/push the annotated tag when invoked via
+  # workflow_dispatch for a version that has not been tagged yet.
   update-version:
     runs-on: ubuntu-latest
     outputs:
       version: ${{ steps.release-metadata.outputs.version }}
       commit: ${{ steps.release-metadata.outputs.commit }}
       build-date: ${{ steps.release-metadata.outputs.build-date }}
-      simple-release: ${{ steps.release-metadata.outputs.simple-release }}
+      tag-name: ${{ steps.release-metadata.outputs.tag-name }}
+      tag-ref: ${{ steps.release-metadata.outputs.tag-ref }}
+      release-mode: ${{ steps.release-metadata.outputs.release-mode }}
+      binary-matrix: ${{ steps.release-metadata.outputs.binary-matrix }}
+      owner-lower: ${{ steps.release-metadata.outputs.owner-lower }}
+      sync-version-file: ${{ steps.release-metadata.outputs.sync-version-file }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
 
-      - name: Prepare release metadata
+      - name: Prepare release metadata and tag
         id: release-metadata
         env:
-          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          INPUT_TARGET_REF: ${{ github.event.inputs.target_ref }}
+          INPUT_RELEASE_MODE: ${{ github.event.inputs.release_mode }}
+          INPUT_RELEASE_NOTES: ${{ github.event.inputs.release_notes }}
+          INPUT_SYNC_VERSION: ${{ github.event.inputs.sync_version_file }}
+          VAR_RELEASE_MODE: ${{ vars.RELEASE_MODE }}
+          VAR_SIMPLE_RELEASE: ${{ vars.SIMPLE_RELEASE }}
+          VAR_SYNC_VERSION: ${{ vars.SYNC_VERSION_FILE }}
+          REF_NAME: ${{ github.ref_name }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
-          case "$TAG_NAME" in
-            v*) ;;
+          set -euo pipefail
+
+          if [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TAG_NAME="${INPUT_TAG}"
+            RELEASE_MODE="${INPUT_RELEASE_MODE:-linux_amd64}"
+            SYNC_VERSION="${INPUT_SYNC_VERSION:-false}"
+          else
+            TAG_NAME="${REF_NAME}"
+            if [ -n "$VAR_RELEASE_MODE" ]; then
+              RELEASE_MODE="$VAR_RELEASE_MODE"
+            elif [ "$VAR_SIMPLE_RELEASE" = "true" ]; then
+              RELEASE_MODE="simple"
+            else
+              RELEASE_MODE="linux_amd64"
+            fi
+            if [ "$VAR_SYNC_VERSION" = "true" ]; then
+              SYNC_VERSION="true"
+            else
+              SYNC_VERSION="false"
+            fi
+          fi
+
+          # Enforce canonical vMAJOR.MINOR.PATCH spelling required by backend
+          # version comparison, rollback selection, and install.sh.
+          if ! printf '%s' "$TAG_NAME" | grep -Eq '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$'; then
+            echo "Release tag must follow vMAJOR.MINOR.PATCH (for example v1.0.0): $TAG_NAME" >&2
+            exit 1
+          fi
+
+          case "$RELEASE_MODE" in
+            linux_amd64|all|simple) ;;
             *)
-              echo "Release tag must start with v: $TAG_NAME" >&2
+              echo "Unsupported release_mode: $RELEASE_MODE" >&2
               exit 1
               ;;
           esac
 
-          VERSION=${TAG_NAME#v}
-          COMMIT=$(git rev-parse HEAD)
-          BUILD_DATE=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          git fetch origin --tags --force
 
-          echo "$VERSION" > backend/cmd/server/VERSION
-          echo "Updated VERSION file to: $VERSION"
+          if git rev-parse -q --verify "refs/tags/${TAG_NAME}^{commit}" >/dev/null 2>&1; then
+            git checkout --detach "refs/tags/${TAG_NAME}^{commit}"
+          elif [ "$EVENT_NAME" = "workflow_dispatch" ]; then
+            TARGET_REF="${INPUT_TARGET_REF:-main}"
+            if ! git rev-parse -q --verify "${TARGET_REF}^{commit}" >/dev/null 2>&1; then
+              git fetch origin "$TARGET_REF"
+              TARGET_COMMIT=$(git rev-parse "FETCH_HEAD^{commit}")
+            else
+              TARGET_COMMIT=$(git rev-parse "${TARGET_REF}^{commit}")
+            fi
+            git checkout --detach "$TARGET_COMMIT"
+
+            NOTES_FILE="$(mktemp)"
+            VERSION_TMP="${TAG_NAME#v}"
+            if [ -n "$(printf '%s' "$INPUT_RELEASE_NOTES" | tr -d '[:space:]')" ]; then
+              printf '%s\n' "$INPUT_RELEASE_NOTES" > "$NOTES_FILE"
+            else
+              PREV_TAG="$(git tag -l 'v*' --merged HEAD --sort=-v:refname | grep -E '^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)$' | head -n 1 || true)"
+              {
+                printf 'Release %s.\n\n## Changes\n\n' "$TAG_NAME"
+                if [ -n "$PREV_TAG" ]; then
+                  COMMIT_LINES="$(git log --no-merges --pretty=format:'- %s' "${PREV_TAG}..HEAD" | head -n 50 || true)"
+                else
+                  COMMIT_LINES="$(git log --no-merges --pretty=format:'- %s' -n 30 HEAD || true)"
+                fi
+                if [ -n "$COMMIT_LINES" ]; then
+                  printf '%s\n' "$COMMIT_LINES"
+                else
+                  printf -- '- Maintenance release %s.\n' "$TAG_NAME"
+                fi
+              } > "$NOTES_FILE"
+            fi
+
+            TAG_MSG_FILE="$(mktemp)"
+            {
+              printf 'TokenRouter %s\n\n' "$VERSION_TMP"
+              cat "$NOTES_FILE"
+            } > "$TAG_MSG_FILE"
+
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a --cleanup=verbatim "$TAG_NAME" HEAD -F "$TAG_MSG_FILE"
+            git push origin "refs/tags/${TAG_NAME}"
+            rm -f "$NOTES_FILE" "$TAG_MSG_FILE"
+          else
+            echo "Tag $TAG_NAME was not found on origin" >&2
+            exit 1
+          fi
+
+          VERSION="${TAG_NAME#v}"
+          COMMIT="$(git rev-parse HEAD)"
+          BUILD_DATE="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          OWNER_LOWER="$(printf '%s' "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')"
+
+          if [ "$RELEASE_MODE" = "all" ]; then
+            BINARY_MATRIX='[{"target":"linux_amd64","goos":"linux","goarch":"amd64"},{"target":"linux_arm64","goos":"linux","goarch":"arm64"},{"target":"windows_amd64","goos":"windows","goarch":"amd64"},{"target":"darwin_amd64","goos":"darwin","goarch":"amd64"},{"target":"darwin_arm64","goos":"darwin","goarch":"arm64"}]'
+          elif [ "$RELEASE_MODE" = "linux_amd64" ]; then
+            BINARY_MATRIX='[{"target":"linux_amd64","goos":"linux","goarch":"amd64"}]'
+          else
+            BINARY_MATRIX='[]'
+          fi
+
+          printf '%s\n' "$VERSION" > backend/cmd/server/VERSION
+          echo "Prepared release $VERSION at commit $COMMIT (mode=$RELEASE_MODE)"
 
           {
             echo "version=$VERSION"
             echo "commit=$COMMIT"
             echo "build-date=$BUILD_DATE"
-            echo "simple-release=$SIMPLE_RELEASE"
+            echo "tag-name=$TAG_NAME"
+            echo "tag-ref=refs/tags/$TAG_NAME"
+            echo "release-mode=$RELEASE_MODE"
+            echo "binary-matrix=$BINARY_MATRIX"
+            echo "owner-lower=$OWNER_LOWER"
+            echo "sync-version-file=$SYNC_VERSION"
           } >> "$GITHUB_OUTPUT"
 
       - name: Upload VERSION artifact
@@ -77,12 +202,13 @@ jobs:
           retention-days: 1
 
   build-frontend:
+    needs: [update-version]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.update-version.outputs.tag-ref }}
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v6
@@ -101,6 +227,9 @@ jobs:
         working-directory: frontend
 
       - name: Build frontend
+        env:
+          VITE_RELEASE_REPO: ${{ github.repository }}
+          VITE_DOCKER_IMAGE: ghcr.io/${{ needs.update-version.outputs.owner-lower }}/tokenrouter
         run: pnpm run build
         working-directory: frontend
 
@@ -111,35 +240,19 @@ jobs:
           path: backend/internal/web/dist/
           retention-days: 1
 
-  # 标准发布把每个目标放到独立 runner，避免多个 Go 编译任务争抢同一台 4 核机器。
   build-binaries:
     needs: [update-version, build-frontend]
-    if: ${{ needs.update-version.outputs.simple-release != 'true' }}
+    if: ${{ needs.update-version.outputs.release-mode != 'simple' }}
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - target: linux_amd64
-            goos: linux
-            goarch: amd64
-          - target: linux_arm64
-            goos: linux
-            goarch: arm64
-          - target: windows_amd64
-            goos: windows
-            goarch: amd64
-          - target: darwin_amd64
-            goos: darwin
-            goarch: amd64
-          - target: darwin_arm64
-            goos: darwin
-            goarch: arm64
+        include: ${{ fromJson(needs.update-version.outputs.binary-matrix) }}
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.update-version.outputs.tag-ref }}
 
       - name: Download VERSION artifact
         uses: actions/download-artifact@v8
@@ -170,12 +283,14 @@ jobs:
           GOARM64: v8.0
           RELEASE_COMMIT: ${{ needs.update-version.outputs.commit }}
           RELEASE_DATE: ${{ needs.update-version.outputs.build-date }}
+          RELEASE_REPO: ${{ github.repository }}
+          DOCKER_IMAGE: ghcr.io/${{ needs.update-version.outputs.owner-lower }}/tokenrouter
           OUTPUT_NAME: tokenrouter_${{ matrix.target }}
         run: |
           mkdir -p ../prebuilt
           go build \
             -tags=embed \
-            -ldflags="-s -w -X main.Commit=${RELEASE_COMMIT} -X main.Date=${RELEASE_DATE} -X main.BuildType=release" \
+            -ldflags="-s -w -X main.Commit=${RELEASE_COMMIT} -X main.Date=${RELEASE_DATE} -X main.BuildType=release -X github.com/TokenFlux/TokenRouter/internal/ops.defaultGitHubRepo=${RELEASE_REPO} -X github.com/TokenFlux/TokenRouter/internal/ops.defaultDockerImage=${DOCKER_IMAGE}" \
             -o "../prebuilt/${OUTPUT_NAME}" \
             ./cmd/server
 
@@ -197,7 +312,7 @@ jobs:
         (
           needs.build-binaries.result == 'success' ||
           (
-            needs.update-version.outputs.simple-release == 'true' &&
+            needs.update-version.outputs.release-mode == 'simple' &&
             needs.build-binaries.result == 'skipped'
           )
         )
@@ -208,7 +323,7 @@ jobs:
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ needs.update-version.outputs.tag-ref }}
 
       - name: Download VERSION artifact
         uses: actions/download-artifact@v8
@@ -223,7 +338,7 @@ jobs:
           path: backend/internal/web/dist/
 
       - name: Download prebuilt binaries
-        if: ${{ needs.update-version.outputs.simple-release != 'true' }}
+        if: ${{ needs.update-version.outputs.release-mode != 'simple' }}
         uses: actions/download-artifact@v8
         with:
           pattern: release-binary-*
@@ -237,16 +352,15 @@ jobs:
           check-latest: false
           cache-dependency-path: backend/go.sum
 
-      # Docker setup for GoReleaser
       - name: Set up QEMU
-        if: ${{ needs.update-version.outputs.simple-release != 'true' }}
+        if: ${{ needs.update-version.outputs.release-mode == 'all' }}
         uses: docker/setup-qemu-action@v3
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
       - name: Login to DockerHub
-        if: ${{ needs.update-version.outputs.simple-release != 'true' && env.DOCKERHUB_ENABLED == 'true' }}
+        if: ${{ needs.update-version.outputs.release-mode != 'simple' && env.DOCKERHUB_ENABLED == 'true' }}
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
@@ -262,44 +376,49 @@ jobs:
       - name: Get tag message
         id: tag_message
         env:
-          TAG_NAME: ${{ github.event.inputs.tag || github.ref_name }}
+          TAG_NAME: ${{ needs.update-version.outputs.tag-name }}
         run: |
-          echo "Processing tag: $TAG_NAME"
-
-          # 获取完整的 tag message（跳过第一行标题）
           TAG_MESSAGE=$(git tag -l --format='%(contents:body)' "$TAG_NAME")
+          EOF_MARKER="EOF_$(date +%s%N)_$$"
+          {
+            echo "message<<${EOF_MARKER}"
+            echo "$TAG_MESSAGE"
+            echo "${EOF_MARKER}"
+          } >> "$GITHUB_OUTPUT"
 
-          # 调试输出
-          echo "Tag message length: ${#TAG_MESSAGE}"
-          echo "Tag message preview:"
-          echo "$TAG_MESSAGE" | head -10
-
-          # 使用 EOF 分隔符处理多行内容
-          echo "message<<EOF" >> $GITHUB_OUTPUT
-          echo "$TAG_MESSAGE" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
-
-      - name: Set lowercase owner for GHCR
-        id: lowercase
-        run: echo "owner=$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')" >> $GITHUB_OUTPUT
+      - name: Select GoReleaser config
+        id: goreleaser_cfg
+        env:
+          RELEASE_MODE: ${{ needs.update-version.outputs.release-mode }}
+        run: |
+          case "$RELEASE_MODE" in
+            simple)
+              echo "args=--config=.goreleaser.simple.yaml" >> "$GITHUB_OUTPUT"
+              ;;
+            linux_amd64)
+              echo "args=--config=.goreleaser.linux-amd64.yaml" >> "$GITHUB_OUTPUT"
+              ;;
+            all)
+              echo "args=" >> "$GITHUB_OUTPUT"
+              ;;
+          esac
 
       - name: Run GoReleaser
         uses: goreleaser/goreleaser-action@v7
         with:
           version: '~> v2'
-          args: release --clean --skip=validate ${{ needs.update-version.outputs.simple-release == 'true' && '--config=.goreleaser.simple.yaml' || '' }}
+          args: release --clean --skip=validate ${{ steps.goreleaser_cfg.outputs.args }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
           GITHUB_REPO_OWNER: ${{ github.repository_owner }}
-          GITHUB_REPO_OWNER_LOWER: ${{ steps.lowercase.outputs.owner }}
+          GITHUB_REPO_OWNER_LOWER: ${{ needs.update-version.outputs.owner-lower }}
           GITHUB_REPO_NAME: ${{ github.event.repository.name }}
           DOCKERHUB_USERNAME: ${{ env.DOCKERHUB_ENABLED == 'true' && secrets.DOCKERHUB_USERNAME || 'skip' }}
-          GORELEASER_PREBUILT_DIR: ${{ needs.update-version.outputs.simple-release != 'true' && format('{0}/prebuilt', github.workspace) || '' }}
+          GORELEASER_PREBUILT_DIR: ${{ needs.update-version.outputs.release-mode != 'simple' && format('{0}/prebuilt', github.workspace) || '' }}
 
-      # Update DockerHub description
       - name: Update DockerHub description
-        if: ${{ env.SIMPLE_RELEASE != 'true' && env.DOCKERHUB_ENABLED == 'true' }}
+        if: ${{ needs.update-version.outputs.release-mode != 'simple' && env.DOCKERHUB_ENABLED == 'true' }}
         continue-on-error: true
         uses: peter-evans/dockerhub-description@v5
         with:
@@ -309,51 +428,37 @@ jobs:
           short-description: "TokenRouter - AI API Gateway Platform"
           readme-filepath: ./deploy/DOCKER.md
 
-      # Send Telegram notification
       - name: Send Telegram Notification
-        if: ${{ env.SIMPLE_RELEASE != 'true' }}
+        if: ${{ needs.update-version.outputs.release-mode != 'simple' }}
         env:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          VERSION: ${{ needs.update-version.outputs.version }}
+          TAG_NAME: ${{ needs.update-version.outputs.tag-name }}
+          TAG_MESSAGE: ${{ steps.tag_message.outputs.message }}
+          REPO: ${{ github.repository }}
+          OWNER_LOWER: ${{ needs.update-version.outputs.owner-lower }}
         continue-on-error: true
         run: |
-          # 检查必要的环境变量
           if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$TELEGRAM_CHAT_ID" ]; then
             echo "Telegram credentials not configured, skipping notification"
             exit 0
           fi
 
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            TAG_NAME=${{ github.event.inputs.tag }}
-          else
-            TAG_NAME=${GITHUB_REF#refs/tags/}
-          fi
-          VERSION=${TAG_NAME#v}
-          REPO="${{ github.repository }}"
-          GHCR_IMAGE="ghcr.io/${REPO,,}"  # ${,,} converts to lowercase
-
-          # 获取 tag message 内容并转义 Markdown 特殊字符
-          TAG_MESSAGE='${{ steps.tag_message.outputs.message }}'
-          TAG_MESSAGE=$(echo "$TAG_MESSAGE" | sed 's/\([_*`\[]\)/\\\1/g')
-
-          # 限制消息长度（Telegram 消息限制 4096 字符，预留空间给头尾固定内容）
-          if [ ${#TAG_MESSAGE} -gt 3500 ]; then
-            TAG_MESSAGE="${TAG_MESSAGE:0:3500}..."
+          GHCR_IMAGE="ghcr.io/${OWNER_LOWER}/tokenrouter"
+          ESCAPED_MESSAGE=$(printf '%s' "$TAG_MESSAGE" | sed 's/\([_*`\[]\)/\\\1/g')
+          if [ ${#ESCAPED_MESSAGE} -gt 3500 ]; then
+            ESCAPED_MESSAGE="${ESCAPED_MESSAGE:0:3500}..."
           fi
 
-          # 构建消息内容
           MESSAGE="🚀 *TokenRouter 新版本发布！*"$'\n'$'\n'
           MESSAGE+="📦 版本号: \`${VERSION}\`"$'\n'$'\n'
-
-          # 添加更新内容
-          if [ -n "$TAG_MESSAGE" ]; then
-            MESSAGE+="${TAG_MESSAGE}"$'\n'$'\n'
+          if [ -n "$ESCAPED_MESSAGE" ]; then
+            MESSAGE+="${ESCAPED_MESSAGE}"$'\n'$'\n'
           fi
-
           MESSAGE+="🐳 *Docker 部署:*"$'\n'
           MESSAGE+="\`\`\`bash"$'\n'
-          # 根据是否配置 DockerHub 动态生成
           if [ -n "$DOCKERHUB_USERNAME" ]; then
             DOCKER_IMAGE="${DOCKERHUB_USERNAME}/tokenrouter"
             MESSAGE+="# Docker Hub"$'\n'
@@ -370,7 +475,6 @@ jobs:
           MESSAGE+="• [GitHub Packages](https://github.com/${REPO}/pkgs/container/tokenrouter)"$'\n'$'\n'
           MESSAGE+="#TokenRouter #Release #${TAG_NAME//./_}"
 
-          # 发送消息
           curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
             -H "Content-Type: application/json" \
             -d "$(jq -n \
@@ -384,8 +488,8 @@ jobs:
               }')"
 
   sync-version-file:
-    needs: [release]
-    if: ${{ needs.release.result == 'success' }}
+    needs: [update-version, release]
+    if: ${{ needs.release.result == 'success' && needs.update-version.outputs.sync-version-file == 'true' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout default branch
@@ -394,14 +498,9 @@ jobs:
           ref: ${{ github.event.repository.default_branch }}
 
       - name: Sync VERSION file to released tag
+        env:
+          VERSION: ${{ needs.update-version.outputs.version }}
         run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
-            VERSION=${{ github.event.inputs.tag }}
-            VERSION=${VERSION#v}
-          else
-            VERSION=${GITHUB_REF#refs/tags/v}
-          fi
-
           CURRENT_VERSION=$(tr -d '\r\n' < backend/cmd/server/VERSION || true)
           if [ "$CURRENT_VERSION" = "$VERSION" ]; then
             echo "VERSION file already matches $VERSION"
@@ -409,24 +508,21 @@ jobs:
           fi
 
           echo "$VERSION" > backend/cmd/server/VERSION
-
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add backend/cmd/server/VERSION
           git commit -m "chore: sync VERSION to ${VERSION} [skip ci]"
-          git push origin HEAD:${{ github.event.repository.default_branch }}
+          git push origin "HEAD:${{ github.event.repository.default_branch }}"
 
-  # 发布产物和版本回写成功后，再通知 Discord。
   notify-discord:
     needs: [update-version, release, sync-version-file]
-    # 通知服务故障通过警告报告，发布产物仍可使用。
     continue-on-error: true
     if: >-
       ${{
         !cancelled() &&
         needs.update-version.result == 'success' &&
         needs.release.result == 'success' &&
-        needs.sync-version-file.result == 'success'
+        (needs.sync-version-file.result == 'success' || needs.sync-version-file.result == 'skipped')
       }}
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -442,7 +538,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           DISCORD_RELEASE_WEBHOOK_URL: ${{ secrets.DISCORD_RELEASE_WEBHOOK_URL }}
-          RELEASE_TAG: v${{ needs.update-version.outputs.version }}
+          RELEASE_TAG: ${{ needs.update-version.outputs.tag-name }}
           RELEASE_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           if [ -z "$DISCORD_RELEASE_WEBHOOK_URL" ]; then

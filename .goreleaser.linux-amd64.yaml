@@ -1,0 +1,125 @@
+# .goreleaser.linux-amd64.yaml builds the Linux x86_64 archive, SHA-256
+# checksums, and container image needed for both Docker Compose deployments and
+# in-app admin UI updates without cross-compiling desktop targets.
+version: 2
+
+project_name: tokenrouter
+
+before:
+  hooks:
+    - test -f plugin-sdk/go/go.mod
+    - go mod tidy -C backend
+
+builds:
+  - id: tokenrouter
+    dir: backend
+    main: ./cmd/server
+    binary: tokenrouter
+    tool: '{{ if .Env.GORELEASER_PREBUILT_DIR }}../tools/goreleaser_prebuilt.sh{{ else }}go{{ end }}'
+    flags:
+      - -tags=embed
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+    goarch:
+      - amd64
+    ldflags:
+      - -s -w
+      - -X main.Commit={{.Commit}}
+      - -X main.Date={{.Date}}
+      - -X main.BuildType=release
+      - -X github.com/TokenFlux/TokenRouter/internal/ops.defaultGitHubRepo={{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }}
+      - -X github.com/TokenFlux/TokenRouter/internal/ops.defaultDockerImage=ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter
+
+archives:
+  - id: default
+    formats: [tar.gz]
+    name_template: >-
+      {{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}
+    files:
+      - LICENSE*
+      - README*
+      - deploy/.env.example
+      - deploy/README.md
+      - deploy/DOCKER.md
+      - deploy/Caddyfile
+      - deploy/apple-container.sh
+      - deploy/codex-instructions.md.tmpl
+      - deploy/config.example.yaml
+      - deploy/docker-compose.yml
+      - deploy/docker-compose.local.yml
+      - deploy/docker-compose.standalone.yml
+      - deploy/docker-deploy.sh
+      - deploy/install.sh
+      - deploy/tokenrouter.service
+
+checksum:
+  name_template: 'checksums.txt'
+  algorithm: sha256
+
+changelog:
+  disable: true
+
+dockers:
+  - id: amd64
+    ids: [tokenrouter]
+    goos: linux
+    goarch: amd64
+    image_templates:
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter:{{ .Version }}-amd64"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter:{{ .Version }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter:latest"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter:{{ .Major }}.{{ .Minor }}"
+      - "ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter:{{ .Major }}"
+      - '{{ if ne .Env.DOCKERHUB_USERNAME "skip" }}{{ .Env.DOCKERHUB_USERNAME }}/tokenrouter:{{ .Version }}-amd64{{ end }}'
+      - '{{ if ne .Env.DOCKERHUB_USERNAME "skip" }}{{ .Env.DOCKERHUB_USERNAME }}/tokenrouter:{{ .Version }}{{ end }}'
+      - '{{ if ne .Env.DOCKERHUB_USERNAME "skip" }}{{ .Env.DOCKERHUB_USERNAME }}/tokenrouter:latest{{ end }}'
+    dockerfile: Dockerfile.goreleaser
+    use: buildx
+    extra_files:
+      - deploy/docker-entrypoint.sh
+    build_flag_templates:
+      - "--platform=linux/amd64"
+      - "--label=org.opencontainers.image.version={{ .Version }}"
+      - "--label=org.opencontainers.image.revision={{ .Commit }}"
+      - "--label=org.opencontainers.image.source=https://github.com/{{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }}"
+
+docker_manifests: []
+
+release:
+  github:
+    owner: "{{ .Env.GITHUB_REPO_OWNER }}"
+    name: "{{ .Env.GITHUB_REPO_NAME }}"
+  draft: false
+  prerelease: auto
+  name_template: "TokenRouter {{.Version}}"
+  header: |
+    {{ .Env.TAG_MESSAGE }}
+
+  footer: |
+
+    ---
+
+    ## 📥 Installation
+
+    **Docker:**
+    ```bash
+    {{ if ne .Env.DOCKERHUB_USERNAME "skip" -}}
+    # Docker Hub
+    docker pull {{ .Env.DOCKERHUB_USERNAME }}/tokenrouter:{{ .Version }}
+
+    {{ end -}}
+    # GitHub Container Registry
+    docker pull ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter:{{ .Version }}
+    ```
+
+    **One-line install (Linux):**
+    ```bash
+    curl -sSL https://raw.githubusercontent.com/{{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }}/main/deploy/install.sh | sudo bash
+    ```
+
+    ## 📚 Documentation
+
+    - [GitHub Repository](https://github.com/{{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }})
+    - [Deployment & Migrations](https://github.com/{{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }}/blob/main/docs/operations/deployment_and_migrations.md)

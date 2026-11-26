@@ -38,6 +38,8 @@ builds:
       - -X main.Commit={{.Commit}}
       - -X main.Date={{.Date}}
       - -X main.BuildType=release
+      - -X github.com/TokenFlux/TokenRouter/internal/ops.defaultGitHubRepo={{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }}
+      - -X github.com/TokenFlux/TokenRouter/internal/ops.defaultDockerImage=ghcr.io/{{ .Env.GITHUB_REPO_OWNER_LOWER }}/tokenrouter
 
 archives:
   - id: default
@@ -196,4 +198,4 @@ release:
     ## 📚 Documentation
 
     - [GitHub Repository](https://github.com/{{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }})
-    - [Installation Guide](https://github.com/{{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }}/blob/main/docs/guides/deployment/index.md)
+    - [Deployment & Migrations](https://github.com/{{ .Env.GITHUB_REPO_OWNER }}/{{ .Env.GITHUB_REPO_NAME }}/blob/main/docs/operations/deployment_and_migrations.md)
