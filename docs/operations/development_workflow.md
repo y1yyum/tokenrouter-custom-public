@@ -379,25 +379,16 @@ make security
 
 ## 发布
 
-发布由 [tr-release 技能](../../.agents/skills/tr-release/SKILL.md)编排，运行 `python3 .agents/skills/tr-release/scripts/tr_release.py --prepare` 获取待发布范围。Release 默认英文，完成后在底部「中文翻译」折叠区追加完整中文译文（覆盖更新说明、安装和文档）。
-
-### SDK 发布门禁
-
-网关发版前由 `tr-release` 分别核对 Go SDK 与 Web SDK 相对各自最近版本的源码变化，并直接完成必要的 SDK 发布（无独立 SDK 发布 CI）：
-
-1. 版本策略：两个 SDK 各自维护 `0.x.y`，兼容修复递增 `y`，新增能力或不兼容变更递增 `x`；纯测试、格式和开发文档变化不单独发版，审阅者须逐项说明交付影响。
-2. 固定顺序：SDK 版本准备先提交并通过 CI，再固定网关与 SDK 的发布 SHA。Go SDK 使用模块标签与非 Latest GitHub Release；Web SDK 发至 npm 并打独立来源标签。
-3. 完整性校验：网关发版必须携带仓库外的 SDK 审阅文件，脚本核验远端版本、来源提交、Go 公共代理下载与 npm 完整性；缺失、冲突或部分发布均阻断打标。重试时复用已完成的 SDK 发布，不覆盖旧标签或重复发包。
+本仓库支持通过 `python3 tools/release.py --prepare` 与 `python3 tools/release.py --notes-file <PATH>` 创建并推送严格的 `vMAJOR.MINOR.PATCH` annotated tag（首个基线默认 `v1.0.0`，不校验外部 npm/Go SDK），也可直接在 GitHub Actions 手动运行 `Release` workflow 创建 tag 并发布。如需与上游一致执行 SDK 门禁检查，仍可使用 [tr-release 技能](../../.agents/skills/tr-release/SKILL.md)。Release 正文支持英文与底部折叠「中文翻译」区。
 
 ### Release Workflow 与公告
 
-`.github/workflows/release.yml` 由 `v*` tag 或手动 dispatch 触发：
+`.github/workflows/release.yml` 由 `v*` tag 或手动 `workflow_dispatch` 触发：
 
-- 二进制与归档：标准发布只构建一次前端，再并行编译 Linux、Windows、macOS 五个 Go 目标，经 `tools/goreleaser_prebuilt.sh` 导入 GoReleaser（`tokenrouter` build ID），生成五个含 `tokenrouter` 的归档与 `checksums.txt`。
-- 镜像与精简发布：每架构镜像仅构建一次并复用 Linux 二进制，同时打 GHCR 与可选 DockerHub 标签（未配 DockerHub 不创建占位镜像）。simple release 跳过二进制矩阵仅构建精简镜像。
-- 版本回写：从 annotated tag 正文读取 release notes，发布成功后将 `backend/cmd/server/VERSION` 同步回默认分支。
-- Discord 公告：`release` 与 `sync-version-file` 成功后（标准与 simple release 均执行），`notify-discord` 经 `DISCORD_RELEASE_WEBHOOK_URL` 和 `tools/notify_discord_release.py` 发送英文公告并附 workflow 链接（拒草稿、超长截断留链接、禁提及）。
-- 公告异常处理：缺少 Secret 警告跳过，发送失败仅警告不令发布失败；超时须人工核查，重跑会再发一条。仓库提交动态另由 push Webhook 推送。
-- 发布核对：发布前确认提交已推送、CI 全绿、迁移符合单实例整体升级流程且备份已验证；发布后核对 Release、镜像、二进制、`VERSION` 回写及部署冒烟测试。
+- 自动打标与模式：`workflow_dispatch` 可指定尚未存在的 `tag` 与 `target_ref`，由 workflow 创建 annotated tag 并推送，支持 `linux_amd64`（默认，含归档、`checksums.txt` 与 GHCR 镜像，满足后台在线更新与 Docker 部署）、`all`（五平台二进制与多架构镜像）与 `simple`（仅精简镜像，不支持后台二进制更新）三种 `release_mode`。
+- 坐标注入：构建阶段通过 `-ldflags` 向后端写入 `defaultGitHubRepo` 与 `defaultDockerImage`，并向前端写入 `VITE_RELEASE_REPO` 与 `VITE_DOCKER_IMAGE`。
+- 版本回写：从 annotated tag 正文读取 release notes；仅当手动开启 `sync_version_file` 或配置仓库变量 `SYNC_VERSION_FILE=true` 时，才将 `backend/cmd/server/VERSION` 同步回默认分支。
+- 通知与异常处理：`release` 完成后发送可选的 Telegram 与 Discord（经 `DISCORD_RELEASE_WEBHOOK_URL` 和 `tools/notify_discord_release.py`）公告；缺少 Secret 时跳过，发送失败仅警告不阻断发布。
+- 发布核对：发布前确认提交已推送、CI 全绿、迁移符合单实例整体升级流程且备份已验证；发布后核对 Release 资产（含 `.tar.gz` 与 `checksums.txt`）、GHCR 镜像与后台检查更新结果。
 
 相关文档：[项目总览](../project_overview.md)、[系统架构](../architecture/system_architecture.md)、[配置](../interfaces/configuration.md)、[部署与数据库迁移](deployment_and_migrations.md)、[版本升级说明](upgrade_notes.md)、[运维目录](index.md)。

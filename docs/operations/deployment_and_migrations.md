@@ -17,10 +17,10 @@
 
 项目按单后端进程加单前端实例部署，前后端同版本整体升级；独立静态服务器托管前端时同样须与后端同步切换。
 
-- 构建流水线：标准发布只构建一次前端静态资源，再并行交叉编译各平台 Go 二进制（内嵌前端），最后统一归档并由 Linux `amd64`/`arm64` 产物组装多架构镜像。发布矩阵见 [release workflow](../../.github/workflows/release.yml)。
+- 构建流水线：发布流水线先构建一次前端静态资源（注入默认 Release 仓库与容器镜像坐标），再按 `release_mode`（`linux_amd64` 或全平台 `all`）编译内嵌前端的 Go 二进制，最后统一生成归档、`checksums.txt` 与 GHCR 镜像。`simple` 模式跳过归档与校验文件，仅推送单架构镜像。详见 [release workflow](../../.github/workflows/release.yml)。
 - 前端与 Go 版本：源码镜像前端阶段校验 `.node-version`（默认 `26.12.1`，覆盖 `NODE_IMAGE` 仍须通过版本检查），经 npm 按 `packageManager` 安装 pnpm 并在冻结安装前复制 workspace 配置。Go 构建统一使用 `1.27.4`（后端、工具模块及 Dockerfile），标准库安全修复须重编部署。
-- Dockerfile 分工：根 Dockerfile 供开发 Compose 和 `deploy/build_image.sh` 使用，前端阶段复制 `backend/internal/pkg/locale/manifest.json` 与 `error_messages.json` 到 `/app/backend/internal/pkg/locale/`；`backend/Dockerfile` 仅编后端，`Dockerfile.goreleaser` 封装预编译二进制。
-- 部署资产筛选：`.goreleaser.yaml` 显式列出归档部署资产（不含开发 Compose、构建脚本、入口脚本或夹具），安装器复制归档内非隐藏部署文件。镜像构建上下文下的 `deploy/` 仅保留 `docker-entrypoint.sh`，详见[部署文件目录](../../deploy/README.md)。
+- Dockerfile 分工：根 Dockerfile 供开发 Compose 和 `deploy/build_image.sh` 使用，前端阶段复制 `backend/internal/pkg/locale/manifest.json` 与 `error_messages.json` 到 `/app/backend/internal/pkg/locale/`；`backend/Dockerfile` 仅编后端，`Dockerfile.goreleaser` 封装预编译二进制，两者均把 `/app` 目录授权给 `tokenrouter` 运行用户。
+- 部署资产筛选：`.goreleaser.yaml` 与 `.goreleaser.linux-amd64.yaml` 显式列出归档部署资产（不含开发 Compose、构建脚本、入口脚本或夹具），安装器复制归档内非隐藏部署文件。镜像构建上下文下的 `deploy/` 仅保留 `docker-entrypoint.sh`，详见[部署文件目录](../../deploy/README.md)。
 
 | 方式 | 入口 | 依赖与说明 |
 | --- | --- | --- |
@@ -30,7 +30,8 @@
 | 源码开发 Compose | `deploy/docker-compose.dev.yml` | 本地构建应用并启动配套依赖 |
 | Apple Container | `deploy/apple-container.sh` | 独立脚本管理容器、卷和健康状态 |
 
-- 依赖与数据目录：应用依赖 PostgreSQL 和 Redis。`/app/data`（`DATA_DIR`）存配置、安装锁与本地运维产物；数据库、Redis 与对象存储生命周期独立，仅备份数据目录不算完成系统备份。
+- 依赖与数据目录：应用依赖 PostgreSQL 和 Redis。`/app/data`（`DATA_DIR`）存配置、安装锁、持久化运行二进制槽位（`bin/tokenrouter`）与本地运维产物；数据库、Redis 与对象存储生命周期独立，仅备份数据目录不算完成系统备份。
+- 容器持久化槽位：`deploy/docker-entrypoint.sh` 启动服务时将镜像二进制同步到可写的 `/app/data/bin/tokenrouter`，并记录镜像二进制的 SHA-256 标识（`.image-identity`）。镜像未变化时，重启或重建容器保留管理员在管理后台在线升级或回退后的槽位二进制；拉取新镜像且二进制摘要变化时，先备份现有槽位到 `bin/tokenrouter.backup`，再更新槽位。使用 `--version`、`-migrate-config`、`-setup` 等工具参数或设置 `TOKENROUTER_DISABLE_PERSISTENT_BIN=true` 时直接执行镜像内二进制。
 - 部署手册：逐步操作见[中文部署指南](../guides/deployment/index.md)、[Docker 镜像说明](../../deploy/DOCKER.md)与 [Apple Container 指南](../guides/deployment/apple_container.md)。
 - Compose 健康检查：所有 Compose 变体的应用健康检查均设 120 秒启动宽限期；内置 PostgreSQL 的三个变体以 `pg_isready` 加 SQL 探活，设 60 秒宽限期和 18 次重试（部署测试防漂移）。
 - 旧接口停用：旧 data management 接口已下线，`backup` 兼容入口固定返回 `DATA_MANAGEMENT_DEPRECATED`（不连 Unix Socket 或 gRPC），旧脚本与 systemd 模板已移除；遗留识别见 [datamanagementd 停用说明](../guides/deployment/datamanagementd.md)。

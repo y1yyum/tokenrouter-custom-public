@@ -51,8 +51,8 @@
 <a id="ops_release_and_maintenance"></a>
 ## 发布查询与维护命令
 
-- 版本检查缓存：`GET /api/v1/admin/system/check-updates` 查询 GitHub Release 并缓存 20 分钟（GitHub Token 可信范围见[部署指南](../guides/deployment/index.md#升级)）。`release_info.body` 原样保留完整 Markdown（含英文正文、中文 `<details>/<summary>` 折叠区与代码块），后端不拆分或渲染 HTML。
-- 强制刷新与降级：`force=true` 跳过首次缓存查远端；远端失败时回退有效缓存并返回 `cached=true` 与 `warning`（不覆盖或续期缓存）。无可用缓存时最新版本回落当前版本、`has_update=false`、省略 `release_info` 并返回原因。
+- 版本检查缓存：`GET /api/v1/admin/system/check-updates` 查询编译期注入的目标 GitHub 仓库 Release（并随响应返回 `github_repo` 与 `docker_image` 供前端展示与构造回退命令），按仓库标识隔离并缓存 20 分钟（GitHub Token 可信范围见[部署指南](../guides/deployment/index.md#升级)）。`release_info.body` 原样保留完整 Markdown（含英文正文、中文 `<details>/<summary>` 折叠区与代码块），后端不拆分或渲染 HTML。
+- 强制刷新与降级：`force=true` 跳过首次缓存查远端；远端失败时回退同仓库的有效缓存并返回 `cached=true` 与 `warning`（不覆盖或续期缓存）。无可用缓存时最新版本回落当前版本、`has_update=false`、省略 `release_info`，仍保留 `github_repo` 与 `docker_image` 并返回原因。
 - 前端更新日志弹窗：桌面端顶栏版本菜单提供「查看更新日志」（移动端隐藏），直接读取浏览器 store 中的 `release_info` 净化渲染，不额外请求 GitHub；弹窗捕获 Tab 焦点，关闭后焦点回到版本徽标，阅读日志不触发升级或回退。
 - 维护命令与替换：下载校验、二进制替换与系统操作锁归 `ops/maintenance`，进程退出统一由 `app/lifecycle` 执行。`cleanup-ingress-reject-logs` 使用精简引导清理 `ingress-reject-v1` 分析事件，默认 dry-run，支持 `--before`、`--batch-size`、`--execute`。
 
