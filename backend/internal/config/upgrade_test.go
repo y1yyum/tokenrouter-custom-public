@@ -5,7 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
+	"os/user"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -15,12 +18,14 @@ import (
 )
 
 // TestUpgradeConfigFilePreservesBackup exercises durable migration and a second load.
-// It protects exact original backup bytes, private backup permissions, source mode,
+// It protects exact original backup bytes, private POSIX backup permissions, source mode,
 // comment retention, and the absence of writes for current configuration files.
 func TestUpgradeConfigFilePreservesBackup(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "config.yaml")
 	original := []byte("# deployment\ngateway:\n  # request limit\n  max_body_size: 2048 # bytes\ndatabase:\n  password: old\n")
 	require.NoError(t, os.WriteFile(file, original, 0o640))
+	originalInfo, err := os.Stat(file)
+	require.NoError(t, err)
 	env := upgradeEnvironment{LookupEnv: func(name string) (string, bool) {
 		if name == "DATABASE_PASSWORD" {
 			return "private-secret", true
@@ -41,10 +46,14 @@ func TestUpgradeConfigFilePreservesBackup(t *testing.T) {
 	require.Equal(t, original, backup)
 	info, err := os.Stat(file)
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o640), info.Mode().Perm())
+	require.Equal(t, originalInfo.Mode().Perm(), info.Mode().Perm())
 	backupInfo, err := os.Stat(file + ".v1.bak")
 	require.NoError(t, err)
-	require.Equal(t, os.FileMode(0o600), backupInfo.Mode().Perm())
+	// Windows reports the read-only attribute through Go mode bits. Only POSIX
+	// mode bits distinguish a private backup from other writable regular files.
+	if runtime.GOOS != "windows" {
+		require.Equal(t, os.FileMode(0o600), backupInfo.Mode().Perm())
+	}
 	_, err = upgradeConfigFile(file, true, env)
 	require.NoError(t, err)
 	after, err := os.Stat(file)
@@ -154,14 +163,31 @@ func TestConfigWriteErrorClassifiesPermissions(t *testing.T) {
 // sentinel, allowing an operator to produce an offline copy before replacement.
 func TestUpgradeReadOnlyDirectoryFailsBeforeReplacement(t *testing.T) {
 	if os.Getuid() == 0 {
-		t.Skip("root can bypass filesystem mode restrictions; read-only mounts are covered by deployment verification")
+		t.Skip("root can bypass POSIX directory permissions")
 	}
 	dir := t.TempDir()
 	file := filepath.Join(dir, "config.yaml")
 	original := []byte("server:\n  port: 8081\n")
 	require.NoError(t, os.WriteFile(file, original, 0o600))
-	require.NoError(t, os.Chmod(dir, 0o500))
-	t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
+	if runtime.GOOS == "windows" {
+		// Deny file creation only on this temporary directory. Existing files stay
+		// readable, so the loader can inspect the legacy bytes before backup fails.
+		account, err := user.Current()
+		require.NoError(t, err)
+		sid := "*" + account.Uid
+		acl := filepath.Join(os.Getenv("SystemRoot"), "System32", "icacls.exe")
+		output, err := exec.CommandContext(t.Context(), acl, dir, "/deny", sid+":(WD)").CombinedOutput()
+		require.NoError(t, err, "%s", output)
+		t.Cleanup(func() {
+			// The test context is canceled before cleanup. Restore directory access
+			// before TempDir removes the fixture and reports any remaining open handles.
+			output, err := exec.Command(acl, dir, "/remove:d", sid).CombinedOutput()
+			require.NoError(t, err, "%s", output)
+		})
+	} else {
+		require.NoError(t, os.Chmod(dir, 0o500))
+		t.Cleanup(func() { require.NoError(t, os.Chmod(dir, 0o700)) })
+	}
 	_, err := upgradeConfigFile(file, true, upgradeEnvironment{})
 	require.ErrorIs(t, err, ErrConfigNotWritable)
 	after, readErr := os.ReadFile(file)
